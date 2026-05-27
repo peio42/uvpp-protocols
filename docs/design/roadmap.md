@@ -1,0 +1,62 @@
+# Roadmap
+
+## Milestone 0: Repository Foundation
+
+- Create the public include layout under `include/uvpp/protocols`.
+- Add CMake and Makefile conventions consistent with uvpp where practical.
+- Add a minimal example and test scaffold.
+- Decide whether the first release is header-only, compiled, or mixed.
+- Define dependency policy for optional parser/backend libraries.
+
+## Milestone 1: HTTP/1.1 Server MVP
+
+- `uv::http::server` with `get`, `post`, generic `route`, and `listen`.
+- Exact path routing.
+- Request method, target, path, query, headers, and buffered body.
+- Response status, headers, `text`, `bytes`, `json` placeholder, and `end`.
+- Safe default limits for headers, bodies, pending writes, and timeouts.
+- Keep-alive support for sequential requests on one connection.
+- Default error responses for parser errors, oversized payloads, missing routes,
+  and uncaught handler exceptions.
+
+## Milestone 2: HTTP Ergonomics
+
+- Route parameters and wildcard segments.
+- Custom `not_found` and error handlers.
+- Deferred responses for application-level async work.
+- Streaming/chunked responses.
+- Request body streaming.
+- Access to connection metadata and underlying `uv::tcp`.
+- Examples for admin endpoints, local JSON API, and log streaming.
+
+## Milestone 3: WebSocket
+
+- HTTP upgrade hook.
+- WebSocket handshake.
+- Text, binary, ping, pong, and close frames.
+- Per-session callbacks.
+- Configurable message size and ping/pong timeout.
+- Backpressure-aware send queue.
+
+## Milestone 4: TLS
+
+- TLS context and stream adapter.
+- Server-side TLS listener integration for HTTP.
+- Client-side TLS connector for future HTTP/SMTP clients.
+- Backend boundary that keeps OpenSSL, mbedTLS, or another provider out of the
+  generic public API as much as possible.
+
+## Milestone 5+: Additional Protocols
+
+Good follow-up modules:
+
+- `uv::smtp`: SMTP client and minimal server sessions.
+- `uv::sse`: Server-Sent Events helper on top of HTTP responses.
+- `uv::multipart`: streaming form-data parser for HTTP uploads.
+- `uv::redis`: RESP client for simple service integrations.
+- `uv::mqtt`: MQTT sessions for event-driven messaging.
+- `uv::proxy`: CONNECT and reverse-proxy helpers.
+
+Each new module should start with a design note before implementation. The note
+should identify parser/backend dependencies, ownership model, timeouts,
+backpressure strategy, and how the module composes with existing modules.
