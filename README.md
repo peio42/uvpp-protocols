@@ -10,6 +10,20 @@ common protocols such as HTTP, WebSocket, TLS, SMTP, and MQTT.
 This repository is currently in the design phase. The first planned module is
 an HTTP/1.1 server.
 
+## Build
+
+```sh
+cmake -S . -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+The default build compiles the library, a structure test, and the first example.
+If `uvpp::uvpp` is available through CMake, the example uses the real
+`<uvpp/uv.hpp>` loop type. Otherwise it uses a milestone 0 loop placeholder so
+the public HTTP API shape remains buildable before networking is implemented.
+Real network listening is reserved for the HTTP MVP milestone.
+
 ## Target HTTP API
 
 ```cpp
@@ -76,6 +90,30 @@ Each protocol layer should own its own state and compose with the layer below it
 through explicit transport APIs. Convenience helpers may exist, but they should
 not force unrelated dependencies between modules.
 
+## Dependency Policy
+
+The project uses a mixed build strategy:
+
+- header-only for public vocabulary types and small pure helpers;
+- compiled sources for anything that owns state, talks to libuv, or wraps an
+  external dependency.
+
+The HTTP/1 parser backend is planned around `llhttp`. `libnghttp2` is reserved
+for a future HTTP/2 implementation. External HTTP dependencies are allowed only
+under `detail/` as synchronous state machines. They never own the socket, the
+loop, timers, output buffers, or the public model.
+
+Current CMake backend options:
+
+```sh
+cmake -S . -B build -DUVPP_PROTOCOLS_HTTP1_BACKEND=auto
+cmake -S . -B build -DUVPP_PROTOCOLS_HTTP1_BACKEND=llhttp
+cmake -S . -B build -DUVPP_PROTOCOLS_HTTP2_BACKEND=nghttp2
+```
+
+When `auto` cannot find the dependency, the milestone 0 build falls back to a
+stub backend.
+
 ## Design Documents
 
 The design notes live in [`docs/design`](docs/design):
@@ -89,10 +127,10 @@ The design notes live in [`docs/design`](docs/design):
 
 ## Status
 
-No public implementation is available yet. The current repository content is a
-design baseline for the first implementation pass.
+Milestone 0 foundation is available: repository structure, CMake packaging,
+public HTTP vocabulary, a header-only router skeleton, compiled HTTP state
+placeholders, dependency backend hooks, one example, and one structure test.
 
 ## License
 
-License to be decided.
-
+MIT. See [`LICENSE`](LICENSE).

@@ -1,0 +1,60 @@
+#include <cassert>
+#include <chrono>
+#include <stdexcept>
+
+namespace uv {
+class loop {};
+} // namespace uv
+
+#include <uvpp/protocols/http.hpp>
+
+using namespace std::chrono_literals;
+
+int main() {
+  auto options = uv::http::server_options::builder()
+    .max_header_bytes(32 * 1024)
+    .max_body_bytes(1024 * 1024)
+    .idle_timeout(30s)
+    .server_header(false)
+    .build();
+
+  assert(options.max_header_bytes == 32 * 1024);
+  assert(options.max_body_bytes == 1024 * 1024);
+  assert(options.idle_timeout == 30s);
+  assert(!options.server_header);
+
+  uv::http::headers headers;
+  headers.set("Content-Type", "text/plain");
+  assert(headers.contains("content-type"));
+  assert(headers.get("CONTENT-TYPE") == "text/plain");
+
+  uv::http::router router;
+  router.get("/health", [](uv::http::request&, uv::http::response& res) {
+    res.text("ok");
+  });
+
+  assert(router.size() == 1);
+  assert(router.find(uv::http::method::get, "/health") != nullptr);
+  assert(router.find(uv::http::method::post, "/health") == nullptr);
+
+  uv::http::response response;
+  response.json({{"status", "ok"}});
+  assert(response.ended());
+  assert(response.body() == "{\"status\":\"ok\"}");
+
+  uv::loop loop;
+  uv::http::server server(loop, options);
+  server.get("/health", [](uv::http::request&, uv::http::response& res) {
+    res.text("ok");
+  });
+  assert(server.routes().size() == 1);
+
+  bool listen_failed = false;
+  try {
+    server.listen("127.0.0.1", 8080);
+  } catch (const std::logic_error&) {
+    listen_failed = true;
+  }
+  assert(listen_failed);
+}
+

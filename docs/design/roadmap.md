@@ -5,8 +5,13 @@
 - Create the public include layout under `include/uvpp/protocols`.
 - Add CMake and Makefile conventions consistent with uvpp where practical.
 - Add a minimal example and test scaffold.
-- Decide whether the first release is header-only, compiled, or mixed.
-- Define dependency policy for optional parser/backend libraries.
+- Use a mixed build strategy: header-only public vocabulary and small pure
+  helpers; compiled code for stateful protocols, libuv integration, and external
+  dependencies.
+- Use `llhttp` as the planned HTTP/1 state machine backend under `detail/`.
+- Reserve `libnghttp2` under `detail/` for a future HTTP/2 implementation.
+- Keep external HTTP dependencies as synchronous state machines only; they do
+  not own sockets, loops, timers, output buffers, or the public model.
 
 ## Milestone 1: HTTP/1.1 Server MVP
 

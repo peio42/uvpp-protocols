@@ -157,3 +157,13 @@ For example, an HTTP parser dependency should not leak into the public API.
 When a protocol has tricky parsing or security-sensitive state machines, prefer
 a mature backend over a custom parser. The wrapper should provide the C++ API,
 event-loop integration, ownership, and uvpp interop.
+
+The project uses a mixed build strategy:
+
+- header-only for public vocabulary types and small pure helpers;
+- compiled sources for anything that owns state, talks to libuv, or wraps an
+  external dependency.
+
+For HTTP specifically, external dependencies are allowed only under `detail/`,
+as synchronous state machines. They never own the socket, the loop, timers,
+output buffers, or the public model.

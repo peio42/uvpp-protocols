@@ -1,0 +1,30 @@
+#include <uvpp/protocols/http/status.hpp>
+
+namespace uv::http {
+
+std::string_view reason_phrase(status value) noexcept {
+  switch (value) {
+  case status::ok:
+    return "OK";
+  case status::created:
+    return "Created";
+  case status::no_content:
+    return "No Content";
+  case status::bad_request:
+    return "Bad Request";
+  case status::not_found:
+    return "Not Found";
+  case status::method_not_allowed:
+    return "Method Not Allowed";
+  case status::payload_too_large:
+    return "Payload Too Large";
+  case status::internal_server_error:
+    return "Internal Server Error";
+  case status::not_implemented:
+    return "Not Implemented";
+  }
+  return "";
+}
+
+} // namespace uv::http
+

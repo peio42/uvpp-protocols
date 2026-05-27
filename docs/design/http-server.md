@@ -218,6 +218,14 @@ HTTP parsing is security-sensitive and full of edge cases. The preferred design
 is to use a mature HTTP/1 parser behind a private adapter instead of writing one
 from scratch.
 
+The planned HTTP/1 backend is `llhttp`. It must remain behind `detail/` and act
+only as a synchronous state machine. It must not own the socket, uvpp loop,
+timers, response write buffers, or public request/response objects.
+
+`libnghttp2` is reserved for a future HTTP/2 implementation behind the same
+boundary. HTTP/2 support should not shape the HTTP/1 public API until a concrete
+implementation milestone starts.
+
 The parser adapter should emit events into the session:
 
 - message begin;
