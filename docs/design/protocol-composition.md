@@ -80,18 +80,16 @@ That is shorthand for a plain TCP listener feeding HTTP sessions.
 TLS should be presented as an explicit listener or acceptor layer:
 
 ```cpp
-auto tls = uv::tls::server_context::builder()
+auto tls = uv::tls::server_context{}
   .certificate_file("server.crt")
   .private_key_file("server.key")
-  .alpn({"http/1.1"})
-  .build();
+  .alpn({"http/1.1"});
 
 uv::http::server srv(loop);
 srv.listen(
-  uv::tls::listener::builder(loop)
+  uv::tls::listener{loop}
     .bind("0.0.0.0", 443)
-    .context(tls)
-    .build());
+    .context(tls));
 ```
 
 In that model, HTTP does not know OpenSSL or mbedTLS. It only receives accepted
@@ -141,15 +139,13 @@ The API should make the carrier explicit:
 
 ```cpp
 srv.upgrade("/mqtt", [](uv::http::upgrade_request& req) {
-  auto ws = uv::websocket::accept(req, uv::websocket::accept_options::builder()
-    .subprotocol("mqtt")
-    .build());
+  auto ws = uv::websocket::accept(req, uv::websocket::accept_options{}
+    .subprotocol("mqtt"));
 
   return uv::mqtt::client_session::over_websocket(std::move(ws),
-    uv::mqtt::client_options::builder()
+    uv::mqtt::client_options{}
       .client_id("agent-1")
-      .keep_alive(30s)
-      .build());
+      .keep_alive(30s));
 });
 ```
 
@@ -160,18 +156,16 @@ transport:
 auto mqtt = uv::mqtt::client_session::connect(
   loop,
   uv::tcp::endpoint{"broker.local", 1883},
-  uv::mqtt::client_options::builder()
-    .client_id("agent-1")
-    .build());
+  uv::mqtt::client_options{}
+    .client_id("agent-1"));
 ```
 
 ```cpp
 auto mqtt = uv::mqtt::client_session::connect(
   loop,
   uv::tls::endpoint{"broker.local", 8883, tls_context},
-  uv::mqtt::client_options::builder()
-    .client_id("agent-1")
-    .build());
+  uv::mqtt::client_options{}
+    .client_id("agent-1"));
 ```
 
 The important design point is that MQTT owns MQTT state, WebSocket owns
@@ -198,9 +192,8 @@ auto http = uv::http::client::connect(
 auto ws = uv::websocket::client::connect(
   loop,
   uv::http::url{"wss://api.example.com/events"},
-  uv::websocket::client_options::builder()
-    .subprotocol("mqtt")
-    .build());
+  uv::websocket::client_options{}
+    .subprotocol("mqtt"));
 ```
 
 High-level URL helpers are acceptable, but they should expand into explicit
@@ -248,4 +241,3 @@ Convenience headers may compose modules:
 
 Those headers should remain adapters. They should not move ownership or
 protocol logic out of the canonical modules.
-

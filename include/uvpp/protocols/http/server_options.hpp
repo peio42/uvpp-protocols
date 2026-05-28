@@ -6,37 +6,42 @@
 namespace uv::http {
 
 struct server_options {
-  std::size_t max_header_bytes = 16 * 1024;
-  std::size_t max_body_bytes = 1024 * 1024;
-  std::size_t max_pending_write_bytes = 1024 * 1024;
+  std::size_t max_header_bytes_ = 16 * 1024;
+  std::size_t max_body_bytes_ = 1024 * 1024;
+  std::size_t max_pending_write_bytes_ = 1024 * 1024;
 
-  std::chrono::milliseconds header_timeout = std::chrono::seconds{10};
-  std::chrono::milliseconds body_timeout = std::chrono::seconds{30};
-  std::chrono::milliseconds idle_timeout = std::chrono::seconds{60};
+  std::chrono::milliseconds header_timeout_ = std::chrono::seconds{10};
+  std::chrono::milliseconds body_timeout_ = std::chrono::seconds{30};
+  std::chrono::milliseconds idle_timeout_ = std::chrono::seconds{60};
 
-  bool keep_alive = true;
-  bool server_header = true;
+  bool keep_alive_ = true;
+  bool server_header_ = true;
 
-  class builder_type;
+  server_options& max_header_bytes(std::size_t value) &;
+  server_options&& max_header_bytes(std::size_t value) &&;
 
-  [[nodiscard]] static builder_type builder();
-};
+  server_options& max_body_bytes(std::size_t value) &;
+  server_options&& max_body_bytes(std::size_t value) &&;
 
-class server_options::builder_type {
-public:
-  builder_type& max_header_bytes(std::size_t value);
-  builder_type& max_body_bytes(std::size_t value);
-  builder_type& max_pending_write_bytes(std::size_t value);
-  builder_type& header_timeout(std::chrono::milliseconds value);
-  builder_type& body_timeout(std::chrono::milliseconds value);
-  builder_type& idle_timeout(std::chrono::milliseconds value);
-  builder_type& keep_alive(bool value) noexcept;
-  builder_type& server_header(bool value) noexcept;
+  server_options& max_pending_write_bytes(std::size_t value) &;
+  server_options&& max_pending_write_bytes(std::size_t value) &&;
 
-  [[nodiscard]] server_options build() const;
+  server_options& header_timeout(std::chrono::milliseconds value) &;
+  server_options&& header_timeout(std::chrono::milliseconds value) &&;
 
-private:
-  server_options options_;
+  server_options& body_timeout(std::chrono::milliseconds value) &;
+  server_options&& body_timeout(std::chrono::milliseconds value) &&;
+
+  server_options& idle_timeout(std::chrono::milliseconds value) &;
+  server_options&& idle_timeout(std::chrono::milliseconds value) &&;
+
+  server_options& keep_alive(bool value = true) & noexcept;
+  server_options&& keep_alive(bool value = true) && noexcept;
+
+  server_options& server_header(bool value = true) & noexcept;
+  server_options&& server_header(bool value = true) && noexcept;
+
+  void validate() const;
 };
 
 } // namespace uv::http

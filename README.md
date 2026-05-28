@@ -19,10 +19,11 @@ ctest --test-dir build --output-on-failure
 ```
 
 The default build compiles the library, a structure test, and the first example.
-If `uvpp::uvpp` is available through CMake, the example uses the real
-`<uvpp/uv.hpp>` loop type. Otherwise it uses a milestone 0 loop placeholder so
-the public HTTP API shape remains buildable before networking is implemented.
-Real network listening is reserved for the HTTP MVP milestone.
+The example requires `uvpp::uvpp`; CMake first tries `find_package(uvpp CONFIG)`
+and then fetches [`uvpp`](https://github.com/peio42/uvpp) when needed. Because
+`uvpp::uvpp` links `LibUV::LibUV` and `Threads::Threads`, the example is built
+against libuv instead of a local placeholder. Real network listening is reserved
+for the HTTP MVP milestone.
 
 ## Target HTTP API
 
@@ -51,17 +52,17 @@ srv.listen("127.0.0.1", 8080);
 loop.run();
 ```
 
-Configuration APIs should use plain value structs with fluent builders:
+Configuration APIs should follow uvpp's fluent value-object style, without a
+separate `.build()` step:
 
 ```cpp
 uv::http::server srv(
   loop,
-  uv::http::server_options::builder()
+  uv::http::server_options{}
     .max_header_bytes(32 * 1024)
     .max_body_bytes(10 * 1024 * 1024)
     .idle_timeout(2min)
-    .server_header(false)
-    .build());
+    .server_header(false));
 ```
 
 ## Planned Modules
@@ -98,21 +99,23 @@ The project uses a mixed build strategy:
 - compiled sources for anything that owns state, talks to libuv, or wraps an
   external dependency.
 
-The HTTP/1 parser backend is planned around `llhttp`. `libnghttp2` is reserved
-for a future HTTP/2 implementation. External HTTP dependencies are allowed only
-under `detail/` as synchronous state machines. They never own the socket, the
-loop, timers, output buffers, or the public model.
+The HTTP/1 parser backend is `llhttp`, integrated behind `src/http/detail` as a
+synchronous state machine. When `llhttp` is fetched by CMake, its C sources are
+compiled into `uvpp-protocols` rather than installed as a separate package.
+HTTP/2 remains in the roadmap, but early milestones do not configure or link
+`libnghttp2`. External HTTP dependencies are allowed only under `detail/`. They
+never own the socket, the loop, timers, output buffers, or the public model.
 
-Current CMake backend options:
+Current CMake dependency options:
 
 ```sh
-cmake -S . -B build -DUVPP_PROTOCOLS_HTTP1_BACKEND=auto
-cmake -S . -B build -DUVPP_PROTOCOLS_HTTP1_BACKEND=llhttp
-cmake -S . -B build -DUVPP_PROTOCOLS_HTTP2_BACKEND=nghttp2
+cmake -S . -B build -DUVPP_PROTOCOLS_FETCH_UVPP=ON
+cmake -S . -B build -DUVPP_PROTOCOLS_FETCH_LLHTTP=ON
+cmake -S . -B build -DUVPP_PROTOCOLS_LLHTTP_SOURCE_DIR=/path/to/llhttp
 ```
 
-When `auto` cannot find the dependency, the milestone 0 build falls back to a
-stub backend.
+`llhttp` is not a replaceable backend. It is the HTTP/1 parser used by the
+library. The source-directory option exists for offline or vendored builds.
 
 ## Design Documents
 
@@ -128,8 +131,9 @@ The design notes live in [`docs/design`](docs/design):
 ## Status
 
 Milestone 0 foundation is available: repository structure, CMake packaging,
-public HTTP vocabulary, a header-only router skeleton, compiled HTTP state
-placeholders, dependency backend hooks, one example, and one structure test.
+public HTTP vocabulary, a header-only router skeleton, initial `llhttp`-backed
+HTTP/1 parser adapter, uvpp-backed example wiring, dependency backend hooks,
+and one structure test.
 
 ## License
 

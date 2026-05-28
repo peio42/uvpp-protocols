@@ -8,10 +8,15 @@
 - Use a mixed build strategy: header-only public vocabulary and small pure
   helpers; compiled code for stateful protocols, libuv integration, and external
   dependencies.
-- Use `llhttp` as the planned HTTP/1 state machine backend under `detail/`.
-- Reserve `libnghttp2` under `detail/` for a future HTTP/2 implementation.
+- Use `llhttp` as the HTTP/1 state machine backend under `detail/`.
+- Do not expose an HTTP/1 backend selector unless a second parser becomes a real
+  supported maintenance target.
+- Keep HTTP/2 as a future roadmap item without configuring or linking
+  `libnghttp2` in early milestones.
 - Keep external HTTP dependencies as synchronous state machines only; they do
   not own sockets, loops, timers, output buffers, or the public model.
+- Make examples build against `uvpp::uvpp`, fetching uvpp when it is not already
+  installed, so they link through uvpp to libuv.
 
 ## Milestone 1: HTTP/1.1 Server MVP
 

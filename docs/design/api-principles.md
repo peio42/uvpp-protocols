@@ -96,16 +96,16 @@ pointers.
 ## Configuration
 
 Use option structs when configuration grows beyond one or two parameters. Option
-types should remain plain value types, but each option type should also provide
-a fluent builder for user-facing construction:
+types should remain plain value types and should follow uvpp's fluent
+value-object style rather than a separate builder object with a final
+`.build()` step:
 
 ```cpp
-auto options = uv::http::server_options::builder()
+auto options = uv::http::server_options{}
   .max_header_bytes(16 * 1024)
   .max_body_bytes(1024 * 1024)
   .body_timeout(30s)
-  .keep_alive(true)
-  .build();
+  .keep_alive(true);
 
 uv::http::server srv(loop, options);
 ```
@@ -113,34 +113,48 @@ uv::http::server srv(loop, options);
 Option defaults should be safe for small services. Expensive or memory-heavy
 features should be opt-in.
 
-Builder setters should validate values that are immediately invalid, such as a
+Fluent setters should validate values that are immediately invalid, such as a
 zero header limit when the protocol cannot operate with one. Cross-field
-validation may happen in `build()`:
+validation should happen when the options are consumed by a protocol owner:
 
 ```cpp
 struct server_options {
-  std::size_t max_header_bytes = 16 * 1024;
-  std::size_t max_body_bytes = 1024 * 1024;
-  std::chrono::milliseconds body_timeout = std::chrono::seconds{30};
-  bool keep_alive = true;
+  std::size_t max_header_bytes_ = 16 * 1024;
+  std::size_t max_body_bytes_ = 1024 * 1024;
+  std::chrono::milliseconds body_timeout_ = std::chrono::seconds{30};
+  bool keep_alive_ = true;
 
-  class builder_type;
+  server_options& max_header_bytes(std::size_t value) &;
+  server_options&& max_header_bytes(std::size_t value) &&;
 
-  static builder_type builder();
+  server_options& body_timeout(std::chrono::milliseconds value) &;
+  server_options&& body_timeout(std::chrono::milliseconds value) &&;
 };
 ```
 
-The public fields make tests, logging, and advanced integration straightforward.
-The builder gives application code a stable, readable configuration style:
+When a field and a fluent setter would represent the exact same value, the
+setter should keep the canonical public name and the storage field should use a
+trailing underscore:
+
+```cpp
+struct server_options {
+  std::size_t max_header_bytes_ = 16 * 1024;
+
+  server_options& max_header_bytes(std::size_t value) &;
+  server_options&& max_header_bytes(std::size_t value) &&;
+};
+```
+
+This avoids maintaining two user-facing names for the same concept. It also
+makes the fluent call site match the option name used in documentation:
 
 ```cpp
 uv::http::server srv(
   loop,
-  uv::http::server_options::builder()
+  uv::http::server_options{}
     .max_body_bytes(10 * 1024 * 1024)
     .idle_timeout(2min)
-    .server_header(false)
-    .build());
+    .server_header(false));
 ```
 
 For simple examples, default construction should stay valid:

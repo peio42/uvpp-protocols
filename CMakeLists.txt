@@ -5,23 +5,25 @@ project(
   VERSION 0.1.0
   DESCRIPTION "Higher-level protocol modules for uvpp"
   HOMEPAGE_URL "https://github.com/peio42/uvpp-protocols"
-  LANGUAGES CXX)
+  LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
+include(FetchContent)
+
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
 
 option(UVPP_PROTOCOLS_BUILD_EXAMPLES "Build uvpp-protocols examples" ${PROJECT_IS_TOP_LEVEL})
 option(UVPP_PROTOCOLS_BUILD_TESTS "Build uvpp-protocols tests" ${PROJECT_IS_TOP_LEVEL})
-
-set(UVPP_PROTOCOLS_HTTP1_BACKEND
-    "auto"
-    CACHE STRING "HTTP/1 state machine backend: auto, llhttp, stub")
-set_property(CACHE UVPP_PROTOCOLS_HTTP1_BACKEND PROPERTY STRINGS auto llhttp stub)
-
-set(UVPP_PROTOCOLS_HTTP2_BACKEND
-    "auto"
-    CACHE STRING "HTTP/2 state machine backend: auto, nghttp2, none")
-set_property(CACHE UVPP_PROTOCOLS_HTTP2_BACKEND PROPERTY STRINGS auto nghttp2 none)
+option(UVPP_PROTOCOLS_FETCH_UVPP "Fetch uvpp when uvpp::uvpp is not already available" ON)
+option(UVPP_PROTOCOLS_UPDATE_FETCHED_UVPP "Allow CMake to update an already fetched uvpp checkout" OFF)
+option(UVPP_PROTOCOLS_FETCH_LLHTTP "Fetch llhttp when it is not already available" ON)
+option(UVPP_PROTOCOLS_UPDATE_FETCHED_LLHTTP "Allow CMake to update an already fetched llhttp checkout" OFF)
+set(UVPP_PROTOCOLS_LLHTTP_SOURCE_DIR
+    ""
+    CACHE PATH "Use an existing llhttp source checkout instead of fetching one")
 
 add_library(uvpp_protocols)
 add_library(uvpp::protocols ALIAS uvpp_protocols)
@@ -30,7 +32,6 @@ target_sources(
   uvpp_protocols
   PRIVATE
     src/http/detail/http1_state_machine.cpp
-    src/http/detail/http2_state_machine.cpp
     src/http/headers.cpp
     src/http/method.cpp
     src/http/request.cpp
@@ -55,19 +56,13 @@ set_target_properties(
     OUTPUT_NAME uvpp-protocols)
 
 include(cmake/Dependencies.cmake)
-uvpp_protocols_configure_http_backends(uvpp_protocols)
+uvpp_protocols_require_llhttp(uvpp_protocols)
 
 if(UVPP_PROTOCOLS_BUILD_EXAMPLES)
-  add_executable(uvpp_protocols_http_server_example examples/http_server.cpp)
-  target_link_libraries(uvpp_protocols_http_server_example PRIVATE uvpp::protocols)
+  uvpp_protocols_require_uvpp()
 
-  find_package(uvpp CONFIG QUIET)
-  if(TARGET uvpp::uvpp)
-    target_link_libraries(uvpp_protocols_http_server_example PRIVATE uvpp::uvpp)
-    target_compile_definitions(uvpp_protocols_http_server_example PRIVATE UVPP_PROTOCOLS_EXAMPLE_HAS_UVPP=1)
-  else()
-    target_compile_definitions(uvpp_protocols_http_server_example PRIVATE UVPP_PROTOCOLS_EXAMPLE_HAS_UVPP=0)
-  endif()
+  add_executable(uvpp_protocols_http_server_example examples/http_server.cpp)
+  target_link_libraries(uvpp_protocols_http_server_example PRIVATE uvpp::protocols uvpp::uvpp)
 endif()
 
 if(UVPP_PROTOCOLS_BUILD_TESTS)

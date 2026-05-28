@@ -8,20 +8,21 @@ class loop {};
 
 #include <uvpp/protocols/http.hpp>
 
+#include "../src/http/detail/http1_state_machine.hpp"
+
 using namespace std::chrono_literals;
 
 int main() {
-  auto options = uv::http::server_options::builder()
+  auto options = uv::http::server_options{}
     .max_header_bytes(32 * 1024)
     .max_body_bytes(1024 * 1024)
     .idle_timeout(30s)
-    .server_header(false)
-    .build();
+    .server_header(false);
 
-  assert(options.max_header_bytes == 32 * 1024);
-  assert(options.max_body_bytes == 1024 * 1024);
-  assert(options.idle_timeout == 30s);
-  assert(!options.server_header);
+  assert(options.max_header_bytes_ == 32 * 1024);
+  assert(options.max_body_bytes_ == 1024 * 1024);
+  assert(options.idle_timeout_ == 30s);
+  assert(!options.server_header_);
 
   uv::http::headers headers;
   headers.set("Content-Type", "text/plain");
@@ -56,5 +57,25 @@ int main() {
     listen_failed = true;
   }
   assert(listen_failed);
-}
 
+  uv::http::detail::http1_state_machine parser;
+  const auto result = parser.parse(
+    "POST /config?dry_run=1 HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Content-Type: text/plain\r\n"
+    "Content-Length: 4\r\n"
+    "\r\n"
+    "test");
+
+  assert(result.ok());
+  assert(parser.completed_messages().size() == 1);
+
+  const auto& message = parser.completed_messages().front();
+  assert(message.method == uv::http::method::post);
+  assert(message.target == "/config?dry_run=1");
+  assert(message.headers.get("host") == "example.test");
+  assert(message.headers.get("content-type") == "text/plain");
+  assert(message.body == "test");
+  assert(message.http_major == 1);
+  assert(message.http_minor == 1);
+}

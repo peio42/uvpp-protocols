@@ -218,13 +218,25 @@ HTTP parsing is security-sensitive and full of edge cases. The preferred design
 is to use a mature HTTP/1 parser behind a private adapter instead of writing one
 from scratch.
 
-The planned HTTP/1 backend is `llhttp`. It must remain behind `detail/` and act
-only as a synchronous state machine. It must not own the socket, uvpp loop,
-timers, response write buffers, or public request/response objects.
+The HTTP/1 backend is `llhttp`. It must remain behind `detail/` and act only as
+a synchronous state machine. It must not own the socket, uvpp loop, timers,
+response write buffers, or public request/response objects.
+
+HTTP/1 should not expose a backend selector while `llhttp` is the only supported
+parser. Build configuration may decide how `llhttp` is supplied, such as
+FetchContent or a vendored source directory, but not which HTTP/1 parser the
+library uses.
+
+The first adapter should collect parser events into an internal message model:
+method, target, headers, body chunks, HTTP version, keep-alive, and upgrade
+state. Later milestones can wire that internal model into connection sessions
+and streaming dispatch without exposing `llhttp` types.
 
 `libnghttp2` is reserved for a future HTTP/2 implementation behind the same
 boundary. HTTP/2 support should not shape the HTTP/1 public API until a concrete
-implementation milestone starts.
+implementation milestone starts. Early milestones should not configure, link,
+or wrap `libnghttp2`; they should only avoid choices that would block a later
+HTTP/2 transport/session implementation.
 
 The parser adapter should emit events into the session:
 
@@ -260,16 +272,16 @@ Initial options:
 
 ```cpp
 struct server_options {
-  std::size_t max_header_bytes = 16 * 1024;
-  std::size_t max_body_bytes = 1024 * 1024;
-  std::size_t max_pending_write_bytes = 1024 * 1024;
+  std::size_t max_header_bytes_ = 16 * 1024;
+  std::size_t max_body_bytes_ = 1024 * 1024;
+  std::size_t max_pending_write_bytes_ = 1024 * 1024;
 
-  std::chrono::milliseconds header_timeout = std::chrono::seconds{10};
-  std::chrono::milliseconds body_timeout = std::chrono::seconds{30};
-  std::chrono::milliseconds idle_timeout = std::chrono::seconds{60};
+  std::chrono::milliseconds header_timeout_ = std::chrono::seconds{10};
+  std::chrono::milliseconds body_timeout_ = std::chrono::seconds{30};
+  std::chrono::milliseconds idle_timeout_ = std::chrono::seconds{60};
 
-  bool keep_alive = true;
-  bool server_header = true;
+  bool keep_alive_ = true;
+  bool server_header_ = true;
 };
 ```
 
@@ -282,12 +294,11 @@ API principles:
 ```cpp
 uv::http::server srv(
   loop,
-  uv::http::server_options::builder()
+  uv::http::server_options{}
     .max_header_bytes(32 * 1024)
     .max_body_bytes(10 * 1024 * 1024)
     .idle_timeout(2min)
-    .server_header(false)
-    .build());
+    .server_header(false));
 ```
 
 ## Future HTTP Features

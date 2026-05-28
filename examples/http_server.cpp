@@ -3,14 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-#if UVPP_PROTOCOLS_EXAMPLE_HAS_UVPP
 #include <uvpp/uv.hpp>
-#else
-namespace uv {
-class loop {};
-} // namespace uv
-#endif
-
 #include <uvpp/protocols/http.hpp>
 
 using namespace std::chrono_literals;
@@ -38,11 +31,10 @@ int main() {
 
   uv::http::server srv(
     loop,
-    uv::http::server_options::builder()
+    uv::http::server_options{}
       .max_header_bytes(32 * 1024)
       .max_body_bytes(1024 * 1024)
-      .idle_timeout(30s)
-      .build());
+      .idle_timeout(30s));
 
   srv.get("/health", [](uv::http::request& req, uv::http::response& res) {
     (void)req;
