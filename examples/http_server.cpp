@@ -52,11 +52,9 @@ int main() {
     res.status(uvp::http::status::no_content).end();
   });
 
-  std::cout << "registered routes: " << srv.routes().size() << '\n';
+  srv.listen("127.0.0.1", 8080);
+  std::cout << "listening on http://127.0.0.1:8080 with "
+            << srv.routes().size() << " routes\n";
 
-  try {
-    srv.listen("127.0.0.1", 8080);
-  } catch (const std::logic_error& error) {
-    std::cout << "listen reserved for milestone 1: " << error.what() << '\n';
-  }
+  loop.run();
 }

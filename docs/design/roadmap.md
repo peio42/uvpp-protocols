@@ -28,7 +28,7 @@
 - `uvp::http::server` with `get`, `post`, generic `route`, and `listen`.
 - Exact path routing.
 - Request method, target, path, query, headers, and buffered body.
-- Response status, headers, `text`, `bytes`, `json` placeholder, and `end`.
+- Response status, headers, `text`, `bytes`, `json`, and `end`.
 - Safe default limits for headers, bodies, pending writes, and timeouts.
 - Keep-alive support for sequential requests on one connection.
 - Default error responses for parser errors, oversized payloads, missing routes,

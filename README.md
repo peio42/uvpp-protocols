@@ -7,8 +7,8 @@ of uvpp's event-based libuv wrapper. The goal is to let applications keep the
 explicit libuv/uvpp event-loop model while avoiding repeated implementations of
 common protocols such as HTTP, WebSocket, TLS, SMTP, and MQTT.
 
-This repository is currently in the design phase. The first planned module is
-an HTTP/1.1 server.
+This repository is in its first implementation milestone. The first module is a
+minimal HTTP/1.1 server built on uvpp, libuv, and `llhttp`.
 
 ## Build
 
@@ -22,8 +22,14 @@ The default build compiles the library, a structure test, and the first example.
 The example requires `uvpp::uvpp`; CMake first tries `find_package(uvpp CONFIG)`
 and then fetches [`uvpp`](https://github.com/peio42/uvpp) when needed. Because
 `uvpp::uvpp` links `LibUV::LibUV` and `Threads::Threads`, the example is built
-against libuv instead of a local placeholder. Real network listening is reserved
-for the HTTP MVP milestone.
+against libuv.
+
+Run the HTTP example:
+
+```sh
+./build/uvpp_protocols_http_server_example
+curl -i http://127.0.0.1:8080/health
+```
 
 ## Target HTTP API
 
@@ -91,6 +97,12 @@ Each protocol layer should own its own state and compose with the layer below it
 through explicit transport APIs. Convenience helpers may exist, but they should
 not force unrelated dependencies between modules.
 
+The current transport layer exposes `uvp::io::stream_listener` and
+`uvp::io::byte_stream`, with TCP and Unix socket listener adapters. The HTTP
+server owns listeners and accepted sessions through these abstractions, so HTTP
+over Unix sockets and future TLS/WebSocket composition do not require a TCP-only
+public model.
+
 ## Dependency Policy
 
 The project uses a mixed build strategy:
@@ -132,10 +144,11 @@ The design notes live in [`docs/design`](docs/design):
 
 ## Status
 
-Milestone 0 foundation is available: repository structure, CMake packaging,
-public HTTP vocabulary, a header-only router skeleton, initial `llhttp`-backed
-HTTP/1 parser adapter, uvpp-backed example wiring, dependency backend hooks,
-and one structure test.
+Milestone 1 groundwork is available: repository structure, CMake packaging,
+public HTTP vocabulary, a header-only exact-match router, `uvp::io` stream
+abstractions, TCP and Unix socket listener adapters, an `llhttp`-backed HTTP/1
+parser adapter, a minimal `uvp::http::server`, a runnable HTTP example, and one
+structure test.
 
 ## License
 

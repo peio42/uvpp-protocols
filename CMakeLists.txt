@@ -31,6 +31,7 @@ add_library(uvpp::protocols ALIAS uvpp_protocols)
 target_sources(
   uvpp_protocols
   PRIVATE
+    src/io/transport.cpp
     src/http/detail/http1_state_machine.cpp
     src/http/headers.cpp
     src/http/method.cpp
@@ -56,11 +57,14 @@ set_target_properties(
     OUTPUT_NAME uvpp-protocols)
 
 include(cmake/Dependencies.cmake)
+uvpp_protocols_require_uvpp()
 uvpp_protocols_require_llhttp(uvpp_protocols)
+target_include_directories(
+  uvpp_protocols
+  PRIVATE
+    $<TARGET_PROPERTY:uvpp::uvpp,INTERFACE_INCLUDE_DIRECTORIES>)
 
 if(UVPP_PROTOCOLS_BUILD_EXAMPLES)
-  uvpp_protocols_require_uvpp()
-
   add_executable(uvpp_protocols_http_server_example examples/http_server.cpp)
   target_link_libraries(uvpp_protocols_http_server_example PRIVATE uvpp::protocols uvpp::uvpp)
 endif()
@@ -68,7 +72,7 @@ endif()
 if(UVPP_PROTOCOLS_BUILD_TESTS)
   enable_testing()
   add_executable(uvpp_protocols_structure_test tests/structure_test.cpp)
-  target_link_libraries(uvpp_protocols_structure_test PRIVATE uvpp::protocols)
+  target_link_libraries(uvpp_protocols_structure_test PRIVATE uvpp::protocols uvpp::uvpp)
   add_test(NAME uvpp_protocols_structure_test COMMAND uvpp_protocols_structure_test)
 endif()
 

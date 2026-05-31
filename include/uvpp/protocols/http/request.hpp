@@ -4,6 +4,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <uvpp/protocols/http/connection.hpp>
@@ -16,6 +17,15 @@ namespace uvp::http {
 class request {
 public:
   request() = default;
+  request(
+    http::method method,
+    std::string target,
+    std::string path,
+    std::string query,
+    http::headers headers,
+    std::vector<std::byte> body,
+    route_params params,
+    http::connection connection);
 
   [[nodiscard]] http::method method() const noexcept { return method_; }
   [[nodiscard]] std::string_view target() const noexcept { return target_; }
@@ -47,4 +57,3 @@ private:
 };
 
 } // namespace uvp::http
-

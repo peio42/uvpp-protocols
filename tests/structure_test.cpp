@@ -2,10 +2,7 @@
 #include <chrono>
 #include <stdexcept>
 
-namespace uv {
-class loop {};
-} // namespace uv
-
+#include <uvpp/uv.hpp>
 #include <uvpp/protocols/http.hpp>
 
 #include "../src/http/detail/http1_state_machine.hpp"
@@ -49,14 +46,6 @@ int main() {
     res.text("ok");
   });
   assert(server.routes().size() == 1);
-
-  bool listen_failed = false;
-  try {
-    server.listen("127.0.0.1", 8080);
-  } catch (const std::logic_error&) {
-    listen_failed = true;
-  }
-  assert(listen_failed);
 
   uvp::http::detail::http1_state_machine parser;
   const auto result = parser.parse(
