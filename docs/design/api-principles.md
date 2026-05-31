@@ -2,8 +2,8 @@
 
 ## Namespace and Naming
 
-Public APIs live under `uv::<protocol>`, for example `uv::http::server` and
-`uv::websocket::session`.
+Public APIs live under `uvp::<protocol>`, for example `uvp::http::server` and
+`uvp::websocket::session`.
 
 Names should use the same C++ style as uvpp:
 
@@ -23,15 +23,15 @@ Protocol owners should be constructed from an explicit uvpp loop or stream:
 
 ```cpp
 uv::loop loop;
-uv::http::server srv(loop);
+uvp::http::server srv(loop);
 ```
 
 Modules must not use a hidden default loop. If a module adapts an existing
 stream, that stream dependency should be visible:
 
 ```cpp
-uv::tls::stream tls(client_tcp, context);
-uv::websocket::session ws(http_request, http_response);
+uvp::tls::stream tls(client_tcp, context);
+uvp::websocket::session ws(http_request, http_response);
 ```
 
 ## Callbacks
@@ -40,7 +40,7 @@ Runtime callbacks are the ergonomic default. They may capture state and are
 stored by the module owner or operation owner.
 
 ```cpp
-srv.get("/health", [](uv::http::request& req, uv::http::response& res) {
+srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
   res.text("ok");
 });
 ```
@@ -83,11 +83,11 @@ or document that the caller must keep it alive. APIs that start asynchronous
 work should make the operation owner clear.
 
 Low-level escape hatches may expose uvpp handles or native objects through
-explicit functions:
+explicit functions, but only on the adapter that naturally owns that handle:
 
 ```cpp
-uv::tcp& server_tcp = srv.tcp();
-uv::tcp& session_tcp = req.connection().tcp();
+uv::tcp& tcp = tcp_stream.tcp();
+uv::pipe& pipe = pipe_stream.pipe();
 ```
 
 There should be no implicit conversion from protocol objects to raw libuv
@@ -101,13 +101,13 @@ value-object style rather than a separate builder object with a final
 `.build()` step:
 
 ```cpp
-auto options = uv::http::server_options{}
+auto options = uvp::http::server_options{}
   .max_header_bytes(16 * 1024)
   .max_body_bytes(1024 * 1024)
   .body_timeout(30s)
   .keep_alive(true);
 
-uv::http::server srv(loop, options);
+uvp::http::server srv(loop, options);
 ```
 
 Option defaults should be safe for small services. Expensive or memory-heavy
@@ -149,9 +149,9 @@ This avoids maintaining two user-facing names for the same concept. It also
 makes the fluent call site match the option name used in documentation:
 
 ```cpp
-uv::http::server srv(
+uvp::http::server srv(
   loop,
-  uv::http::server_options{}
+  uvp::http::server_options{}
     .max_body_bytes(10 * 1024 * 1024)
     .idle_timeout(2min)
     .server_header(false));
@@ -160,7 +160,7 @@ uv::http::server srv(
 For simple examples, default construction should stay valid:
 
 ```cpp
-uv::http::server srv(loop);
+uvp::http::server srv(loop);
 ```
 
 ## Dependency Policy

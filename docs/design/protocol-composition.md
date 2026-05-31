@@ -35,7 +35,9 @@ transport, not as hidden global configuration.
 
 ## Transport Concept
 
-The shared transport boundary should be small. A transport must be able to:
+The shared transport boundary should be small. The first concrete abstraction is
+documented in [Transport abstractions](transport-abstractions.md). A transport
+must be able to:
 
 - start reads;
 - write byte buffers asynchronously;
@@ -50,7 +52,7 @@ toward a named concept or type-erased transport when more modules need it.
 Possible internal shape:
 
 ```cpp
-namespace uv::protocols {
+namespace uvp::io {
 
 class byte_stream {
 public:
@@ -71,7 +73,7 @@ contract protocol modules are trying to share.
 For common cases, the high-level module should keep the terse API:
 
 ```cpp
-uv::http::server srv(loop);
+uvp::http::server srv(loop);
 srv.listen("127.0.0.1", 8080);
 ```
 
@@ -80,14 +82,14 @@ That is shorthand for a plain TCP listener feeding HTTP sessions.
 TLS should be presented as an explicit listener or acceptor layer:
 
 ```cpp
-auto tls = uv::tls::server_context{}
+auto tls = uvp::tls::server_context{}
   .certificate_file("server.crt")
   .private_key_file("server.key")
   .alpn({"http/1.1"});
 
-uv::http::server srv(loop);
+uvp::http::server srv(loop);
 srv.listen(
-  uv::tls::listener{loop}
+  uvp::tls::listener{loop}
     .bind("0.0.0.0", 443)
     .context(tls));
 ```
@@ -114,9 +116,9 @@ The HTTP module should expose upgrade hooks without depending on the WebSocket
 module:
 
 ```cpp
-srv.upgrade("/events", [](uv::http::upgrade_request& req) {
-  return uv::websocket::accept(req, {
-    .on_text = [](uv::websocket::session& ws, std::string_view msg) {
+srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
+  return uvp::websocket::accept(req, {
+    .on_text = [](uvp::websocket::session& ws, std::string_view msg) {
       ws.text(msg);
     },
   });
@@ -126,8 +128,8 @@ srv.upgrade("/events", [](uv::http::upgrade_request& req) {
 The exact callback shape may change, but the dependency direction should stay:
 
 ```text
-uv::websocket -> uv::http upgrade API
-uv::http      -> no dependency on uv::websocket
+uvp::websocket -> uvp::http upgrade API
+uvp::http      -> no dependency on uvp::websocket
 ```
 
 ## Protocols Inside WebSocket
@@ -138,12 +140,12 @@ example for this project.
 The API should make the carrier explicit:
 
 ```cpp
-srv.upgrade("/mqtt", [](uv::http::upgrade_request& req) {
-  auto ws = uv::websocket::accept(req, uv::websocket::accept_options{}
+srv.upgrade("/mqtt", [](uvp::http::upgrade_request& req) {
+  auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
     .subprotocol("mqtt"));
 
-  return uv::mqtt::client_session::over_websocket(std::move(ws),
-    uv::mqtt::client_options{}
+  return uvp::mqtt::client_session::over_websocket(std::move(ws),
+    uvp::mqtt::client_options{}
       .client_id("agent-1")
       .keep_alive(30s));
 });
@@ -153,18 +155,18 @@ MQTT over raw TCP or TLS should use the same MQTT session type with a different
 transport:
 
 ```cpp
-auto mqtt = uv::mqtt::client_session::connect(
+auto mqtt = uvp::mqtt::client_session::connect(
   loop,
-  uv::tcp::endpoint{"broker.local", 1883},
-  uv::mqtt::client_options{}
+  uvp::io::tcp_endpoint{"broker.local", 1883},
+  uvp::mqtt::client_options{}
     .client_id("agent-1"));
 ```
 
 ```cpp
-auto mqtt = uv::mqtt::client_session::connect(
+auto mqtt = uvp::mqtt::client_session::connect(
   loop,
-  uv::tls::endpoint{"broker.local", 8883, tls_context},
-  uv::mqtt::client_options{}
+  uvp::tls::endpoint{"broker.local", 8883, tls_context},
+  uvp::mqtt::client_options{}
     .client_id("agent-1"));
 ```
 
@@ -177,22 +179,22 @@ pretend to be the other.
 Client APIs should follow the same pattern:
 
 ```cpp
-auto http = uv::http::client::connect(
+auto http = uvp::http::client::connect(
   loop,
-  uv::tcp::endpoint{"127.0.0.1", 8080});
+  uvp::io::tcp_endpoint{"127.0.0.1", 8080});
 ```
 
 ```cpp
-auto http = uv::http::client::connect(
+auto http = uvp::http::client::connect(
   loop,
-  uv::tls::endpoint{"api.example.com", 443, tls_context});
+  uvp::tls::endpoint{"api.example.com", 443, tls_context});
 ```
 
 ```cpp
-auto ws = uv::websocket::client::connect(
+auto ws = uvp::websocket::client::connect(
   loop,
-  uv::http::url{"wss://api.example.com/events"},
-  uv::websocket::client_options{}
+  uvp::url{"wss://api.example.com/events"},
+  uvp::websocket::client_options{}
     .subprotocol("mqtt"));
 ```
 
@@ -218,18 +220,18 @@ layer exactly once.
 Preferred dependency graph:
 
 ```text
-uv::tls        -> uvpp
-uv::http       -> uvpp
-uv::websocket  -> uv::http upgrade API, uvpp
-uv::mqtt       -> shared byte stream API, optional uv::websocket adapter
+uvp::tls        -> uvpp
+uvp::http       -> uvpp
+uvp::websocket  -> uvp::http upgrade API, uvpp
+uvp::mqtt       -> shared byte stream API, optional uvp::websocket adapter
 ```
 
 Avoid hard dependencies such as:
 
 ```text
-uv::http -> uv::tls
-uv::http -> uv::websocket
-uv::tls  -> uv::http
+uvp::http -> uvp::tls
+uvp::http -> uvp::websocket
+uvp::tls  -> uvp::http
 ```
 
 Convenience headers may compose modules:

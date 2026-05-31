@@ -4,7 +4,7 @@
 
 #include <llhttp.h>
 
-namespace uv::http::detail {
+namespace uvp::http::detail {
 
 namespace {
 
@@ -192,4 +192,4 @@ const std::vector<http1_message>& http1_state_machine::completed_messages() cons
   return impl_->completed_messages();
 }
 
-} // namespace uv::http::detail
+} // namespace uvp::http::detail

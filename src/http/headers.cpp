@@ -2,7 +2,7 @@
 
 #include <cctype>
 
-namespace uv::http {
+namespace uvp::http {
 
 headers& headers::set(std::string_view name, std::string_view value) {
   for (auto& [existing_name, existing_value] : entries_) {
@@ -55,5 +55,5 @@ bool headers::names_equal(std::string_view lhs, std::string_view rhs) noexcept {
   return true;
 }
 
-} // namespace uv::http
+} // namespace uvp::http
 

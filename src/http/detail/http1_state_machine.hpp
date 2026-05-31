@@ -8,7 +8,7 @@
 #include <uvpp/protocols/http/headers.hpp>
 #include <uvpp/protocols/http/method.hpp>
 
-namespace uv::http::detail {
+namespace uvp::http::detail {
 
 struct http1_message {
   http::method method = http::method::unknown;
@@ -56,4 +56,4 @@ private:
   std::unique_ptr<impl> impl_;
 };
 
-} // namespace uv::http::detail
+} // namespace uvp::http::detail

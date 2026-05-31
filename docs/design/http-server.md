@@ -8,9 +8,9 @@ embedded admin endpoints, local agents, and protocol gateways.
 The API should make simple cases terse:
 
 ```cpp
-uv::http::server srv(loop);
+uvp::http::server srv(loop);
 
-srv.get("/health", [](uv::http::request& req, uv::http::response& res) {
+srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
   res.json({{"status", "ok"}});
 });
 
@@ -24,16 +24,16 @@ parameters, middleware-like hooks, and protocol upgrades.
 
 Initial public types:
 
-- `uv::http::server`
-- `uv::http::server_options`
-- `uv::http::request`
-- `uv::http::response`
-- `uv::http::connection`
-- `uv::http::router`
-- `uv::http::headers`
-- `uv::http::method`
-- `uv::http::status`
-- `uv::http::route_params`
+- `uvp::http::server`
+- `uvp::http::server_options`
+- `uvp::http::request`
+- `uvp::http::response`
+- `uvp::http::connection`
+- `uvp::http::router`
+- `uvp::http::headers`
+- `uvp::http::method`
+- `uvp::http::status`
+- `uvp::http::route_params`
 
 The aggregate include should be:
 
@@ -45,7 +45,8 @@ The aggregate include should be:
 
 `server` owns:
 
-- a listening `uv::tcp`;
+- one or more `uvp::io::stream_listener` objects, possibly created by
+  convenience TCP `listen()` overloads;
 - a route table;
 - accepted HTTP connection sessions;
 - server-level hooks;
@@ -54,7 +55,7 @@ The aggregate include should be:
 Sketch:
 
 ```cpp
-namespace uv::http {
+namespace uvp::http {
 
 class server {
 public:
@@ -86,9 +87,8 @@ public:
   server& route(method method, std::string_view pattern, Handler&& handler);
 
   void listen(std::string_view host, unsigned int port);
+  void listen(uvp::io::stream_listener listener);
   void close();
-
-  uv::tcp& tcp() noexcept;
 };
 
 }
@@ -96,6 +96,16 @@ public:
 
 `listen()` should bind and start listening. Immediate libuv failures throw
 `uv::error`.
+
+The host/port overload is a convenience wrapper around
+`uvp::io::tcp_listener`. Unix socket support should use the generic
+listener overload:
+
+```cpp
+srv.listen(
+  uvp::io::pipe_listener{loop}
+    .bind("/run/my-app.sock"));
+```
 
 `close()` should stop accepting new connections and close active sessions
 according to the configured close policy.
@@ -292,9 +302,9 @@ User-facing configuration should normally use the builder style defined in the
 API principles:
 
 ```cpp
-uv::http::server srv(
+uvp::http::server srv(
   loop,
-  uv::http::server_options{}
+  uvp::http::server_options{}
     .max_header_bytes(32 * 1024)
     .max_body_bytes(10 * 1024 * 1024)
     .idle_timeout(2min)

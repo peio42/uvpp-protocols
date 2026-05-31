@@ -12,17 +12,17 @@ The first target module is an HTTP server API:
 
 uv::loop loop;
 
-uv::http::server srv(loop);
+uvp::http::server srv(loop);
 
-srv.get("/health", [](uv::http::request& req, uv::http::response& res) {
+srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
   res.json({{"status", "ok"}});
 });
 
-srv.get("/logs", [](uv::http::request& req, uv::http::response& res) {
+srv.get("/logs", [](uvp::http::request& req, uvp::http::response& res) {
   res.text(read_recent_logs());
 });
 
-srv.post("/config", [](uv::http::request& req, uv::http::response& res) {
+srv.post("/config", [](uvp::http::request& req, uvp::http::response& res) {
   auto cfg = parse_config(req.body());
   apply_config(cfg);
   res.status(204).end();
@@ -43,6 +43,8 @@ loop.run();
   low-level libraries.
 - [Protocol composition](protocol-composition.md): how nested protocols should
   be presented and connected.
+- [Transport abstractions](transport-abstractions.md): stream listeners and
+  byte streams for TCP, Unix sockets, TLS, and future protocols.
 - [HTTP server design](http-server.md): first implementation target.
 - [Roadmap](roadmap.md): suggested implementation order and milestones.
 
@@ -54,7 +56,7 @@ explicit lifetime model, and avoid hiding asynchronous work behind misleading
 RAII.
 
 The protocol modules may own higher-level operation state where that is the
-point of the abstraction. For example, `uv::http::server` may own accepted
+point of the abstraction. For example, `uvp::http::server` may own accepted
 connection sessions, parser state, route tables, and queued response writes.
 That is different from uvpp's low-level stream API, where users intentionally
 provide request objects and buffers. The higher-level ownership must still be

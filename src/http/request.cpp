@@ -1,6 +1,6 @@
 #include <uvpp/protocols/http/request.hpp>
 
-namespace uv::http {
+namespace uvp::http {
 
 std::string_view request::header(std::string_view name) const noexcept {
   return headers_.get(name);
@@ -19,4 +19,4 @@ std::string_view request::body() const noexcept {
   return std::string_view(data, body_.size());
 }
 
-} // namespace uv::http
+} // namespace uvp::http

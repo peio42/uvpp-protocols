@@ -29,27 +29,27 @@ void apply_config(const config&) {}
 int main() {
   uv::loop loop;
 
-  uv::http::server srv(
+  uvp::http::server srv(
     loop,
-    uv::http::server_options{}
+    uvp::http::server_options{}
       .max_header_bytes(32 * 1024)
       .max_body_bytes(1024 * 1024)
       .idle_timeout(30s));
 
-  srv.get("/health", [](uv::http::request& req, uv::http::response& res) {
+  srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
     (void)req;
     res.json({{"status", "ok"}});
   });
 
-  srv.get("/logs", [](uv::http::request& req, uv::http::response& res) {
+  srv.get("/logs", [](uvp::http::request& req, uvp::http::response& res) {
     (void)req;
     res.text(read_recent_logs());
   });
 
-  srv.post("/config", [](uv::http::request& req, uv::http::response& res) {
+  srv.post("/config", [](uvp::http::request& req, uvp::http::response& res) {
     auto cfg = parse_config(req.body());
     apply_config(cfg);
-    res.status(uv::http::status::no_content).end();
+    res.status(uvp::http::status::no_content).end();
   });
 
   std::cout << "registered routes: " << srv.routes().size() << '\n';

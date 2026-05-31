@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-namespace uv::http {
+namespace uvp::http {
 
 enum class method {
   get,
@@ -19,5 +19,5 @@ enum class method {
 
 std::string_view to_string(method value) noexcept;
 
-} // namespace uv::http
+} // namespace uvp::http
 

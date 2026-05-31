@@ -4,7 +4,7 @@ namespace uv {
 class tcp;
 } // namespace uv
 
-namespace uv::http {
+namespace uvp::http {
 
 class connection {
 public:
@@ -21,5 +21,5 @@ private:
   uv::tcp* tcp_ = nullptr;
 };
 
-} // namespace uv::http
+} // namespace uvp::http
 

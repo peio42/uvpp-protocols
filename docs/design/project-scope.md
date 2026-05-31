@@ -42,17 +42,17 @@ blocks into application protocols.
 
 The initial family of modules can grow in this order:
 
-- `uv::http`: HTTP/1.1 server first, then client primitives.
-- `uv::websocket`: WebSocket server/client sessions built on HTTP upgrade.
-- `uv::tls`: TLS stream adapter over uvpp streams, with backend-specific
+- `uvp::http`: HTTP/1.1 server first, then client primitives.
+- `uvp::websocket`: WebSocket server/client sessions built on HTTP upgrade.
+- `uvp::tls`: TLS stream adapter over uvpp streams, with backend-specific
   providers such as OpenSSL or mbedTLS.
-- `uv::smtp`: SMTP client and minimal server/session primitives.
-- `uv::sse`: Server-Sent Events response helper on top of HTTP.
-- `uv::multipart`: multipart/form-data parser and streaming upload helpers for
+- `uvp::smtp`: SMTP client and minimal server/session primitives.
+- `uvp::sse`: Server-Sent Events response helper on top of HTTP.
+- `uvp::multipart`: multipart/form-data parser and streaming upload helpers for
   HTTP.
-- `uv::redis`: RESP client/session protocol for simple service integration.
-- `uv::mqtt`: MQTT client/server session primitives for event-based messaging.
-- `uv::proxy`: CONNECT and simple reverse-proxy building blocks.
+- `uvp::redis`: RESP client/session protocol for simple service integration.
+- `uvp::mqtt`: MQTT client/server session primitives for event-based messaging.
+- `uvp::proxy`: CONNECT and simple reverse-proxy building blocks.
 
 Some modules should be thin protocol helpers, while others may be full session
 owners. The deciding factor is whether the module must coordinate parsing,

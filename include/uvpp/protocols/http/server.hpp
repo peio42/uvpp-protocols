@@ -11,7 +11,7 @@ namespace uv {
 class loop;
 } // namespace uv
 
-namespace uv::http {
+namespace uvp::http {
 
 class server {
 public:
@@ -80,4 +80,4 @@ private:
   bool listening_ = false;
 };
 
-} // namespace uv::http
+} // namespace uvp::http

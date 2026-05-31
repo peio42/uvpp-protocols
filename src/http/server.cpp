@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace uv::http {
+namespace uvp::http {
 
 server::server(uv::loop& loop)
     : server(loop, server_options{}) {}
@@ -16,11 +16,11 @@ server::server(uv::loop& loop, server_options options)
 void server::listen(std::string_view host, unsigned int port) {
   (void)host;
   (void)port;
-  throw std::logic_error("uv::http::server::listen is reserved for the HTTP MVP implementation");
+  throw std::logic_error("uvp::http::server::listen is reserved for the HTTP MVP implementation");
 }
 
 void server::close() noexcept {
   listening_ = false;
 }
 
-} // namespace uv::http
+} // namespace uvp::http

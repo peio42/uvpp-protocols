@@ -24,7 +24,7 @@ an adapter module.
 | HTTP/1.1 | [`llhttp`](https://github.com/nodejs/llhttp) | Accepted | Parser/state machine under `src/http/detail`; already integrated. |
 | HTTP/2 | [`nghttp2`](https://nghttp2.org/) / [`libnghttp2`](https://github.com/nghttp2/nghttp2) | Accepted for future HTTP/2 | Mature C HTTP/2 implementation with HPACK. Do not configure or link in early milestones. |
 | HTTP/3 | [`nghttp3`](https://github.com/ngtcp2/nghttp3) plus a QUIC transport such as [`ngtcp2`](https://github.com/ngtcp2/ngtcp2) | Recommended for future HTTP/3 | `nghttp3` implements HTTP/3 mapping over QUIC and QPACK, but does not provide QUIC transport. |
-| URL parsing | [`ada-url`](https://github.com/ada-url/ada) | Candidate | Good fit for WHATWG URL parsing. Keep behind `uv::http` / `uv::url` value types. |
+| URL parsing | [`ada-url`](https://github.com/ada-url/ada) | Accepted for shared URL module | Good fit for a general `uvp::url` wrapper. Use it beyond HTTP where WHATWG URL semantics are appropriate. |
 | HTTP client | [`libcurl`](https://curl.se/libcurl/) | Candidate with constraints | Useful for broad client protocol coverage. Its multi-socket API can integrate with event loops, but libcurl owns substantial client state and socket orchestration. |
 | TLS | OpenSSL-family backend | Deferred | Initial candidate is OpenSSL 3.x for broad platform support. Need a separate TLS design note before adoption. |
 | PostgreSQL | [`libpq`](https://www.postgresql.org/docs/current/libpq.html) | Candidate | Official PostgreSQL C client. Nonblocking APIs and socket readiness can integrate with uvpp. |
@@ -44,7 +44,7 @@ advertise parser choice as a public or build-level product feature.
 The integration boundary is:
 
 ```text
-uv::http session
+uvp::http session
   -> src/http/detail/http1_state_machine
     -> llhttp callbacks
 ```
@@ -82,7 +82,7 @@ The likely future stack is:
 UDP socket
   -> QUIC transport, such as ngtcp2
     -> HTTP/3 mapping and QPACK, such as nghttp3
-      -> uv::http public request/response model
+      -> uvp::http public request/response model
 ```
 
 Do not add HTTP/3 APIs until the QUIC ownership model is designed. QUIC changes
@@ -90,16 +90,32 @@ the transport assumptions more deeply than HTTP/2 does.
 
 ## URL Parsing
 
-`ada-url` is a strong candidate for URL parsing because it is a modern C++
-WHATWG-compatible parser. It should be wrapped behind public value types such as
-`uv::url`, `uv::http::url`, or request target helpers.
+`ada-url` is the accepted URL parsing dependency for a shared URL module. It is
+a modern C++ WHATWG-compatible parser, which makes it suitable for HTTP client
+URLs, request target helpers, proxy targets, and configuration strings that use
+web-style URL semantics.
+
+The public type should be general:
+
+```cpp
+namespace uv {
+
+class url;
+
+}
+```
+
+HTTP-specific helpers can then use `uvp::url` rather than defining a separate
+`uvp::http::url` type.
 
 Adoption questions:
 
-- Is WHATWG URL behavior desired for all protocols, or only HTTP/web protocols?
+- Where is WHATWG URL behavior desired, and where do protocols need stricter
+  RFC-specific parsing?
 - Do we need RFC-oriented parsing for SMTP, database URLs, or lower-level
   socket endpoints?
-- Should URL parsing be a separate `uv::url` module shared by all protocols?
+- Should endpoint convenience parsing accept URL strings, and if so which
+  Unix-socket URL convention should be supported?
 
 ## HTTP Client
 
@@ -111,8 +127,8 @@ orchestration.
 Possible decision:
 
 - use libcurl only for an optional high-level HTTP client adapter;
-- keep `uv::http::server` and shared HTTP vocabulary independent from libcurl;
-- never let libcurl types leak into `uv::http` request/response APIs;
+- keep `uvp::http::server` and shared HTTP vocabulary independent from libcurl;
+- never let libcurl types leak into `uvp::http` request/response APIs;
 - document that a libcurl adapter composes with uvpp through socket callbacks,
   not through the same state-machine boundary as `llhttp`.
 
@@ -134,8 +150,8 @@ TLS must remain a module boundary:
 
 ```text
 uv::tcp
-  -> uv::tls::stream
-    -> uv::http::server/session
+  -> uvp::tls::stream
+    -> uvp::http::server/session
 ```
 
 HTTP must not directly depend on a TLS provider.
@@ -181,4 +197,3 @@ adoption, review:
 - Whether database protocols belong in `uvpp-protocols` or a separate package.
 - SMTP dependency strategy.
 - MQTT dependency strategy.
-

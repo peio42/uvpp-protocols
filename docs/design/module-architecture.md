@@ -6,7 +6,7 @@
 
 ```text
 Application
-  -> uvpp-protocols module, such as uv::http or uv::websocket
+  -> uvpp-protocols module, such as uvp::http or uvp::websocket
     -> uvpp C++20 handles, requests, buffers, errors, timers
       -> libuv
 ```
@@ -25,8 +25,8 @@ Each module should define:
 - private parser/backend adapters under `detail/`;
 - tests and examples that do not require unrelated modules.
 
-Cross-module dependencies should be explicit. For example, `uv::websocket`
-depends on `uv::http` upgrade support, while `uv::http` should not depend on
+Cross-module dependencies should be explicit. For example, `uvp::websocket`
+depends on `uvp::http` upgrade support, while `uvp::http` should not depend on
 WebSocket.
 
 Protocol nesting should be modeled as composition over explicit transports, not
@@ -88,8 +88,8 @@ until close callbacks complete.
 Expose raw or lower-level access only through named functions:
 
 ```cpp
-uv::tcp& connection_tcp = req.connection().tcp();
-uv::stream_view stream = session.stream();
+uvp::io::byte_stream& stream = req.connection().stream();
+uv::tcp& tcp = tcp_stream.tcp();
 ```
 
 Any borrowed view returned by a protocol object must have callback-scoped or

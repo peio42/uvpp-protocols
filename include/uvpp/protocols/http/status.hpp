@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-namespace uv::http {
+namespace uvp::http {
 
 enum class status : unsigned int {
   ok = 200,
@@ -18,5 +18,5 @@ enum class status : unsigned int {
 
 std::string_view reason_phrase(status value) noexcept;
 
-} // namespace uv::http
+} // namespace uvp::http
 

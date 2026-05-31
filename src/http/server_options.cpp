@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace uv::http {
+namespace uvp::http {
 
 namespace {
 
@@ -113,4 +113,4 @@ void server_options::validate() const {
   require_positive(idle_timeout_, "idle_timeout must be greater than zero");
 }
 
-} // namespace uv::http
+} // namespace uvp::http

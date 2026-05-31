@@ -3,7 +3,7 @@
 #include <chrono>
 #include <cstddef>
 
-namespace uv::http {
+namespace uvp::http {
 
 struct server_options {
   std::size_t max_header_bytes_ = 16 * 1024;
@@ -44,4 +44,4 @@ struct server_options {
   void validate() const;
 };
 
-} // namespace uv::http
+} // namespace uvp::http

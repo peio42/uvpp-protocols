@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-namespace uv::http {
+namespace uvp::http {
 
 namespace {
 
@@ -113,4 +113,4 @@ void response::end() {
   ended_ = true;
 }
 
-} // namespace uv::http
+} // namespace uvp::http

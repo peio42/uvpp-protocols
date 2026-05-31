@@ -9,7 +9,7 @@
 
 #include <uvpp/protocols/http/method.hpp>
 
-namespace uv::http {
+namespace uvp::http {
 
 class request;
 class response;
@@ -88,4 +88,4 @@ inline const router::handler_type* router::find(method method_value, std::string
   return nullptr;
 }
 
-} // namespace uv::http
+} // namespace uvp::http

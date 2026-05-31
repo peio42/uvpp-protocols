@@ -1,6 +1,6 @@
 #include <uvpp/protocols/http/method.hpp>
 
-namespace uv::http {
+namespace uvp::http {
 
 std::string_view to_string(method value) noexcept {
   switch (value) {
@@ -28,5 +28,5 @@ std::string_view to_string(method value) noexcept {
   return "UNKNOWN";
 }
 
-} // namespace uv::http
+} // namespace uvp::http
 

@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-namespace uv::http {
+namespace uvp::http {
 
 class headers {
 public:
@@ -33,5 +33,5 @@ private:
   container_type entries_;
 };
 
-} // namespace uv::http
+} // namespace uvp::http
 

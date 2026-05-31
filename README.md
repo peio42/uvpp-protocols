@@ -32,17 +32,17 @@ for the HTTP MVP milestone.
 
 uv::loop loop;
 
-uv::http::server srv(loop);
+uvp::http::server srv(loop);
 
-srv.get("/health", [](uv::http::request& req, uv::http::response& res) {
+srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
   res.json({{"status", "ok"}});
 });
 
-srv.get("/logs", [](uv::http::request& req, uv::http::response& res) {
+srv.get("/logs", [](uvp::http::request& req, uvp::http::response& res) {
   res.text(read_recent_logs());
 });
 
-srv.post("/config", [](uv::http::request& req, uv::http::response& res) {
+srv.post("/config", [](uvp::http::request& req, uvp::http::response& res) {
   auto cfg = parse_config(req.body());
   apply_config(cfg);
   res.status(204).end();
@@ -56,9 +56,9 @@ Configuration APIs should follow uvpp's fluent value-object style, without a
 separate `.build()` step:
 
 ```cpp
-uv::http::server srv(
+uvp::http::server srv(
   loop,
-  uv::http::server_options{}
+  uvp::http::server_options{}
     .max_header_bytes(32 * 1024)
     .max_body_bytes(10 * 1024 * 1024)
     .idle_timeout(2min)
@@ -67,14 +67,14 @@ uv::http::server srv(
 
 ## Planned Modules
 
-- `uv::http`: HTTP/1.1 server first, then client primitives.
-- `uv::websocket`: WebSocket server/client sessions built on HTTP upgrade.
-- `uv::tls`: TLS stream adapter over uvpp streams.
-- `uv::smtp`: SMTP client and minimal server/session primitives.
-- `uv::sse`: Server-Sent Events helper on top of HTTP responses.
-- `uv::multipart`: multipart/form-data parser and streaming upload helpers.
-- `uv::mqtt`: MQTT sessions over TCP, TLS, or WebSocket.
-- `uv::proxy`: CONNECT and reverse-proxy helpers.
+- `uvp::http`: HTTP/1.1 server first, then client primitives.
+- `uvp::websocket`: WebSocket server/client sessions built on HTTP upgrade.
+- `uvp::tls`: TLS stream adapter over uvpp streams.
+- `uvp::smtp`: SMTP client and minimal server/session primitives.
+- `uvp::sse`: Server-Sent Events helper on top of HTTP responses.
+- `uvp::multipart`: multipart/form-data parser and streaming upload helpers.
+- `uvp::mqtt`: MQTT sessions over TCP, TLS, or WebSocket.
+- `uvp::proxy`: CONNECT and reverse-proxy helpers.
 
 ## Protocol Composition
 
@@ -126,6 +126,7 @@ The design notes live in [`docs/design`](docs/design):
 - [Module architecture](docs/design/module-architecture.md)
 - [Dependency decisions](docs/design/dependency-decisions.md)
 - [Protocol composition](docs/design/protocol-composition.md)
+- [Transport abstractions](docs/design/transport-abstractions.md)
 - [HTTP server design](docs/design/http-server.md)
 - [Roadmap](docs/design/roadmap.md)
 

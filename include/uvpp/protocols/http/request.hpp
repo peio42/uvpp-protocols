@@ -11,7 +11,7 @@
 #include <uvpp/protocols/http/method.hpp>
 #include <uvpp/protocols/http/route_params.hpp>
 
-namespace uv::http {
+namespace uvp::http {
 
 class request {
 public:
@@ -46,5 +46,5 @@ private:
   http::connection connection_;
 };
 
-} // namespace uv::http
+} // namespace uvp::http
 

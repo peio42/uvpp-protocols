@@ -10,7 +10,7 @@
 #include <uvpp/protocols/http/headers.hpp>
 #include <uvpp/protocols/http/status.hpp>
 
-namespace uv::http {
+namespace uvp::http {
 
 class response {
 public:
@@ -39,5 +39,5 @@ private:
   bool ended_ = false;
 };
 
-} // namespace uv::http
+} // namespace uvp::http
 

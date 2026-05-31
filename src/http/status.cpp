@@ -1,6 +1,6 @@
 #include <uvpp/protocols/http/status.hpp>
 
-namespace uv::http {
+namespace uvp::http {
 
 std::string_view reason_phrase(status value) noexcept {
   switch (value) {
@@ -26,5 +26,5 @@ std::string_view reason_phrase(status value) noexcept {
   return "";
 }
 
-} // namespace uv::http
+} // namespace uvp::http
 

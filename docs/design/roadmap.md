@@ -20,7 +20,12 @@
 
 ## Milestone 1: HTTP/1.1 Server MVP
 
-- `uv::http::server` with `get`, `post`, generic `route`, and `listen`.
+- Shared `uvp::io::byte_stream` and `uvp::io::stream_listener`
+  contracts.
+- TCP and Unix socket listener adapters.
+- General `uvp::url` wrapper backed by `ada-url`, at least enough for HTTP
+  request targets and client-facing URL parsing.
+- `uvp::http::server` with `get`, `post`, generic `route`, and `listen`.
 - Exact path routing.
 - Request method, target, path, query, headers, and buffered body.
 - Response status, headers, `text`, `bytes`, `json` placeholder, and `end`.
@@ -36,7 +41,7 @@
 - Deferred responses for application-level async work.
 - Streaming/chunked responses.
 - Request body streaming.
-- Access to connection metadata and underlying `uv::tcp`.
+- Access to connection metadata and underlying `uvp::io::byte_stream`.
 - Examples for admin endpoints, local JSON API, and log streaming.
 
 ## Milestone 3: WebSocket
@@ -60,12 +65,12 @@
 
 Good follow-up modules:
 
-- `uv::smtp`: SMTP client and minimal server sessions.
-- `uv::sse`: Server-Sent Events helper on top of HTTP responses.
-- `uv::multipart`: streaming form-data parser for HTTP uploads.
-- `uv::redis`: RESP client for simple service integrations.
-- `uv::mqtt`: MQTT sessions for event-driven messaging.
-- `uv::proxy`: CONNECT and reverse-proxy helpers.
+- `uvp::smtp`: SMTP client and minimal server sessions.
+- `uvp::sse`: Server-Sent Events helper on top of HTTP responses.
+- `uvp::multipart`: streaming form-data parser for HTTP uploads.
+- `uvp::redis`: RESP client for simple service integrations.
+- `uvp::mqtt`: MQTT sessions for event-driven messaging.
+- `uvp::proxy`: CONNECT and reverse-proxy helpers.
 
 Each new module should start with a design note before implementation. The note
 should identify parser/backend dependencies, ownership model, timeouts,
