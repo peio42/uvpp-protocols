@@ -124,6 +124,7 @@ The design notes live in [`docs/design`](docs/design):
 - [Project scope](docs/design/project-scope.md)
 - [API principles](docs/design/api-principles.md)
 - [Module architecture](docs/design/module-architecture.md)
+- [Dependency decisions](docs/design/dependency-decisions.md)
 - [Protocol composition](docs/design/protocol-composition.md)
 - [HTTP server design](docs/design/http-server.md)
 - [Roadmap](docs/design/roadmap.md)

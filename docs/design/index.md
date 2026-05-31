@@ -39,6 +39,8 @@ loop.run();
 - [API principles](api-principles.md): common public API rules across modules.
 - [Module architecture](module-architecture.md): how protocol modules should sit
   on top of uvpp handles, streams, buffers, callbacks, and errors.
+- [Dependency decisions](dependency-decisions.md): accepted and candidate
+  low-level libraries.
 - [Protocol composition](protocol-composition.md): how nested protocols should
   be presented and connected.
 - [HTTP server design](http-server.md): first implementation target.
