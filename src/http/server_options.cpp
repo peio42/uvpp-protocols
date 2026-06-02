@@ -52,6 +52,17 @@ server_options&& server_options::max_pending_write_bytes(std::size_t value) && {
   return std::move(*this);
 }
 
+server_options& server_options::max_pending_responses_per_connection(std::size_t value) & {
+  require_positive(value, "max_pending_responses_per_connection must be greater than zero");
+  max_pending_responses_per_connection_ = value;
+  return *this;
+}
+
+server_options&& server_options::max_pending_responses_per_connection(std::size_t value) && {
+  max_pending_responses_per_connection(value);
+  return std::move(*this);
+}
+
 server_options& server_options::header_timeout(std::chrono::milliseconds value) & {
   require_positive(value, "header_timeout must be greater than zero");
   header_timeout_ = value;
@@ -108,6 +119,7 @@ server_options&& server_options::server_header(bool value) && noexcept {
 void server_options::validate() const {
   require_positive(max_header_bytes_, "max_header_bytes must be greater than zero");
   require_positive(max_pending_write_bytes_, "max_pending_write_bytes must be greater than zero");
+  require_positive(max_pending_responses_per_connection_, "max_pending_responses_per_connection must be greater than zero");
   require_positive(header_timeout_, "header_timeout must be greater than zero");
   require_positive(body_timeout_, "body_timeout must be greater than zero");
   require_positive(idle_timeout_, "idle_timeout must be greater than zero");

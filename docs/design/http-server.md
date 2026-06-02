@@ -86,6 +86,12 @@ public:
   template<class Handler>
   server& route(method method, std::string_view pattern, Handler&& handler);
 
+  template<class Handler>
+  server& not_found(Handler&& handler);
+
+  template<class Handler>
+  server& on_error(Handler&& handler);
+
   void listen(std::string_view host, unsigned int port);
   void listen(uvp::io::stream_listener listener);
   void close();
@@ -128,6 +134,7 @@ Handlers receive request and response references:
 
 ```cpp
 using handler = std::function<void(request&, response&)>;
+using error_handler = std::function<void(request&, response&, std::exception_ptr)>;
 ```
 
 The implementation may use templates at registration time, but stored handlers
@@ -180,8 +187,10 @@ public:
   void json(/* JSON-compatible value, exact type TBD */);
   void bytes(std::span<const std::byte> body);
   void end();
+  deferred_response defer();
 
   bool ended() const noexcept;
+  bool deferred() const noexcept;
 };
 ```
 
@@ -212,8 +221,13 @@ letting users keep arbitrary references without a signal:
 ```cpp
 srv.get("/data", [](request& req, response& res) {
   auto reply = res.defer();
+  reply.on_cancel([] {
+    // Cancel application-owned work, close cursors, stop timers, etc.
+  });
   start_async_load([reply = std::move(reply)](auto result) mutable {
-    reply.text(render(result));
+    if (reply.active()) {
+      reply.text(render(result));
+    }
   });
 });
 ```
@@ -221,6 +235,67 @@ srv.get("/data", [](request& req, response& res) {
 `deferred_response` should own or reference response state safely until it is
 completed or cancelled by connection close. This can be added after the initial
 synchronous handler path, but the core response design should leave room for it.
+
+Public shape:
+
+```cpp
+class deferred_response {
+public:
+  deferred_response(deferred_response&&) noexcept;
+  deferred_response& operator=(deferred_response&&) noexcept;
+
+  deferred_response(const deferred_response&) = delete;
+  deferred_response& operator=(const deferred_response&) = delete;
+
+  bool active() const noexcept;
+  deferred_response& on_cancel(std::function<void()> callback);
+
+  deferred_response& status(unsigned int code);
+  deferred_response& header(std::string_view name, std::string_view value);
+  deferred_response& type(std::string_view content_type);
+
+  void text(std::string_view body);
+  void json(std::string_view serialized_json);
+  void bytes(std::span<const std::byte> body);
+  void end();
+};
+```
+
+Internally, each HTTP request owns a response slot that preserves HTTP/1.1
+response ordering even when pipelined requests complete out of order. A slot
+starts open and may transition through these states:
+
+```text
+open -> completed
+open -> deferred -> completed
+open -> streaming -> completed
+open -> upgraded
+open/deferred/streaming -> cancelled
+```
+
+Non-terminal mutators such as `status()` and `header()` only configure the
+response. Terminal operations such as `text()`, `json()`, `bytes()`, and
+`end()` mark the slot completed. `defer()` marks the slot deferred and prevents
+automatic completion at handler return. A `deferred_response` is move-only and
+can complete the same slot later if the connection is still active.
+
+Cancellation must be explicit and safe. `deferred_response::active()` reports
+whether the slot is still connected to a live session. `on_cancel()` registers
+application cleanup for cases where the connection closes, the server closes
+the session, a timeout fires, or the slot is otherwise abandoned before normal
+completion. Cancellation callbacks must not run after normal completion, and
+exceptions from cancellation callbacks must not escape into libuv callbacks.
+
+`server_options::max_pending_responses_per_connection_` limits the number of
+response slots that may be open, deferred, streaming, or completed but not yet
+fully written for a single connection. `max_pending_write_bytes_` remains the
+separate memory limit for serialized payload/chunk bytes already queued for
+writing.
+
+Streaming responses build on the same slot model. A streaming response marks
+its slot streaming, emits chunks in order, and completes with `end()`. Later
+response slots may be prepared while an earlier slot is deferred or streaming,
+but they must not write bytes before all earlier slots complete.
 
 ## Parser
 
@@ -285,6 +360,7 @@ struct server_options {
   std::size_t max_header_bytes_ = 16 * 1024;
   std::size_t max_body_bytes_ = 1024 * 1024;
   std::size_t max_pending_write_bytes_ = 1024 * 1024;
+  std::size_t max_pending_responses_per_connection_ = 16;
 
   std::chrono::milliseconds header_timeout_ = std::chrono::seconds{10};
   std::chrono::milliseconds body_timeout_ = std::chrono::seconds{30};

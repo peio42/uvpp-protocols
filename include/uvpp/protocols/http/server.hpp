@@ -1,5 +1,7 @@
 #pragma once
 
+#include <exception>
+#include <functional>
 #include <memory>
 #include <string_view>
 #include <utility>
@@ -18,6 +20,8 @@ namespace uvp::http {
 
 class server {
 public:
+  using error_handler_type = std::function<void(request&, response&, std::exception_ptr)>;
+
   explicit server(uv::loop& loop);
   server(uv::loop& loop, server_options options);
   ~server();
@@ -75,6 +79,18 @@ public:
     return *this;
   }
 
+  template<class Handler>
+  server& not_found(Handler&& handler) {
+    not_found_handler_ = router::handler_type(std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  server& on_error(Handler&& handler) {
+    error_handler_ = error_handler_type(std::forward<Handler>(handler));
+    return *this;
+  }
+
   void listen(std::string_view host, unsigned int port);
   void listen(uvp::io::stream_listener listener);
   void close() noexcept;
@@ -87,6 +103,8 @@ private:
   uv::loop* loop_;
   server_options options_;
   router router_;
+  router::handler_type not_found_handler_;
+  error_handler_type error_handler_;
   struct impl;
   std::unique_ptr<impl> impl_;
 };

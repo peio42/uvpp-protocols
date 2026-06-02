@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -122,6 +123,13 @@ struct server::impl {
   struct pending_write {
     std::string payload;
     bool close_after = false;
+    bool counts_response = false;
+  };
+
+  struct response_slot {
+    response res;
+    bool completed = false;
+    bool close_after = false;
   };
 
   class session : public std::enable_shared_from_this<session> {
@@ -143,6 +151,7 @@ struct server::impl {
         return;
       }
       closed_ = true;
+      cancel_pending_responses();
       try {
         stream_.read_stop();
       } catch (...) {
@@ -190,6 +199,20 @@ struct server::impl {
 
     void handle_message(const detail::http1_message& message) {
       const auto [path, query] = split_path_query(message.target);
+      const auto keep_alive = owner_.owner.options_.keep_alive_ && message.keep_alive;
+      auto slot = create_response_slot(!keep_alive);
+      if (!slot) {
+        return;
+      }
+      dispatching_response_ = true;
+      struct dispatch_guard {
+        session& self;
+        ~dispatch_guard() {
+          self.dispatching_response_ = false;
+          self.flush_completed_responses();
+        }
+      } guard{*this};
+
       request req{
         message.method,
         message.target,
@@ -201,27 +224,57 @@ struct server::impl {
         connection{&stream_},
       };
 
-      response res;
-      const auto* handler = owner_.owner.router_.find(req.method(), req.path());
-      const auto keep_alive = owner_.owner.options_.keep_alive_ && message.keep_alive;
+      response& res = slot->res;
+      auto route_match = owner_.owner.router_.match(req.method(), req.path());
 
-      if (!handler) {
-        res.status(status::not_found).text("not found\n");
-        enqueue(serialize_response(res, keep_alive, owner_.owner.options_), !keep_alive);
+      if (!route_match) {
+        try {
+          if (owner_.owner.not_found_handler_) {
+            owner_.owner.not_found_handler_(req, res);
+            if (!res.ended() && !res.deferred()) {
+              res.end();
+            }
+          } else {
+            res.status(status::not_found).text("not found\n");
+          }
+        } catch (...) {
+          handle_exception(req, res, std::current_exception());
+          return;
+        }
+        if (!res.ended() && !res.deferred()) {
+          res.end();
+        }
         return;
       }
 
+      req.params_ = std::move(route_match.params);
+
       try {
-        (*handler)(req, res);
-        if (!res.ended()) {
+        (*route_match.handler)(req, res);
+        if (!res.ended() && !res.deferred()) {
           res.end();
         }
       } catch (...) {
-        res = response{};
+        handle_exception(req, res, std::current_exception());
+        return;
+      }
+    }
+
+    void handle_exception(request& req, response& res, std::exception_ptr error) {
+      res.reset();
+      if (owner_.owner.error_handler_) {
+        try {
+          owner_.owner.error_handler_(req, res, std::move(error));
+          if (!res.ended() && !res.deferred()) {
+            res.end();
+          }
+        } catch (...) {
+          res.reset();
+          res.status(status::internal_server_error).text("internal server error\n");
+        }
+      } else {
         res.status(status::internal_server_error).text("internal server error\n");
       }
-
-      enqueue(serialize_response(res, keep_alive, owner_.owner.options_), !keep_alive);
     }
 
     void send_error(status status_code, bool keep_alive) {
@@ -230,8 +283,66 @@ struct server::impl {
       enqueue(serialize_response(res, keep_alive, owner_.owner.options_), !keep_alive);
     }
 
-    void enqueue(std::string payload, bool close_after) {
-      writes_.push_back(pending_write{std::move(payload), close_after});
+    std::shared_ptr<response_slot> create_response_slot(bool close_after) {
+      const auto pending_responses = responses_.size() + pending_response_writes_;
+      if (pending_responses >= owner_.owner.options_.max_pending_responses_per_connection_) {
+        close();
+        return {};
+      }
+
+      auto slot = std::make_shared<response_slot>();
+      slot->close_after = close_after;
+
+      auto self = weak_from_this();
+      std::weak_ptr<response_slot> weak_slot = slot;
+      slot->res.on_complete([self, weak_slot] {
+        auto session = self.lock();
+        auto slot = weak_slot.lock();
+        if (session && slot) {
+          session->complete_response(std::move(slot));
+        }
+      });
+
+      responses_.push_back(slot);
+      return slot;
+    }
+
+    void complete_response(std::shared_ptr<response_slot> slot) {
+      if (slot->completed) {
+        return;
+      }
+
+      slot->completed = true;
+      if (!dispatching_response_) {
+        flush_completed_responses();
+      }
+    }
+
+    void flush_completed_responses() {
+      while (!responses_.empty() && responses_.front()->completed) {
+        auto slot = responses_.front();
+        responses_.pop_front();
+
+        ++pending_response_writes_;
+        enqueue(serialize_response(slot->res, !slot->close_after, owner_.owner.options_), slot->close_after, true);
+        if (slot->close_after) {
+          cancel_pending_responses();
+          return;
+        }
+      }
+    }
+
+    void cancel_pending_responses() noexcept {
+      for (auto& slot : responses_) {
+        if (!slot->completed) {
+          slot->res.cancel();
+        }
+      }
+      responses_.clear();
+    }
+
+    void enqueue(std::string payload, bool close_after, bool counts_response = false) {
+      writes_.push_back(pending_write{std::move(payload), close_after, counts_response});
       flush_next();
     }
 
@@ -262,6 +373,9 @@ struct server::impl {
 
       const auto close_after = !writes_.empty() && writes_.front().close_after;
       if (!writes_.empty()) {
+        if (writes_.front().counts_response && pending_response_writes_ > 0) {
+          --pending_response_writes_;
+        }
         writes_.pop_front();
       }
 
@@ -277,8 +391,11 @@ struct server::impl {
     uvp::io::byte_stream stream_;
     detail::http1_state_machine parser_;
     std::size_t handled_messages_ = 0;
+    std::size_t pending_response_writes_ = 0;
+    std::deque<std::shared_ptr<response_slot>> responses_;
     std::deque<pending_write> writes_;
     bool writing_ = false;
+    bool dispatching_response_ = false;
     bool closed_ = false;
   };
 
