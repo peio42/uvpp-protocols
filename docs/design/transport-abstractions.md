@@ -17,6 +17,24 @@ changing the HTTP parser/session model.
 
 Use composition and type erasure, not protocol inheritance.
 
+### Why not a common base class from uvpp
+
+uvpp wraps libuv handles using CRTP and inline storage: the raw C struct
+(`uv_tcp_t`, `uv_pipe_t`, etc.) is stored directly inside the C++ object.
+libuv callbacks reconstitute the C++ wrapper from a raw C pointer via
+`reinterpret_cast`, which requires `std::is_standard_layout`. Adding a virtual
+dispatch table would break this invariant.
+
+`uv::stream<Derived, Raw>` is a CRTP template, so `stream<tcp, uv_tcp_t>` and
+`stream<pipe, uv_pipe_t>` are unrelated instantiations with no shared base
+that could serve as a polymorphic interface. `uv::tcp` and `uv::pipe` are also
+declared `final`.
+
+As a result, `byte_stream` and `stream_listener` use internal type erasure
+(`concept_` / model classes) to provide a single uniform type over all
+transport kinds. This pattern should be followed by any future transport
+adapter (TLS, QUIC, etc.).
+
 ```text
 uvp::http::server
   owns stream_listener objects
@@ -114,6 +132,13 @@ private:
 `byte_stream` owns the concrete stream handle or references state owned by a
 higher-level adapter. For accepted TCP and pipe connections, owning the concrete
 `uv::tcp` or `uv::pipe` inside the adapter is appropriate.
+
+Read callbacks receive borrowed byte views. The bytes are valid only for the
+duration of the callback that receives them. A concrete `byte_stream`
+implementation may own a small scratch buffer used to satisfy libuv's read
+allocation callback, because that buffer is transport mechanics rather than
+protocol state. Protocol layers that need data to survive the callback must
+copy or move it into their own parser, frame, body, or message buffers.
 
 Writes must retain payload memory until the uvpp write callback completes.
 That retention belongs to the byte-stream implementation or to the protocol

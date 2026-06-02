@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <cstring>
 #include <memory>
 #include <span>
 #include <string>
@@ -100,9 +99,7 @@ public:
           return;
         }
 
-        const auto bytes = result.bytes();
-        std::vector<std::byte> copy(bytes.begin(), bytes.end());
-        on_read_(read_result{std::move(copy)});
+        on_read_(read_result{result.bytes()});
       });
   }
 
@@ -253,8 +250,8 @@ private:
 
 } // namespace
 
-read_result::read_result(std::vector<std::byte> bytes, stream_error error, bool eof)
-    : bytes_(std::move(bytes)), error_(std::move(error)), eof_(eof) {}
+read_result::read_result(std::span<const std::byte> bytes, stream_error error, bool eof)
+    : bytes_(bytes), error_(std::move(error)), eof_(eof) {}
 
 byte_stream::byte_stream(std::unique_ptr<concept_> self)
     : self_(std::move(self)) {}
@@ -383,7 +380,7 @@ tcp_listener& tcp_listener::bind(std::string_view host, unsigned int port) {
   } else {
     impl_->tcp->bind(uv::ipv4{host, static_cast<int>(port)});
   }
-  impl_->local = tcp_endpoint{std::string(host), port};
+  impl_->local = tcp_local_endpoint(*impl_->tcp);
   return *this;
 }
 

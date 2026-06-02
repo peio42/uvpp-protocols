@@ -1,6 +1,8 @@
 #include <cassert>
 #include <chrono>
 #include <stdexcept>
+#include <utility>
+#include <variant>
 
 #include <uvpp/uv.hpp>
 #include <uvpp/protocols/http.hpp>
@@ -46,6 +48,14 @@ int main() {
     res.text("ok");
   });
   assert(server.routes().size() == 1);
+
+  auto tcp_listener = uvp::io::tcp_listener{loop};
+  tcp_listener.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp_listener)};
+  const auto endpoint = listener.local_endpoint();
+  assert(std::holds_alternative<uvp::io::tcp_endpoint>(endpoint));
+  assert(std::get<uvp::io::tcp_endpoint>(endpoint).port != 0);
+  listener.close();
 
   uvp::http::detail::http1_state_machine parser;
   const auto result = parser.parse(

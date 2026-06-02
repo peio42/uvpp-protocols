@@ -4,7 +4,6 @@
 #include <functional>
 #include <memory>
 #include <span>
-#include <vector>
 
 #include <uvpp/protocols/io/endpoint.hpp>
 #include <uvpp/protocols/io/error.hpp>
@@ -20,17 +19,18 @@ namespace uvp::io {
 class read_result {
 public:
   read_result() = default;
-  read_result(std::vector<std::byte> bytes, stream_error error = {}, bool eof = false);
+  read_result(std::span<const std::byte> bytes, stream_error error = {}, bool eof = false);
 
   [[nodiscard]] bool ok() const noexcept { return error_.ok() && !eof_; }
   explicit operator bool() const noexcept { return ok(); }
 
   [[nodiscard]] bool eof() const noexcept { return eof_; }
   [[nodiscard]] const stream_error& error() const noexcept { return error_; }
+  // Valid only while the read callback is running.
   [[nodiscard]] std::span<const std::byte> bytes() const noexcept { return bytes_; }
 
 private:
-  std::vector<std::byte> bytes_;
+  std::span<const std::byte> bytes_;
   stream_error error_;
   bool eof_ = false;
 };
