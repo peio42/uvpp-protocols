@@ -132,19 +132,22 @@ uvp::websocket -> uvp::http upgrade API
 uvp::http      -> no dependency on uvp::websocket
 ```
 
-## Protocols Inside WebSocket
+## Protocols Over a Byte Stream Transport
 
-Some protocols can run directly over WebSocket frames. MQTT is the useful
-example for this project.
+Any byte-stream-oriented protocol can run over a WebSocket connection because
+`uvp::websocket::session` satisfies the `byte_stream` concept. MQTT is the
+useful example for this project, but the same applies to any protocol that only
+requires a reliable ordered byte stream.
 
-The API should make the carrier explicit:
+The API should make the carrier explicit, passing the WebSocket session directly
+as a transport — the same way a TCP or TLS stream would be passed:
 
 ```cpp
 srv.upgrade("/mqtt", [](uvp::http::upgrade_request& req) {
   auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
     .subprotocol("mqtt"));
 
-  return uvp::mqtt::client_session::over_websocket(std::move(ws),
+  return uvp::mqtt::client_session::accept(std::move(ws),
     uvp::mqtt::client_options{}
       .client_id("agent-1")
       .keep_alive(30s));
@@ -223,7 +226,7 @@ Preferred dependency graph:
 uvp::tls        -> uvpp
 uvp::http       -> uvpp
 uvp::websocket  -> uvp::http upgrade API, uvpp
-uvp::mqtt       -> shared byte stream API, optional uvp::websocket adapter
+uvp::mqtt       -> shared byte stream API
 ```
 
 Avoid hard dependencies such as:
