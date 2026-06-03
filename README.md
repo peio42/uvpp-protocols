@@ -7,8 +7,8 @@ of uvpp's event-based libuv wrapper. The goal is to let applications keep the
 explicit libuv/uvpp event-loop model while avoiding repeated implementations of
 common protocols such as HTTP, WebSocket, TLS, SMTP, and MQTT.
 
-This repository is in its first implementation milestone. The first module is a
-minimal HTTP/1.1 server built on uvpp, libuv, and `llhttp`.
+This repository is in its early implementation milestones. The first module is
+an HTTP/1.1 server built on uvpp, libuv, and `llhttp`.
 
 ## Build
 
@@ -18,10 +18,10 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The default build compiles the library, a structure test, and the first example.
-The example requires `uvpp::uvpp`; CMake first tries `find_package(uvpp CONFIG)`
+The default build compiles the library, a structure test, and the HTTP examples.
+The examples require `uvpp::uvpp`; CMake first tries `find_package(uvpp CONFIG)`
 and then fetches [`uvpp`](https://github.com/peio42/uvpp) when needed. Because
-`uvpp::uvpp` links `LibUV::LibUV` and `Threads::Threads`, the example is built
+`uvpp::uvpp` links `LibUV::LibUV` and `Threads::Threads`, the examples are built
 against libuv.
 
 Run the HTTP example:
@@ -30,6 +30,25 @@ Run the HTTP example:
 ./build/uvpp_protocols_http_server_example
 curl -i http://127.0.0.1:8080/health
 ```
+
+Milestone 2 examples:
+
+```sh
+./build/uvpp_protocols_admin_endpoints_example
+curl -i http://127.0.0.1:8081/admin/health
+curl -i -X POST http://127.0.0.1:8081/admin/maintenance/on
+
+./build/uvpp_protocols_local_json_api_example
+curl -i http://127.0.0.1:8082/v1/items
+curl -i -X POST http://127.0.0.1:8082/v1/items -d '{"title":"ship examples"}'
+
+./build/uvpp_protocols_log_streaming_example
+curl -N http://127.0.0.1:8083/logs/stream
+```
+
+The log streaming example uses deferred responses and newline-delimited JSON as
+a long-poll stream. Native chunked response streaming remains a follow-up HTTP
+ergonomics feature.
 
 ## Target HTTP API
 

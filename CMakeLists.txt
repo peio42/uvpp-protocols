@@ -65,8 +65,15 @@ target_include_directories(
     $<TARGET_PROPERTY:uvpp::uvpp,INTERFACE_INCLUDE_DIRECTORIES>)
 
 if(UVPP_PROTOCOLS_BUILD_EXAMPLES)
-  add_executable(uvpp_protocols_http_server_example examples/http_server.cpp)
-  target_link_libraries(uvpp_protocols_http_server_example PRIVATE uvpp::protocols uvpp::uvpp)
+  function(uvpp_protocols_add_example target source)
+    add_executable(${target} ${source})
+    target_link_libraries(${target} PRIVATE uvpp::protocols uvpp::uvpp)
+  endfunction()
+
+  uvpp_protocols_add_example(uvpp_protocols_http_server_example examples/http_server.cpp)
+  uvpp_protocols_add_example(uvpp_protocols_admin_endpoints_example examples/admin_endpoints.cpp)
+  uvpp_protocols_add_example(uvpp_protocols_local_json_api_example examples/local_json_api.cpp)
+  uvpp_protocols_add_example(uvpp_protocols_log_streaming_example examples/log_streaming.cpp)
 endif()
 
 if(UVPP_PROTOCOLS_BUILD_TESTS)
