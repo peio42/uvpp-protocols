@@ -10,15 +10,17 @@ The API should make simple cases terse:
 ```cpp
 uvp::http::server srv(loop);
 
-srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
+srv.get("/health", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
   res.json({{"status", "ok"}});
 });
 
 srv.listen("127.0.0.1", 8080);
 ```
 
-It should still leave room for streaming bodies, custom error handling, route
-parameters, middleware-like hooks, and protocol upgrades.
+It should keep common routes lightweight while making request body handling
+explicit at route declaration time. That body policy is how the server decides
+whether to dispatch after headers, buffer bytes, parse a typed body, stream
+chunks, or reject a body entirely.
 
 ## Public Types
 
@@ -34,6 +36,11 @@ Initial public types:
 - `uvp::http::method`
 - `uvp::http::status`
 - `uvp::http::route_params`
+- `uvp::http::body::none`
+- `uvp::http::body::bytes`
+- `uvp::http::body::stream`
+- `uvp::http::body::json`
+- `uvp::http::request_body_stream`
 
 The aggregate include should be:
 
@@ -62,29 +69,29 @@ public:
   explicit server(uv::loop& loop);
   server(uv::loop& loop, server_options options);
 
-  template<class Handler>
-  server& get(std::string_view pattern, Handler&& handler);
+  template<class BodyPolicy, class Handler>
+  server& get(std::string_view pattern, BodyPolicy body, Handler&& handler);
 
-  template<class Handler>
-  server& post(std::string_view pattern, Handler&& handler);
+  template<class BodyPolicy, class Handler>
+  server& post(std::string_view pattern, BodyPolicy body, Handler&& handler);
 
-  template<class Handler>
-  server& put(std::string_view pattern, Handler&& handler);
+  template<class BodyPolicy, class Handler>
+  server& put(std::string_view pattern, BodyPolicy body, Handler&& handler);
 
-  template<class Handler>
-  server& patch(std::string_view pattern, Handler&& handler);
+  template<class BodyPolicy, class Handler>
+  server& patch(std::string_view pattern, BodyPolicy body, Handler&& handler);
 
-  template<class Handler>
-  server& delete_(std::string_view pattern, Handler&& handler);
+  template<class BodyPolicy, class Handler>
+  server& delete_(std::string_view pattern, BodyPolicy body, Handler&& handler);
 
-  template<class Handler>
-  server& head(std::string_view pattern, Handler&& handler);
+  template<class BodyPolicy, class Handler>
+  server& head(std::string_view pattern, BodyPolicy body, Handler&& handler);
 
-  template<class Handler>
-  server& options(std::string_view pattern, Handler&& handler);
+  template<class BodyPolicy, class Handler>
+  server& options(std::string_view pattern, BodyPolicy body, Handler&& handler);
 
-  template<class Handler>
-  server& route(method method, std::string_view pattern, Handler&& handler);
+  template<class BodyPolicy, class Handler>
+  server& route(method method, std::string_view pattern, BodyPolicy body, Handler&& handler);
 
   template<class Handler>
   server& not_found(Handler&& handler);
@@ -130,20 +137,58 @@ model should support:
 Route matching should operate on the decoded path component, not the raw target.
 The raw target remains available on `request`.
 
-Handlers receive request and response references:
+Handlers receive request and response references, plus a body argument when the
+body policy produces one:
 
 ```cpp
 using handler = std::function<void(request&, response&)>;
+using bytes_handler = std::function<void(request&, response&, std::span<const std::byte>)>;
+using stream_handler = std::function<void(request&, response&, request_body_stream&)>;
 using error_handler = std::function<void(request&, response&, std::exception_ptr)>;
 ```
 
 The implementation may use templates at registration time, but stored handlers
 can be type-erased until a proven performance issue appears.
 
+## Body Policies
+
+Routes declare a body policy explicitly:
+
+```cpp
+srv.get("/health", body::none{}, handler);
+srv.post("/echo", body::bytes{.max_size = 64 * 1024}, handler);
+srv.post("/events", body::stream{}, handler);
+srv.post("/users", body::json<User>{}, handler);
+```
+
+The body policy is part of the route contract:
+
+- `body::none{}` dispatches after request headers and rejects request bodies;
+- `body::bytes{}` buffers the body up to a configured limit, then dispatches
+  with `std::span<const std::byte>`;
+- `body::stream{}` dispatches after request headers and provides a
+  `request_body_stream&`;
+- `body::json<T>{}` is the intended typed JSON policy once JSON integration is
+  selected;
+- future policies such as multipart, form data, or protocol-specific decoders
+  should use the same route declaration shape.
+
+Convenience overloads may exist when they are unambiguous and lightweight:
+
+```cpp
+srv.get("/health", handler); // equivalent to body::none{}
+```
+
+The user documentation should present explicit body policies as the canonical
+form. Short overloads are just shorthand for common cases; they must not create
+a separate semantic mode.
+
 ## Request
 
-`request` is owned by the active connection while a handler is running. The
-initial implementation may buffer the full body up to `max_body_bytes`.
+`request` is owned by the active connection while a handler is running.
+Buffered request bodies are available only on routes declared with
+`body::bytes{}` or another policy that explicitly produces buffered bytes.
+Streaming bodies are consumed through `request_body_stream`.
 
 Public shape:
 
@@ -168,6 +213,33 @@ public:
 
 Borrowed string views remain valid only for the lifetime of the request object.
 Applications should copy values they need after the handler returns.
+
+## Request Body Streaming
+
+`body::stream{}` dispatches the route after headers are complete. Body chunks
+arrive through a move-only `request_body_stream` object:
+
+```cpp
+class request_body_stream {
+public:
+  request_body_stream& on_data(std::function<void(std::span<const std::byte>)> callback);
+  request_body_stream& on_end(std::function<void()> callback);
+  request_body_stream& on_error(std::function<void(std::error_code)> callback);
+
+  void pause();
+  void resume();
+  bool active() const noexcept;
+};
+```
+
+The chunk span passed to `on_data` is borrowed and valid only while the callback
+is running. Applications must copy bytes they need to keep.
+
+`pause()` stops consuming additional body data after the current callback.
+`resume()` restarts reads. `on_end()` means the full request body has been
+received and the HTTP parser can continue to the next request on a keep-alive
+connection. `on_error()` covers parser errors, body limit violations, client
+disconnects, and stream read failures.
 
 ## Response
 
@@ -212,7 +284,7 @@ dependency into users who only need HTTP.
 The first version should support synchronous handler completion:
 
 ```cpp
-srv.get("/health", [](request& req, response& res) {
+srv.get("/health", body::none{}, [](request& req, response& res) {
   res.text("ok");
 });
 ```
@@ -221,7 +293,7 @@ For asynchronous application work, add an explicit deferral model rather than
 letting users keep arbitrary references without a signal:
 
 ```cpp
-srv.get("/data", [](request& req, response& res) {
+srv.get("/data", body::none{}, [](request& req, response& res) {
   auto reply = res.defer();
   reply.on_cancel([] {
     // Cancel application-owned work, close cursors, stop timers, etc.

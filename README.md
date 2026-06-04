@@ -59,16 +59,16 @@ uv::loop loop;
 
 uvp::http::server srv(loop);
 
-srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
+srv.get("/health", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
   res.json({{"status", "ok"}});
 });
 
-srv.get("/logs", [](uvp::http::request& req, uvp::http::response& res) {
+srv.get("/logs", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
   res.text(read_recent_logs());
 });
 
-srv.post("/config", [](uvp::http::request& req, uvp::http::response& res) {
-  auto cfg = parse_config(req.body());
+srv.post("/config", uvp::http::body::bytes{}, [](uvp::http::request& req, uvp::http::response& res, std::span<const std::byte> body) {
+  auto cfg = parse_config(body);
   apply_config(cfg);
   res.status(204).end();
 });
@@ -149,6 +149,10 @@ cmake -S . -B build -DUVPP_PROTOCOLS_LLHTTP_SOURCE_DIR=/path/to/llhttp
 library. The source-directory option exists for offline or vendored builds.
 
 ## Design Documents
+
+User documentation starts in [`docs`](docs):
+
+- [HTTP server](docs/http-server.md)
 
 The design notes live in [`docs/design`](docs/design):
 

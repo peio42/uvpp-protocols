@@ -40,7 +40,7 @@ Runtime callbacks are the ergonomic default. They may capture state and are
 stored by the module owner or operation owner.
 
 ```cpp
-srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
+srv.get("/health", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
   res.text("ok");
 });
 ```

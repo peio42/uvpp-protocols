@@ -14,16 +14,16 @@ uv::loop loop;
 
 uvp::http::server srv(loop);
 
-srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
+srv.get("/health", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
   res.json({{"status", "ok"}});
 });
 
-srv.get("/logs", [](uvp::http::request& req, uvp::http::response& res) {
+srv.get("/logs", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
   res.text(read_recent_logs());
 });
 
-srv.post("/config", [](uvp::http::request& req, uvp::http::response& res) {
-  auto cfg = parse_config(req.body());
+srv.post("/config", uvp::http::body::bytes{}, [](uvp::http::request& req, uvp::http::response& res, std::span<const std::byte> body) {
+  auto cfg = parse_config(body);
   apply_config(cfg);
   res.status(204).end();
 });
