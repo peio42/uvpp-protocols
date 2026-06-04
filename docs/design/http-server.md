@@ -188,9 +188,11 @@ public:
   void bytes(std::span<const std::byte> body);
   void end();
   deferred_response defer();
+  streaming_response stream();
 
   bool ended() const noexcept;
   bool deferred() const noexcept;
+  bool streaming() const noexcept;
 };
 ```
 
@@ -297,6 +299,48 @@ its slot streaming, emits chunks in order, and completes with `end()`. Later
 response slots may be prepared while an earlier slot is deferred or streaming,
 but they must not write bytes before all earlier slots complete.
 
+Public streaming shape:
+
+```cpp
+class stream_write_result {
+public:
+  bool accepted() const noexcept;
+  bool should_continue() const noexcept;
+  std::error_code error() const noexcept;
+
+  explicit operator bool() const noexcept;
+};
+
+class streaming_response {
+public:
+  bool active() const noexcept;
+
+  streaming_response& on_cancel(std::function<void()> callback);
+  streaming_response& on_drain(std::function<void()> callback);
+  streaming_response& on_error(std::function<void(std::error_code)> callback);
+
+  streaming_response& status(unsigned int code);
+  streaming_response& header(std::string_view name, std::string_view value);
+  streaming_response& type(std::string_view content_type);
+
+  stream_write_result write(std::string_view chunk);
+  stream_write_result write(std::span<const std::byte> chunk);
+  stream_write_result write(std::string chunk);
+  void end();
+};
+```
+
+`write()` copies borrowed input immediately and may move from an owned
+`std::string`. A successful result with `operator bool() == false` means the
+chunk was accepted, but the application should stop writing until `on_drain`
+runs. `accepted() == false` is an immediate rejection, such as writing after the
+stream has closed.
+
+The first `write()` or `end()` commits the response headers. After headers are
+committed, mutating `status()`, `header()`, or `type()` is invalid. Streaming
+responses use HTTP/1.1 chunked transfer encoding: each write becomes one chunk,
+and `end()` emits the terminating chunk.
+
 ## Parser
 
 HTTP parsing is security-sensitive and full of edge cases. The preferred design
@@ -392,9 +436,7 @@ uvp::http::server srv(
 After the first route-based server works:
 
 - streaming request bodies;
-- streaming/chunked responses;
 - middleware or hooks;
-- custom error handlers;
 - static file helper;
 - HTTP upgrade hooks for WebSocket;
 - HTTP client;

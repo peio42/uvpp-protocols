@@ -2,6 +2,7 @@
 #include <chrono>
 #include <exception>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 #include <variant>
 
@@ -70,6 +71,30 @@ int main() {
   assert(deferred_response.status_code() == static_cast<unsigned int>(uvp::http::status::created));
   assert(deferred_response.body() == "later");
   assert(!cancelled);
+
+  uvp::http::response streaming_response;
+  auto stream = streaming_response.stream();
+  bool stream_cancelled = false;
+  bool stream_drained = false;
+  bool stream_errored = false;
+  stream
+    .type("application/x-ndjson")
+    .on_cancel([&] {
+      stream_cancelled = true;
+    })
+    .on_drain([&] {
+      stream_drained = true;
+    })
+    .on_error([&](std::error_code) {
+      stream_errored = true;
+    });
+  assert(streaming_response.streaming());
+  auto unattached_write = stream.write(std::string{"line\n"});
+  assert(!unattached_write.accepted());
+  assert(!unattached_write);
+  assert(!stream_cancelled);
+  assert(!stream_drained);
+  assert(!stream_errored);
 
   uv::loop loop;
   uvp::http::server server(loop, options);

@@ -132,22 +132,55 @@ uvp::websocket -> uvp::http upgrade API
 uvp::http      -> no dependency on uvp::websocket
 ```
 
-## Protocols Over a Byte Stream Transport
+## Protocols Over WebSocket
 
-Any byte-stream-oriented protocol can run over a WebSocket connection because
-`uvp::websocket::session` satisfies the `byte_stream` concept. MQTT is the
-useful example for this project, but the same applies to any protocol that only
-requires a reliable ordered byte stream.
+Protocols can run above WebSocket either by consuming the WebSocket session
+directly or by consuming an explicit byte-stream adapter derived from that
+session.
 
-The API should make the carrier explicit, passing the WebSocket session directly
-as a transport — the same way a TCP or TLS stream would be passed:
+Message-oriented protocols should accept `uvp::websocket::session` directly.
+That keeps WebSocket message boundaries, text/binary distinction, close reasons,
+and subprotocol details visible to the upper protocol:
+
+```cpp
+srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
+  auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
+    .subprotocol("myproto"));
+
+  return uvp::myproto::session::accept(std::move(ws),
+    uvp::myproto::server_options{});
+});
+```
+
+Byte-stream-oriented protocols should request a named adapter from the
+WebSocket session. `uvp::websocket::accept()` still returns a
+`uvp::websocket::session`; conversion to `uvp::io::byte_stream` is explicit and
+consumes the WebSocket session:
+
+```cpp
+srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
+  auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
+    .subprotocol("myproto"));
+
+  return uvp::myproto::session::accept(
+    std::move(ws).into_byte_stream(),
+    uvp::myproto::server_options{});
+});
+```
+
+The byte-stream adapter maps outbound writes to binary WebSocket frames and
+delivers inbound binary message payloads as ordered bytes. Text frames are not
+part of that byte-stream contract; protocols that need text frames or message
+metadata should consume `uvp::websocket::session` directly.
+
+MQTT is a useful example of a byte-oriented protocol over WebSocket:
 
 ```cpp
 srv.upgrade("/mqtt", [](uvp::http::upgrade_request& req) {
   auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
     .subprotocol("mqtt"));
 
-  return uvp::mqtt::client_session::accept(std::move(ws),
+  return uvp::mqtt::client_session::accept(std::move(ws).into_byte_stream(),
     uvp::mqtt::client_options{}
       .client_id("agent-1")
       .keep_alive(30s));

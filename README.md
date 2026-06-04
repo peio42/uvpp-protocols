@@ -46,9 +46,9 @@ curl -i -X POST http://127.0.0.1:8082/v1/items -d '{"title":"ship examples"}'
 curl -N http://127.0.0.1:8083/logs/stream
 ```
 
-The log streaming example uses deferred responses and newline-delimited JSON as
-a long-poll stream. Native chunked response streaming remains a follow-up HTTP
-ergonomics feature.
+The log streaming example uses native HTTP/1.1 chunked responses and
+newline-delimited JSON. It demonstrates `response::stream()`,
+`streaming_response::write()`, `on_drain`, and async error handling.
 
 ## Target HTTP API
 

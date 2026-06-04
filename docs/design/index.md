@@ -46,6 +46,8 @@ loop.run();
 - [Transport abstractions](transport-abstractions.md): stream listeners and
   byte streams for TCP, Unix sockets, TLS, and future protocols.
 - [HTTP server design](http-server.md): first implementation target.
+- [WebSocket design](websocket.md): HTTP upgrade integration, session
+  ownership, and protocols over WebSocket.
 - [Roadmap](roadmap.md): suggested implementation order and milestones.
 
 ## Design Posture

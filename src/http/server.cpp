@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -69,12 +70,12 @@ std::string reason_phrase_for(unsigned int status_code) {
   }
 }
 
-std::string serialize_response(const response& response, bool keep_alive, const server_options& options) {
+bool header_name_equals(std::string_view name, std::string_view expected) noexcept {
+  return headers{}.set(name, "").contains(expected);
+}
+
+std::string serialize_response_head(const response& response, bool keep_alive, const server_options& options, bool chunked) {
   const auto status_code = response.status_code();
-  auto body = std::string(response.body());
-  if (status_code == static_cast<unsigned int>(status::no_content)) {
-    body.clear();
-  }
 
   std::ostringstream out;
   out << "HTTP/1.1 " << status_code << ' ' << reason_phrase_for(status_code) << "\r\n";
@@ -84,19 +85,33 @@ std::string serialize_response(const response& response, bool keep_alive, const 
   bool has_server = false;
 
   for (const auto& [name, value] : response.headers()) {
-    if (headers{}.set(name, value).contains("content-length")) {
+    if (header_name_equals(name, "content-length")) {
       has_content_length = true;
+      if (chunked) {
+        continue;
+      }
     }
-    if (headers{}.set(name, value).contains("connection")) {
+    if (header_name_equals(name, "connection")) {
       has_connection = true;
     }
-    if (headers{}.set(name, value).contains("server")) {
+    if (header_name_equals(name, "server")) {
       has_server = true;
+    }
+    if (header_name_equals(name, "transfer-encoding")) {
+      if (chunked) {
+        continue;
+      }
     }
     out << name << ": " << value << "\r\n";
   }
 
-  if (!has_content_length) {
+  if (chunked) {
+    out << "transfer-encoding: chunked\r\n";
+  } else if (!has_content_length) {
+    auto body = std::string(response.body());
+    if (status_code == static_cast<unsigned int>(status::no_content)) {
+      body.clear();
+    }
     out << "content-length: " << body.size() << "\r\n";
   }
   if (!has_connection) {
@@ -107,7 +122,26 @@ std::string serialize_response(const response& response, bool keep_alive, const 
   }
 
   out << "\r\n";
-  out << body;
+  return out.str();
+}
+
+std::string serialize_response(const response& response, bool keep_alive, const server_options& options) {
+  const auto status_code = response.status_code();
+  auto body = std::string(response.body());
+  if (status_code == static_cast<unsigned int>(status::no_content)) {
+    body.clear();
+  }
+
+  auto out = serialize_response_head(response, keep_alive, options, false);
+  out += body;
+  return out;
+}
+
+std::string serialize_chunk(std::string payload) {
+  std::ostringstream out;
+  out << std::hex << payload.size() << "\r\n";
+  out << payload;
+  out << "\r\n";
   return out.str();
 }
 
@@ -130,6 +164,11 @@ struct server::impl {
     response res;
     bool completed = false;
     bool close_after = false;
+    bool streaming = false;
+    bool stream_headers_queued = false;
+    bool stream_backpressured = false;
+    bool stream_ended = false;
+    std::deque<pending_write> stream_writes;
   };
 
   class session : public std::enable_shared_from_this<session> {
@@ -171,11 +210,13 @@ struct server::impl {
       }
 
       if (result.eof()) {
+        notify_stream_errors(std::make_error_code(std::errc::connection_reset));
         close();
         return;
       }
 
       if (!result) {
+        notify_stream_errors(result.error().code());
         close();
         return;
       }
@@ -209,7 +250,7 @@ struct server::impl {
         session& self;
         ~dispatch_guard() {
           self.dispatching_response_ = false;
-          self.flush_completed_responses();
+          self.flush_response_slots();
         }
       } guard{*this};
 
@@ -231,7 +272,7 @@ struct server::impl {
         try {
           if (owner_.owner.not_found_handler_) {
             owner_.owner.not_found_handler_(req, res);
-            if (!res.ended() && !res.deferred()) {
+            if (!res.ended() && !res.deferred() && !res.streaming()) {
               res.end();
             }
           } else {
@@ -241,7 +282,7 @@ struct server::impl {
           handle_exception(req, res, std::current_exception());
           return;
         }
-        if (!res.ended() && !res.deferred()) {
+        if (!res.ended() && !res.deferred() && !res.streaming()) {
           res.end();
         }
         return;
@@ -251,7 +292,7 @@ struct server::impl {
 
       try {
         (*route_match.handler)(req, res);
-        if (!res.ended() && !res.deferred()) {
+        if (!res.ended() && !res.deferred() && !res.streaming()) {
           res.end();
         }
       } catch (...) {
@@ -265,7 +306,7 @@ struct server::impl {
       if (owner_.owner.error_handler_) {
         try {
           owner_.owner.error_handler_(req, res, std::move(error));
-          if (!res.ended() && !res.deferred()) {
+          if (!res.ended() && !res.deferred() && !res.streaming()) {
             res.end();
           }
         } catch (...) {
@@ -302,6 +343,21 @@ struct server::impl {
           session->complete_response(std::move(slot));
         }
       });
+      slot->res.on_stream_write([self, weak_slot](std::string payload) {
+        auto session = self.lock();
+        auto slot = weak_slot.lock();
+        if (!session || !slot) {
+          return stream_write_result::rejected(std::make_error_code(std::errc::not_connected));
+        }
+        return session->write_stream_chunk(*slot, std::move(payload));
+      });
+      slot->res.on_stream_end([self, weak_slot] {
+        auto session = self.lock();
+        auto slot = weak_slot.lock();
+        if (session && slot) {
+          session->end_stream(*slot);
+        }
+      });
 
       responses_.push_back(slot);
       return slot;
@@ -314,13 +370,30 @@ struct server::impl {
 
       slot->completed = true;
       if (!dispatching_response_) {
-        flush_completed_responses();
+        flush_response_slots();
       }
     }
 
-    void flush_completed_responses() {
-      while (!responses_.empty() && responses_.front()->completed) {
+    void flush_response_slots() {
+      while (!responses_.empty()) {
         auto slot = responses_.front();
+        if (slot->streaming) {
+          flush_stream_writes(*slot);
+          if (!slot->completed || !slot->stream_writes.empty()) {
+            return;
+          }
+          responses_.pop_front();
+          if (slot->close_after) {
+            cancel_pending_responses();
+            return;
+          }
+          continue;
+        }
+
+        if (!slot->completed) {
+          return;
+        }
+
         responses_.pop_front();
 
         ++pending_response_writes_;
@@ -342,7 +415,74 @@ struct server::impl {
     }
 
     void enqueue(std::string payload, bool close_after, bool counts_response = false) {
+      pending_write_bytes_ += payload.size();
       writes_.push_back(pending_write{std::move(payload), close_after, counts_response});
+      flush_next();
+    }
+
+    void queue_stream_write(response_slot& slot, std::string payload, bool close_after = false) {
+      pending_write_bytes_ += payload.size();
+      slot.stream_writes.push_back(pending_write{std::move(payload), close_after, false});
+    }
+
+    [[nodiscard]] std::size_t low_watermark() const noexcept {
+      return owner_.owner.options_.max_pending_write_bytes_ / 2;
+    }
+
+    stream_write_result write_stream_chunk(response_slot& slot, std::string payload) {
+      if (closed_ || slot.completed || slot.stream_ended) {
+        return stream_write_result::rejected(std::make_error_code(std::errc::not_connected));
+      }
+      if (slot.stream_backpressured) {
+        return stream_write_result::rejected(std::make_error_code(std::errc::operation_would_block));
+      }
+
+      slot.streaming = true;
+      if (!slot.stream_headers_queued) {
+        slot.res.commit_headers();
+        queue_stream_write(slot, serialize_response_head(slot.res, !slot.close_after, owner_.owner.options_, true));
+        slot.stream_headers_queued = true;
+      }
+
+      if (!payload.empty()) {
+        queue_stream_write(slot, serialize_chunk(std::move(payload)));
+      }
+
+      flush_response_slots();
+
+      if (pending_write_bytes_ >= owner_.owner.options_.max_pending_write_bytes_) {
+        slot.stream_backpressured = true;
+        return stream_write_result::backpressure();
+      }
+      return stream_write_result::ready();
+    }
+
+    void end_stream(response_slot& slot) {
+      if (closed_ || slot.completed || slot.stream_ended) {
+        return;
+      }
+
+      slot.streaming = true;
+      slot.stream_ended = true;
+      if (!slot.stream_headers_queued) {
+        slot.res.commit_headers();
+        queue_stream_write(slot, serialize_response_head(slot.res, !slot.close_after, owner_.owner.options_, true));
+        slot.stream_headers_queued = true;
+      }
+
+      queue_stream_write(slot, "0\r\n\r\n", slot.close_after);
+      slot.res.complete_stream();
+      if (!dispatching_response_) {
+        flush_response_slots();
+      }
+    }
+
+    void flush_stream_writes(response_slot& slot) {
+      while (!slot.stream_writes.empty()) {
+        auto write = std::move(slot.stream_writes.front());
+        slot.stream_writes.pop_front();
+        writes_.push_back(std::move(write));
+      }
       flush_next();
     }
 
@@ -367,17 +507,21 @@ struct server::impl {
       }
 
       if (error) {
+        notify_stream_errors(error.code());
         close();
         return;
       }
 
       const auto close_after = !writes_.empty() && writes_.front().close_after;
       if (!writes_.empty()) {
+        pending_write_bytes_ -= std::min(pending_write_bytes_, writes_.front().payload.size());
         if (writes_.front().counts_response && pending_response_writes_ > 0) {
           --pending_response_writes_;
         }
         writes_.pop_front();
       }
+
+      notify_drains();
 
       if (close_after) {
         close();
@@ -387,11 +531,34 @@ struct server::impl {
       flush_next();
     }
 
+    void notify_drains() {
+      if (pending_write_bytes_ > low_watermark()) {
+        return;
+      }
+
+      for (auto& slot : responses_) {
+        if (!slot->stream_backpressured) {
+          continue;
+        }
+        slot->stream_backpressured = false;
+        slot->res.notify_stream_drain();
+      }
+    }
+
+    void notify_stream_errors(std::error_code error) {
+      for (auto& slot : responses_) {
+        if (slot->streaming && !slot->completed) {
+          slot->res.notify_stream_error(error);
+        }
+      }
+    }
+
     impl& owner_;
     uvp::io::byte_stream stream_;
     detail::http1_state_machine parser_;
     std::size_t handled_messages_ = 0;
     std::size_t pending_response_writes_ = 0;
+    std::size_t pending_write_bytes_ = 0;
     std::deque<std::shared_ptr<response_slot>> responses_;
     std::deque<pending_write> writes_;
     bool writing_ = false;
