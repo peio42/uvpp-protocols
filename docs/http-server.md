@@ -29,6 +29,7 @@ Routes declare how the request body should be handled:
 ```cpp
 srv.get("/health", uvp::http::body::none{}, handler);
 srv.post("/echo", uvp::http::body::bytes{.max_size = 64 * 1024}, handler);
+srv.post("/message", uvp::http::body::text{.max_size = 64 * 1024}, handler);
 srv.post("/events", uvp::http::body::stream{}, handler);
 ```
 
@@ -39,12 +40,22 @@ receives.
 | --- | --- | --- |
 | `body::none{}` | After headers | None |
 | `body::bytes{}` | After full body is buffered | `std::span<const std::byte>` |
+| `body::text{}` | After full body is buffered | `std::string_view` |
 | `body::stream{}` | After headers | `request_body_stream&` |
 
-Short route overloads may exist for obvious cases, such as `get(path, handler)`
-as shorthand for `get(path, body::none{}, handler)`. The explicit policy form is
-the canonical style in this documentation because it makes body handling visible
-at the route declaration.
+Short route overloads infer the body policy from the handler signature:
+
+```cpp
+srv.get("/health", [](uvp::http::request&, uvp::http::response&) {});
+srv.post("/echo", [](uvp::http::request&, uvp::http::response&, std::span<const std::byte>) {});
+srv.post("/message", [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+srv.post("/upload", [](uvp::http::request&, uvp::http::response&, uvp::http::request_body_stream&) {});
+```
+
+Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
+`body::stream{}` respectively.
+Use the explicit policy form when route limits or future typed policies such as
+JSON or multipart matter at the declaration site.
 
 ## No Request Body
 
@@ -75,6 +86,23 @@ srv.post("/echo",
 
 The span is borrowed. It is valid only while the handler is running. Copy the
 bytes if application code needs to keep them after the handler returns.
+
+## Buffered Text
+
+Use `body::text{}` when the handler needs the complete request body as textual
+data:
+
+```cpp
+srv.post("/message",
+  uvp::http::body::text{.max_size = 64 * 1024},
+  [](uvp::http::request&, uvp::http::response& res, std::string_view body) {
+    res.text(body);
+  });
+```
+
+The string view is borrowed and valid only while the handler is running. The
+initial text policy does not validate or transcode charsets; it exposes the
+buffered bytes as a `std::string_view`.
 
 ## Streaming Request Bodies
 

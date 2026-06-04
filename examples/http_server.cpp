@@ -1,7 +1,11 @@
 #include <chrono>
+#include <cstddef>
 #include <iostream>
+#include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include <uvpp/uv.hpp>
 #include <uvpp/protocols/http.hpp>
@@ -46,10 +50,29 @@ int main() {
     res.text(read_recent_logs());
   });
 
-  srv.post("/config", [](uvp::http::request& req, uvp::http::response& res) {
-    auto cfg = parse_config(req.body());
+  srv.post("/config", uvp::http::body::text{}, [](uvp::http::request&, uvp::http::response& res, std::string_view body) {
+    auto cfg = parse_config(body);
     apply_config(cfg);
     res.status(uvp::http::status::no_content).end();
+  });
+
+  srv.post("/upload", uvp::http::body::stream{}, [](uvp::http::request&, uvp::http::response& res, uvp::http::request_body_stream& body) {
+    auto total = std::make_shared<std::size_t>(0);
+    auto reply = std::make_shared<uvp::http::deferred_response>(res.defer());
+
+    body.on_data([total](std::span<const std::byte> chunk) {
+      *total += chunk.size();
+    });
+    body.on_end([total, reply] {
+      if (reply->active()) {
+        reply->status(uvp::http::status::created).json({{"bytes", std::to_string(*total)}});
+      }
+    });
+    body.on_error([reply](std::error_code) {
+      if (reply->active()) {
+        reply->status(400).json({{"error", "upload failed"}});
+      }
+    });
   });
 
   srv.listen("127.0.0.1", 8080);

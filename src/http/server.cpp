@@ -177,6 +177,10 @@ struct server::impl {
         : owner_(owner), stream_(std::move(stream)) {}
 
     void start() {
+      start_read();
+    }
+
+    void start_read() {
       auto self = weak_from_this();
       stream_.read_start([self](uvp::io::read_result result) {
         if (auto session = self.lock()) {
@@ -232,13 +236,169 @@ struct server::impl {
         return;
       }
 
-      const auto& messages = parser_.completed_messages();
-      while (handled_messages_ < messages.size()) {
-        handle_message(messages[handled_messages_++]);
+      process_parser_events();
+    }
+
+    struct active_request_state {
+      detail::http1_message headers;
+      router::match_result route;
+      request req;
+      request_body_stream body_stream;
+      std::shared_ptr<response_slot> slot;
+      std::size_t received_body_bytes = 0;
+      bool rejected = false;
+    };
+
+    bool request_has_body(const detail::http1_message& message) const {
+      const auto content_length = message.headers.get("content-length");
+      if (!content_length.empty() && content_length != "0") {
+        return true;
+      }
+      return !message.headers.get("transfer-encoding").empty();
+    }
+
+    std::size_t route_body_limit(const router::match_result& route) const noexcept {
+      return route.max_body_bytes == 0 ? owner_.owner.options_.max_body_bytes_ : route.max_body_bytes;
+    }
+
+    void process_parser_events() {
+      const auto& events = parser_.events();
+      while (!closed_ && !body_processing_paused_ && handled_events_ < events.size()) {
+        handle_event(events[handled_events_++]);
       }
     }
 
-    void handle_message(const detail::http1_message& message) {
+    void handle_event(const detail::http1_event& event) {
+      switch (event.event_type) {
+      case detail::http1_event::type::headers:
+        handle_headers(event.message);
+        break;
+      case detail::http1_event::type::body:
+        handle_body_chunk(event.body);
+        break;
+      case detail::http1_event::type::complete:
+        handle_message_complete(event.message);
+        break;
+      }
+    }
+
+    void handle_headers(const detail::http1_message& message) {
+      const auto [path, query] = split_path_query(message.target);
+      auto req = request{
+        message.method,
+        message.target,
+        path,
+        query,
+        message.headers,
+        {},
+        route_params{},
+        connection{&stream_},
+      };
+      auto route_match = owner_.owner.router_.match(req.method(), req.path());
+      if (route_match) {
+        req.params_ = route_match.params;
+      }
+
+      active_request_ = std::make_unique<active_request_state>();
+      active_request_->headers = message;
+      active_request_->route = std::move(route_match);
+      active_request_->req = std::move(req);
+
+      if (!active_request_->route || active_request_->route.body != body_mode::stream) {
+        if (active_request_->route && active_request_->route.body == body_mode::none && request_has_body(message)) {
+          active_request_->rejected = true;
+          send_error(status::bad_request, false);
+        }
+        return;
+      }
+
+      const auto keep_alive = owner_.owner.options_.keep_alive_;
+      active_request_->slot = create_response_slot(!keep_alive);
+      if (!active_request_->slot) {
+        active_request_->rejected = true;
+        return;
+      }
+
+      auto self = weak_from_this();
+      active_request_->body_stream.on_pause_resume(
+        [self] {
+          if (auto session = self.lock()) {
+            session->pause_request_body();
+          }
+        },
+        [self] {
+          if (auto session = self.lock()) {
+            session->resume_request_body();
+          }
+        });
+
+      dispatch_stream_request(*active_request_);
+    }
+
+    void dispatch_stream_request(active_request_state& active) {
+      dispatching_response_ = true;
+      struct dispatch_guard {
+        session& self;
+        ~dispatch_guard() {
+          self.dispatching_response_ = false;
+          self.flush_response_slots();
+        }
+      } guard{*this};
+
+      response& res = active.slot->res;
+
+      try {
+        (*active.route.handler)(active.req, res, {}, &active.body_stream);
+      } catch (...) {
+        handle_exception(active.req, res, std::current_exception());
+        active.rejected = true;
+      }
+    }
+
+    void handle_body_chunk(const std::string& chunk) {
+      if (!active_request_ || active_request_->rejected) {
+        return;
+      }
+
+      auto& active = *active_request_;
+      active.received_body_bytes += chunk.size();
+      if (active.route && active.received_body_bytes > route_body_limit(active.route)) {
+        active.rejected = true;
+        if (active.route.body == body_mode::stream) {
+          active.body_stream.emit_error(std::make_error_code(std::errc::message_size));
+        }
+        send_error(status::payload_too_large, false);
+        return;
+      }
+
+      if (active.route && active.route.body == body_mode::stream) {
+        active.body_stream.emit_data(std::as_bytes(std::span{chunk.data(), chunk.size()}));
+        if (active.body_stream.paused()) {
+          body_processing_paused_ = true;
+        }
+      }
+    }
+
+    void handle_message_complete(const detail::http1_message& message) {
+      if (!active_request_) {
+        handle_message(message);
+        return;
+      }
+
+      auto active = std::move(active_request_);
+      if (active->rejected) {
+        return;
+      }
+
+      if (active->route && active->route.body == body_mode::stream) {
+        active->body_stream.emit_end();
+        return;
+      }
+
+      handle_buffered_message(message, std::move(active->route));
+    }
+
+    void handle_buffered_message(const detail::http1_message& message, router::match_result route_match) {
       const auto [path, query] = split_path_query(message.target);
       const auto keep_alive = owner_.owner.options_.keep_alive_ && message.keep_alive;
       auto slot = create_response_slot(!keep_alive);
@@ -266,12 +426,11 @@ struct server::impl {
       };
 
       response& res = slot->res;
-      auto route_match = owner_.owner.router_.match(req.method(), req.path());
 
       if (!route_match) {
         try {
           if (owner_.owner.not_found_handler_) {
-            owner_.owner.not_found_handler_(req, res);
+            owner_.owner.not_found_handler_(req, res, {}, nullptr);
             if (!res.ended() && !res.deferred() && !res.streaming()) {
               res.end();
             }
@@ -291,13 +450,37 @@ struct server::impl {
       req.params_ = std::move(route_match.params);
 
       try {
-        (*route_match.handler)(req, res);
+        auto body = req.body_bytes();
+        (*route_match.handler)(req, res, body, nullptr);
         if (!res.ended() && !res.deferred() && !res.streaming()) {
           res.end();
         }
       } catch (...) {
         handle_exception(req, res, std::current_exception());
         return;
+      }
+    }
+
+    void handle_message(const detail::http1_message& message) {
+      handle_buffered_message(message, owner_.owner.router_.match(message.method, split_path_query(message.target).first));
+    }
+
+    void pause_request_body() {
+      body_processing_paused_ = true;
+      try {
+        stream_.read_stop();
+      } catch (...) {
+      }
+    }
+
+    void resume_request_body() {
+      if (closed_) {
+        return;
+      }
+      body_processing_paused_ = false;
+      process_parser_events();
+      if (!closed_ && !body_processing_paused_) {
+        start_read();
       }
     }
 
@@ -556,13 +739,15 @@ struct server::impl {
     impl& owner_;
     uvp::io::byte_stream stream_;
     detail::http1_state_machine parser_;
-    std::size_t handled_messages_ = 0;
+    std::size_t handled_events_ = 0;
     std::size_t pending_response_writes_ = 0;
     std::size_t pending_write_bytes_ = 0;
+    std::unique_ptr<active_request_state> active_request_;
     std::deque<std::shared_ptr<response_slot>> responses_;
     std::deque<pending_write> writes_;
     bool writing_ = false;
     bool dispatching_response_ = false;
+    bool body_processing_paused_ = false;
     bool closed_ = false;
   };
 

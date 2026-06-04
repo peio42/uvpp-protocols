@@ -22,7 +22,7 @@ srv.get("/logs", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http:
   res.text(read_recent_logs());
 });
 
-srv.post("/config", uvp::http::body::bytes{}, [](uvp::http::request& req, uvp::http::response& res, std::span<const std::byte> body) {
+srv.post("/config", uvp::http::body::text{}, [](uvp::http::request& req, uvp::http::response& res, std::string_view body) {
   auto cfg = parse_config(body);
   apply_config(cfg);
   res.status(204).end();

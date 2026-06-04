@@ -75,3 +75,8 @@ Good follow-up modules:
 Each new module should start with a design note before implementation. The note
 should identify parser/backend dependencies, ownership model, timeouts,
 backpressure strategy, and how the module composes with existing modules.
+
+## Future HTTP Refinements
+
+- Charset handling for `uvp::http::body::text`, including optional validation
+  and transcoding policies once the desired scope is clear.

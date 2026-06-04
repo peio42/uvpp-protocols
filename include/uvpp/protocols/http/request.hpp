@@ -1,9 +1,12 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -13,6 +16,63 @@
 #include <uvpp/protocols/http/route_params.hpp>
 
 namespace uvp::http {
+
+namespace detail {
+struct request_body_stream_state;
+} // namespace detail
+
+namespace body {
+
+struct none {};
+
+struct bytes {
+  std::size_t max_size = 0;
+};
+
+struct text {
+  std::size_t max_size = 0;
+};
+
+struct stream {
+  std::size_t max_size = 0;
+};
+
+} // namespace body
+
+class request_body_stream {
+public:
+  request_body_stream();
+  ~request_body_stream() = default;
+
+  request_body_stream(request_body_stream&&) noexcept = default;
+  request_body_stream& operator=(request_body_stream&&) noexcept = default;
+
+  request_body_stream(const request_body_stream&) = delete;
+  request_body_stream& operator=(const request_body_stream&) = delete;
+
+  request_body_stream& on_data(std::function<void(std::span<const std::byte>)> callback);
+  request_body_stream& on_end(std::function<void()> callback);
+  request_body_stream& on_error(std::function<void(std::error_code)> callback);
+
+  void pause();
+  void resume();
+
+  [[nodiscard]] bool active() const noexcept;
+  [[nodiscard]] bool paused() const noexcept;
+
+private:
+  friend class server;
+
+  explicit request_body_stream(std::shared_ptr<detail::request_body_stream_state> state) noexcept;
+
+  void emit_data(std::span<const std::byte> chunk);
+  void emit_end();
+  void emit_error(std::error_code error);
+  void cancel() noexcept;
+  void on_pause_resume(std::function<void()> on_pause, std::function<void()> on_resume);
+
+  std::shared_ptr<detail::request_body_stream_state> state_;
+};
 
 class request {
 public:

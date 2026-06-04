@@ -21,6 +21,18 @@ struct http1_message {
   bool upgrade = false;
 };
 
+struct http1_event {
+  enum class type {
+    headers,
+    body,
+    complete,
+  };
+
+  type event_type = type::complete;
+  http1_message message;
+  std::string body;
+};
+
 struct http1_parse_result {
   enum class status {
     ok,
@@ -49,6 +61,7 @@ public:
   [[nodiscard]] http1_parse_result parse(std::string_view bytes);
 
   [[nodiscard]] const std::vector<http1_message>& completed_messages() const noexcept;
+  [[nodiscard]] const std::vector<http1_event>& events() const noexcept;
 
 private:
   class impl;

@@ -38,8 +38,8 @@ Initial public types:
 - `uvp::http::route_params`
 - `uvp::http::body::none`
 - `uvp::http::body::bytes`
+- `uvp::http::body::text`
 - `uvp::http::body::stream`
-- `uvp::http::body::json`
 - `uvp::http::request_body_stream`
 
 The aggregate include should be:
@@ -143,6 +143,7 @@ body policy produces one:
 ```cpp
 using handler = std::function<void(request&, response&)>;
 using bytes_handler = std::function<void(request&, response&, std::span<const std::byte>)>;
+using text_handler = std::function<void(request&, response&, std::string_view)>;
 using stream_handler = std::function<void(request&, response&, request_body_stream&)>;
 using error_handler = std::function<void(request&, response&, std::exception_ptr)>;
 ```
@@ -157,6 +158,7 @@ Routes declare a body policy explicitly:
 ```cpp
 srv.get("/health", body::none{}, handler);
 srv.post("/echo", body::bytes{.max_size = 64 * 1024}, handler);
+srv.post("/message", body::text{.max_size = 64 * 1024}, handler);
 srv.post("/events", body::stream{}, handler);
 srv.post("/users", body::json<User>{}, handler);
 ```
@@ -166,6 +168,8 @@ The body policy is part of the route contract:
 - `body::none{}` dispatches after request headers and rejects request bodies;
 - `body::bytes{}` buffers the body up to a configured limit, then dispatches
   with `std::span<const std::byte>`;
+- `body::text{}` buffers the body up to a configured limit, then dispatches
+  with `std::string_view`;
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`;
 - `body::json<T>{}` is the intended typed JSON policy once JSON integration is
@@ -173,15 +177,19 @@ The body policy is part of the route contract:
 - future policies such as multipart, form data, or protocol-specific decoders
   should use the same route declaration shape.
 
-Convenience overloads may exist when they are unambiguous and lightweight:
+Convenience overloads infer the body policy from the handler signature when the
+mapping is unambiguous:
 
 ```cpp
 srv.get("/health", handler); // equivalent to body::none{}
+srv.post("/echo", bytes_handler); // equivalent to body::bytes{}
+srv.post("/message", text_handler); // equivalent to body::text{}
+srv.post("/events", stream_handler); // equivalent to body::stream{}
 ```
 
-The user documentation should present explicit body policies as the canonical
-form. Short overloads are just shorthand for common cases; they must not create
-a separate semantic mode.
+Inference should stop at `body::none{}`, `body::bytes{}`, `body::text{}`, and
+`body::stream{}`. Typed policies such as `body::json<T>` and future multipart
+decoders should be declared explicitly.
 
 ## Request
 

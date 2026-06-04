@@ -53,6 +53,7 @@ public:
   void reset() {
     current_ = http1_message{};
     completed_messages_.clear();
+    events_.clear();
     pending_header_field_.clear();
     pending_header_value_.clear();
     last_header_part_ = header_part::none;
@@ -79,6 +80,10 @@ public:
 
   [[nodiscard]] const std::vector<http1_message>& completed_messages() const noexcept {
     return completed_messages_;
+  }
+
+  [[nodiscard]] const std::vector<http1_event>& events() const noexcept {
+    return events_;
   }
 
 private:
@@ -130,12 +135,22 @@ private:
     self.current_.method = map_method(static_cast<llhttp_method_t>(llhttp_get_method(parser)));
     self.current_.http_major = static_cast<unsigned int>(llhttp_get_http_major(parser));
     self.current_.http_minor = static_cast<unsigned int>(llhttp_get_http_minor(parser));
+    self.events_.push_back(http1_event{
+      http1_event::type::headers,
+      self.current_,
+      {},
+    });
     return HPE_OK;
   }
 
   static int on_body(llhttp_t* parser, const char* at, std::size_t length) {
     auto& self = impl::self(parser);
     self.current_.body.append(at, length);
+    self.events_.push_back(http1_event{
+      http1_event::type::body,
+      {},
+      std::string{at, length},
+    });
     return HPE_OK;
   }
 
@@ -143,6 +158,11 @@ private:
     auto& self = impl::self(parser);
     self.commit_pending_header();
     self.current_.keep_alive = llhttp_should_keep_alive(parser) != 0;
+    self.events_.push_back(http1_event{
+      http1_event::type::complete,
+      self.current_,
+      {},
+    });
     self.completed_messages_.push_back(std::move(self.current_));
     self.current_ = http1_message{};
     return HPE_OK;
@@ -166,6 +186,7 @@ private:
 
   http1_message current_;
   std::vector<http1_message> completed_messages_;
+  std::vector<http1_event> events_;
   std::string pending_header_field_;
   std::string pending_header_value_;
   header_part last_header_part_ = header_part::none;
@@ -190,6 +211,10 @@ http1_parse_result http1_state_machine::parse(std::string_view bytes) {
 
 const std::vector<http1_message>& http1_state_machine::completed_messages() const noexcept {
   return impl_->completed_messages();
+}
+
+const std::vector<http1_event>& http1_state_machine::events() const noexcept {
+  return impl_->events();
 }
 
 } // namespace uvp::http::detail

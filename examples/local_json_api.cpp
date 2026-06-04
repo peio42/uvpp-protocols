@@ -155,8 +155,11 @@ int main() {
     res.json(item_json(*found));
   });
 
-  srv.post("/v1/items", [&items, &next_id](uvp::http::request& req, uvp::http::response& res) {
-    auto title = json_string_field(req.body(), "title");
+  srv.post("/v1/items", uvp::http::body::text{}, [&items, &next_id](
+    uvp::http::request&,
+    uvp::http::response& res,
+    std::string_view body) {
+    auto title = json_string_field(body, "title");
     if (!title || title->empty()) {
       res.status(400).json({{"error", "body must contain a string title field"}});
       return;
