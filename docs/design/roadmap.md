@@ -66,8 +66,10 @@
 Good follow-up modules:
 
 - `uvp::smtp`: SMTP client and minimal server sessions.
-- `uvp::sse`: Server-Sent Events helper on top of HTTP responses.
-- `uvp::multipart`: streaming form-data parser for HTTP uploads.
+- `uvp::sse`: Server-Sent Events helper on top of HTTP responses; see
+  [Server-Sent Events design](sse.md).
+- `uvp::multipart`: streaming and bounded form-data parser for HTTP uploads;
+  see [Multipart design](multipart.md).
 - `uvp::redis`: RESP client for simple service integrations.
 - `uvp::mqtt`: MQTT sessions for event-driven messaging.
 - `uvp::proxy`: CONNECT and reverse-proxy helpers.

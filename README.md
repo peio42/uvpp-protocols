@@ -163,6 +163,8 @@ The design notes live in [`docs/design`](docs/design):
 - [Protocol composition](docs/design/protocol-composition.md)
 - [Transport abstractions](docs/design/transport-abstractions.md)
 - [HTTP server design](docs/design/http-server.md)
+- [Server-Sent Events design](docs/design/sse.md)
+- [Multipart design](docs/design/multipart.md)
 - [Roadmap](docs/design/roadmap.md)
 
 ## Status
