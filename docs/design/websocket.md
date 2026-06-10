@@ -3,15 +3,18 @@
 ## Scope
 
 Milestone 3 adds server-side WebSocket support on top of the HTTP/1.1 upgrade
-path. The first implementation should cover:
+path. The first implementation covers:
 
 - HTTP upgrade integration;
 - RFC 6455 server handshake;
 - text, binary, ping, pong, and close frames;
 - per-session callbacks;
 - configurable message and pending-write limits;
-- ping/pong and close timeouts;
 - a backpressure-aware send queue.
+
+Ping/pong scheduling and close-handshake timeouts remain follow-up
+refinements. The initial implementation responds to ping frames automatically
+and closes the transport after sending an application-initiated close frame.
 
 Client-side WebSocket support can follow the same session and framing model
 later, but it is not required for the first server milestone.
@@ -41,7 +44,7 @@ The intended server-side API is:
 uvp::http::server srv(loop);
 
 srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
-  return uvp::websocket::accept(req, uvp::websocket::accept_options{}
+  (void)uvp::websocket::accept(req, uvp::websocket::accept_options{}
     .on_text([](uvp::websocket::session& ws, std::string_view message) {
       ws.text(message);
     })
@@ -56,10 +59,17 @@ raw `uvp::io::byte_stream`. The session is the WebSocket protocol owner: it
 keeps the frame parser, assembled message state, write queue, timers,
 subprotocol selection, and close state together.
 
-The HTTP upgrade callback returns the accepted protocol owner to the HTTP
-server. After the `101 Switching Protocols` response is queued, the HTTP session
-must stop HTTP parsing and transfer the underlying transport to the returned
-owner.
+This is intentional because WebSocket is message-oriented. A raw byte stream
+cannot represent text vs binary messages, fragmented message assembly,
+ping/pong, close codes and reasons, masking, or negotiated subprotocol details.
+When an upper protocol wants ordered bytes, it must opt into the byte-stream
+mapping explicitly.
+
+After the `101 Switching Protocols` response is queued, the HTTP session stops
+HTTP parsing and transfers the underlying transport to the accepted protocol
+owner. The returned `uvp::websocket::session` is still useful as an application
+handle, but the internal session state keeps itself alive while the upgraded
+transport remains open.
 
 ## Protocols Above WebSocket
 
@@ -72,7 +82,7 @@ srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
   auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
     .subprotocol("myproto"));
 
-  return uvp::myproto::session::accept(std::move(ws),
+  uvp::myproto::session::accept(std::move(ws),
     uvp::myproto::server_options{});
 });
 ```
@@ -85,13 +95,32 @@ srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
   auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
     .subprotocol("myproto"));
 
-  return uvp::myproto::session::accept(
+  uvp::myproto::session::accept(
     std::move(ws).into_byte_stream(),
     uvp::myproto::server_options{});
 });
 ```
 
-`into_byte_stream()` consumes the WebSocket session and returns a
+For the common case where the upper protocol only wants a byte stream, a helper
+may combine acceptance and conversion:
+
+```cpp
+srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
+  auto stream = uvp::websocket::accept_byte_stream(req,
+    uvp::websocket::accept_options{}
+      .subprotocol("myproto"));
+
+  uvp::myproto::session::accept(std::move(stream),
+    uvp::myproto::server_options{});
+});
+```
+
+`accept_byte_stream(req, options)` is a convenience equivalent to
+`accept(req, options).into_byte_stream()`. It should not replace
+`uvp::websocket::accept()` as the primary API, because applications that need
+WebSocket semantics should receive a `uvp::websocket::session`.
+
+`into_byte_stream()` consumes the WebSocket session handle and returns a
 `uvp::io::byte_stream` adapter whose lower layer is WebSocket framing. This
 keeps ownership explicit: after conversion, the custom protocol owns the
 transport abstraction and no longer has direct access to WebSocket-specific
@@ -132,7 +161,7 @@ upgrade request.
 
 ## Session Behavior
 
-`uvp::websocket::session` should provide:
+`uvp::websocket::session` provides:
 
 - `text(std::string_view)`;
 - `binary(std::span<const std::byte>)`;
@@ -141,7 +170,8 @@ upgrade request.
 - `close(close_code code = close_code::normal, std::string_view reason = {})`;
 - callback registration through `accept_options` for text, binary, ping, pong,
   close, and errors;
-- accessors for local and remote endpoints through the underlying transport.
+- accessors for local and remote endpoints through the underlying transport;
+- `into_byte_stream()` for binary byte-stream protocols over WebSocket.
 
 The session owns write buffers until uvpp write completion callbacks run.
 Queued payload bytes count against a configurable pending-write limit. Messages
@@ -150,7 +180,7 @@ WebSocket close code.
 
 ## Framing Notes
 
-The first implementation should implement RFC 6455 framing directly rather than
+The first implementation implements RFC 6455 framing directly rather than
 adding a WebSocket dependency. The server must:
 
 - require client-to-server frames to be masked;
@@ -159,8 +189,8 @@ adding a WebSocket dependency. The server must:
 - require control frames to be unfragmented and at most 125 bytes;
 - automatically respond to ping with pong unless the user callback overrides
   that policy;
-- perform a close handshake and enforce a close timeout.
+- perform a close handshake. Timeout enforcement can be added when the session
+  grows timer-owned liveness policies.
 
 The implementation should keep SHA-1 and base64 helpers private to the
 WebSocket module unless a later shared utility need appears.
-

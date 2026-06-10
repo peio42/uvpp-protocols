@@ -12,3 +12,4 @@
 #include <uvpp/protocols/http/server.hpp>
 #include <uvpp/protocols/http/server_options.hpp>
 #include <uvpp/protocols/http/status.hpp>
+#include <uvpp/protocols/http/upgrade.hpp>

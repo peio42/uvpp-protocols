@@ -1,0 +1,93 @@
+# WebSocket
+
+`uvp::websocket` builds server-side WebSocket sessions on top of
+`uvp::http::server` upgrade routes.
+
+```cpp
+#include <uvpp/protocols/http.hpp>
+#include <uvpp/protocols/websocket.hpp>
+
+uv::loop loop;
+uvp::http::server srv(loop);
+
+srv.upgrade("/echo", [](uvp::http::upgrade_request& req) {
+  (void)uvp::websocket::accept(req, uvp::websocket::accept_options{}
+    .on_text([](uvp::websocket::session& ws, std::string_view message) {
+      ws.text(message);
+    })
+    .on_binary([](uvp::websocket::session& ws, std::span<const std::byte> message) {
+      ws.binary(message);
+    }));
+});
+
+srv.listen("127.0.0.1", 8084);
+loop.run();
+```
+
+## Upgrade Routes
+
+Upgrade routes are separate from normal HTTP routes:
+
+```cpp
+srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
+  (void)uvp::websocket::accept(req, options);
+});
+```
+
+If the path matches, the WebSocket module validates the RFC 6455 handshake,
+sends `101 Switching Protocols`, and takes ownership of the connection. Invalid
+handshakes are rejected with a normal HTTP response and the connection is
+closed.
+
+## Session API
+
+`uvp::websocket::accept()` returns a move-only `uvp::websocket::session` handle.
+The session owns WebSocket framing, message assembly, control frames, close
+state, and queued writes.
+
+```cpp
+auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
+  .max_message_bytes(1024 * 1024)
+  .max_pending_write_bytes(1024 * 1024)
+  .subprotocol("chat")
+  .on_text([](uvp::websocket::session& ws, std::string_view message) {
+    ws.text(message);
+  })
+  .on_ping([](uvp::websocket::session& ws, std::span<const std::byte> payload) {
+    ws.pong(payload);
+  })
+  .on_close([](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {})
+  .on_error([](uvp::websocket::session&, std::error_code) {}));
+```
+
+A session can send:
+
+```cpp
+ws.text("hello");
+ws.binary(bytes);
+ws.ping();
+ws.pong(payload);
+ws.close(uvp::websocket::close_code::normal, "bye");
+```
+
+Inbound client frames must be masked. Server frames are never masked. Ping
+frames are automatically answered with pong frames.
+
+## Protocols Above WebSocket
+
+Message-oriented protocols should consume `uvp::websocket::session` directly.
+Byte-stream-oriented protocols can explicitly request a `uvp::io::byte_stream`
+adapter:
+
+```cpp
+srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
+  auto stream = uvp::websocket::accept_byte_stream(req,
+    uvp::websocket::accept_options{}.subprotocol("myproto"));
+
+  uvp::myproto::session::accept(std::move(stream), uvp::myproto::server_options{});
+});
+```
+
+The byte-stream adapter maps outbound writes to binary WebSocket messages and
+delivers inbound binary messages as ordered bytes. Text messages are outside
+that contract and close the WebSocket with a protocol error.

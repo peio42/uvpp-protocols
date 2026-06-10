@@ -65,17 +65,22 @@ public:
   http1_parse_result parse(std::string_view bytes) {
     const auto err = llhttp_execute(&parser_, bytes.data(), bytes.size());
     if (err == HPE_OK) {
-      return {};
+      return {http1_parse_result::status::ok, {}, bytes.size()};
     }
 
     if (err == HPE_PAUSED_UPGRADE) {
       if (!completed_messages_.empty()) {
         completed_messages_.back().upgrade = true;
       }
-      return {http1_parse_result::status::upgrade, {}};
+      const char* error_pos = llhttp_get_error_pos(&parser_);
+      std::size_t parsed_bytes = bytes.size();
+      if (error_pos >= bytes.data() && error_pos <= bytes.data() + bytes.size()) {
+        parsed_bytes = static_cast<std::size_t>(error_pos - bytes.data());
+      }
+      return {http1_parse_result::status::upgrade, {}, parsed_bytes};
     }
 
-    return {http1_parse_result::status::error, error_message(err)};
+    return {http1_parse_result::status::error, error_message(err), 0};
   }
 
   [[nodiscard]] const std::vector<http1_message>& completed_messages() const noexcept {
@@ -140,6 +145,9 @@ private:
       self.current_,
       {},
     });
+    if (!self.current_.headers.get("upgrade").empty() || self.current_.method == http::method::connect) {
+      return 2;
+    }
     return HPE_OK;
   }
 

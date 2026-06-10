@@ -40,7 +40,9 @@ target_sources(
     src/http/route_params.cpp
     src/http/server.cpp
     src/http/server_options.cpp
-    src/http/status.cpp)
+    src/http/status.cpp
+    src/http/upgrade.cpp
+    src/websocket/session.cpp)
 
 target_include_directories(
   uvpp_protocols
@@ -74,6 +76,7 @@ if(UVPP_PROTOCOLS_BUILD_EXAMPLES)
   uvpp_protocols_add_example(uvpp_protocols_admin_endpoints_example examples/admin_endpoints.cpp)
   uvpp_protocols_add_example(uvpp_protocols_local_json_api_example examples/local_json_api.cpp)
   uvpp_protocols_add_example(uvpp_protocols_log_streaming_example examples/log_streaming.cpp)
+  uvpp_protocols_add_example(uvpp_protocols_websocket_echo_example examples/websocket_echo.cpp)
 endif()
 
 if(UVPP_PROTOCOLS_BUILD_TESTS)

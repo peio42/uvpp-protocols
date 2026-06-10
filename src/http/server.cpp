@@ -158,6 +158,7 @@ struct server::impl {
     std::string payload;
     bool close_after = false;
     bool counts_response = false;
+    std::function<void(uvp::io::byte_stream)> upgrade;
   };
 
   struct response_slot {
@@ -236,6 +237,13 @@ struct server::impl {
         return;
       }
 
+      if (parse_result.code == detail::http1_parse_result::status::upgrade) {
+        process_parser_events(true);
+        const auto parsed_bytes = std::min(parse_result.parsed_bytes, bytes.size());
+        handle_upgrade(bytes.subspan(parsed_bytes));
+        return;
+      }
+
       process_parser_events();
     }
 
@@ -261,9 +269,12 @@ struct server::impl {
       return route.max_body_bytes == 0 ? owner_.owner.options_.max_body_bytes_ : route.max_body_bytes;
     }
 
-    void process_parser_events() {
+    void process_parser_events(bool stop_before_complete = false) {
       const auto& events = parser_.events();
       while (!closed_ && !body_processing_paused_ && handled_events_ < events.size()) {
+        if (stop_before_complete && events[handled_events_].event_type == detail::http1_event::type::complete) {
+          return;
+        }
         handle_event(events[handled_events_++]);
       }
     }
@@ -507,6 +518,59 @@ struct server::impl {
       enqueue(serialize_response(res, keep_alive, owner_.owner.options_), !keep_alive);
     }
 
+    void handle_upgrade(std::span<const std::byte> extra_bytes) {
+      if (!active_request_) {
+        send_error(status::bad_request, false);
+        return;
+      }
+
+      const auto [path, query] = split_path_query(active_request_->headers.target);
+      route_params params;
+      const server::upgrade_route* route = nullptr;
+      for (const auto& candidate : owner_.owner.upgrade_routes_) {
+        params = {};
+        if (detail::route_pattern_matches(candidate.pattern, path, params)) {
+          route = &candidate;
+          break;
+        }
+      }
+
+      if (!route) {
+        send_error(status::not_found, false);
+        return;
+      }
+
+      auto req = upgrade_request{
+        active_request_->headers.method,
+        active_request_->headers.target,
+        path,
+        query,
+        active_request_->headers.headers,
+        std::move(params),
+        extra_bytes,
+        [self = weak_from_this()](std::string response, upgrade_request::accept_callback on_accept) {
+          if (auto session = self.lock()) {
+            session->accept_upgrade(std::move(response), std::move(on_accept));
+          }
+        },
+      };
+
+      try {
+        route->handler(req);
+      } catch (...) {
+        send_error(status::internal_server_error, false);
+      }
+    }
+
+    void accept_upgrade(std::string response, upgrade_request::accept_callback on_accept) {
+      try {
+        stream_.read_stop();
+      } catch (...) {
+      }
+      writes_.push_back(pending_write{std::move(response), false, false, std::move(on_accept)});
+      flush_next();
+    }
+
     std::shared_ptr<response_slot> create_response_slot(bool close_after) {
       const auto pending_responses = responses_.size() + pending_response_writes_;
       if (pending_responses >= owner_.owner.options_.max_pending_responses_per_connection_) {
@@ -599,13 +663,13 @@ struct server::impl {
 
     void enqueue(std::string payload, bool close_after, bool counts_response = false) {
       pending_write_bytes_ += payload.size();
-      writes_.push_back(pending_write{std::move(payload), close_after, counts_response});
+      writes_.push_back(pending_write{std::move(payload), close_after, counts_response, {}});
       flush_next();
     }
 
     void queue_stream_write(response_slot& slot, std::string payload, bool close_after = false) {
       pending_write_bytes_ += payload.size();
-      slot.stream_writes.push_back(pending_write{std::move(payload), close_after, false});
+      slot.stream_writes.push_back(pending_write{std::move(payload), close_after, false, {}});
     }
 
     [[nodiscard]] std::size_t low_watermark() const noexcept {
@@ -696,12 +760,21 @@ struct server::impl {
       }
 
       const auto close_after = !writes_.empty() && writes_.front().close_after;
+      auto upgrade = !writes_.empty() ? std::move(writes_.front().upgrade) : upgrade_request::accept_callback{};
       if (!writes_.empty()) {
         pending_write_bytes_ -= std::min(pending_write_bytes_, writes_.front().payload.size());
         if (writes_.front().counts_response && pending_response_writes_ > 0) {
           --pending_response_writes_;
         }
         writes_.pop_front();
+      }
+
+      if (upgrade) {
+        closed_ = true;
+        auto upgraded_stream = std::move(stream_);
+        owner_.remove_session(this);
+        upgrade(std::move(upgraded_stream));
+        return;
       }
 
       notify_drains();

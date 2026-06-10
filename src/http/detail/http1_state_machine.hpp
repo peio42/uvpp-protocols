@@ -42,6 +42,7 @@ struct http1_parse_result {
 
   status code = status::ok;
   std::string error;
+  std::size_t parsed_bytes = 0;
 
   [[nodiscard]] bool ok() const noexcept { return code == status::ok; }
 };

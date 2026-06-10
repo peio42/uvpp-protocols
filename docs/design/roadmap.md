@@ -50,8 +50,10 @@
 - WebSocket handshake.
 - Text, binary, ping, pong, and close frames.
 - Per-session callbacks.
-- Configurable message size and ping/pong timeout.
+- Configurable message size and pending-write limits.
 - Backpressure-aware send queue.
+- Explicit `uvp::io::byte_stream` adaptation for byte-oriented protocols over
+  WebSocket.
 
 ## Milestone 4: TLS
 
@@ -82,3 +84,8 @@ backpressure strategy, and how the module composes with existing modules.
 
 - Charset handling for `uvp::http::body::text`, including optional validation
   and transcoding policies once the desired scope is clear.
+
+## Future WebSocket Refinements
+
+- Configurable ping/pong scheduling and timeout policy.
+- Close-handshake timeout before forcing the underlying transport closed.

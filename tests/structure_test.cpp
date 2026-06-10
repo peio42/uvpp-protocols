@@ -11,6 +11,7 @@
 
 #include <uvpp/uv.hpp>
 #include <uvpp/protocols/http.hpp>
+#include <uvpp/protocols/websocket.hpp>
 
 #include "../src/http/detail/http1_state_machine.hpp"
 
@@ -130,7 +131,29 @@ int main() {
   server.on_error([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
     res.status(uvp::http::status::internal_server_error).text("custom error\n");
   });
+  server.upgrade("/echo", [](uvp::http::upgrade_request& req) {
+    (void)req;
+  });
   assert(server.routes().size() == 1);
+
+  auto websocket_options = uvp::websocket::accept_options{}
+    .max_message_bytes(64 * 1024)
+    .max_pending_write_bytes(64 * 1024)
+    .subprotocol("chat")
+    .on_text([](uvp::websocket::session& ws, std::string_view message) {
+      ws.text(message);
+    })
+    .on_binary([](uvp::websocket::session& ws, std::span<const std::byte> message) {
+      ws.binary(message);
+    })
+    .on_ping([](uvp::websocket::session& ws, std::span<const std::byte> payload) {
+      ws.pong(payload);
+    })
+    .on_close([](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {})
+    .on_error([](uvp::websocket::session&, std::error_code) {});
+  assert(websocket_options.max_message_bytes_ == 64 * 1024);
+  assert(websocket_options.max_pending_write_bytes_ == 64 * 1024);
+  assert(websocket_options.subprotocol_ == "chat");
 
   auto tcp_listener = uvp::io::tcp_listener{loop};
   tcp_listener.bind("127.0.0.1", 0);
@@ -160,4 +183,15 @@ int main() {
   assert(message.body == "test");
   assert(message.http_major == 1);
   assert(message.http_minor == 1);
+
+  uvp::http::detail::http1_state_machine upgrade_parser;
+  const auto upgrade_result = upgrade_parser.parse(
+    "GET /echo HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Upgrade: websocket\r\n"
+    "Connection: Upgrade\r\n"
+    "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+    "Sec-WebSocket-Version: 13\r\n"
+    "\r\n");
+  assert(upgrade_result.code == uvp::http::detail::http1_parse_result::status::upgrade);
 }

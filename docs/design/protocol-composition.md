@@ -117,11 +117,10 @@ module:
 
 ```cpp
 srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
-  return uvp::websocket::accept(req, {
-    .on_text = [](uvp::websocket::session& ws, std::string_view msg) {
+  (void)uvp::websocket::accept(req, uvp::websocket::accept_options{}
+    .on_text([](uvp::websocket::session& ws, std::string_view msg) {
       ws.text(msg);
-    },
-  });
+    }));
 });
 ```
 
@@ -147,7 +146,7 @@ srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
   auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
     .subprotocol("myproto"));
 
-  return uvp::myproto::session::accept(std::move(ws),
+  uvp::myproto::session::accept(std::move(ws),
     uvp::myproto::server_options{});
 });
 ```
@@ -162,11 +161,30 @@ srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
   auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
     .subprotocol("myproto"));
 
-  return uvp::myproto::session::accept(
+  uvp::myproto::session::accept(
     std::move(ws).into_byte_stream(),
     uvp::myproto::server_options{});
 });
 ```
+
+For common byte-oriented protocol endpoints, a convenience helper can combine
+acceptance and conversion:
+
+```cpp
+srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
+  auto stream = uvp::websocket::accept_byte_stream(req,
+    uvp::websocket::accept_options{}
+      .subprotocol("myproto"));
+
+  uvp::myproto::session::accept(std::move(stream),
+    uvp::myproto::server_options{});
+});
+```
+
+`accept_byte_stream()` should be equivalent to
+`accept(req, options).into_byte_stream()`. It is a convenience for protocols
+that intentionally treat WebSocket as a binary byte transport, not a replacement
+for the message-oriented `uvp::websocket::session` API.
 
 The byte-stream adapter maps outbound writes to binary WebSocket frames and
 delivers inbound binary message payloads as ordered bytes. Text frames are not
@@ -177,10 +195,11 @@ MQTT is a useful example of a byte-oriented protocol over WebSocket:
 
 ```cpp
 srv.upgrade("/mqtt", [](uvp::http::upgrade_request& req) {
-  auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
-    .subprotocol("mqtt"));
+  auto stream = uvp::websocket::accept_byte_stream(req,
+    uvp::websocket::accept_options{}
+      .subprotocol("mqtt"));
 
-  return uvp::mqtt::client_session::accept(std::move(ws).into_byte_stream(),
+  uvp::mqtt::client_session::accept(std::move(stream),
     uvp::mqtt::client_options{}
       .client_id("agent-1")
       .keep_alive(30s));

@@ -12,20 +12,6 @@
 
 namespace uvp::io {
 
-struct byte_stream::concept_ {
-  virtual ~concept_() = default;
-
-  virtual uv::loop& loop() noexcept = 0;
-  virtual void read_start(read_callback on_read) = 0;
-  virtual void read_stop() = 0;
-  virtual void write(std::span<const std::byte> bytes, write_callback on_write) = 0;
-  virtual void close(close_callback on_close) = 0;
-  virtual endpoint local_endpoint() const = 0;
-  virtual endpoint remote_endpoint() const = 0;
-  virtual uv::tcp* tcp() noexcept = 0;
-  virtual uv::pipe* pipe() noexcept = 0;
-};
-
 struct stream_listener::concept_ {
   virtual ~concept_() = default;
 

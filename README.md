@@ -7,8 +7,9 @@ of uvpp's event-based libuv wrapper. The goal is to let applications keep the
 explicit libuv/uvpp event-loop model while avoiding repeated implementations of
 common protocols such as HTTP, WebSocket, TLS, SMTP, and MQTT.
 
-This repository is in its early implementation milestones. The first module is
-an HTTP/1.1 server built on uvpp, libuv, and `llhttp`.
+This repository is in its early implementation milestones. The first modules
+are an HTTP/1.1 server built on uvpp, libuv, and `llhttp`, plus server-side
+WebSocket sessions on top of HTTP upgrade routes.
 
 ## Build
 
@@ -49,6 +50,14 @@ curl -N http://127.0.0.1:8083/logs/stream
 The log streaming example uses native HTTP/1.1 chunked responses and
 newline-delimited JSON. It demonstrates `response::stream()`,
 `streaming_response::write()`, `on_drain`, and async error handling.
+
+Milestone 3 WebSocket example:
+
+```sh
+./build/uvpp_protocols_websocket_echo_example
+```
+
+It listens on `ws://127.0.0.1:8084/echo` and echoes text and binary messages.
 
 ## Target HTTP API
 
@@ -153,6 +162,7 @@ library. The source-directory option exists for offline or vendored builds.
 User documentation starts in [`docs`](docs):
 
 - [HTTP server](docs/http-server.md)
+- [WebSocket](docs/websocket.md)
 
 The design notes live in [`docs/design`](docs/design):
 
@@ -169,11 +179,10 @@ The design notes live in [`docs/design`](docs/design):
 
 ## Status
 
-Milestone 1 groundwork is available: repository structure, CMake packaging,
-public HTTP vocabulary, a header-only exact-match router, `uvp::io` stream
-abstractions, TCP and Unix socket listener adapters, an `llhttp`-backed HTTP/1
-parser adapter, a minimal `uvp::http::server`, a runnable HTTP example, and one
-structure test.
+Milestone 3 groundwork is available: HTTP route ergonomics, chunked responses,
+request body policies, request body streaming, the generic HTTP upgrade hook,
+server-side WebSocket handshake/framing, WebSocket sessions, byte-stream
+adaptation, runnable examples, and one structure test.
 
 ## License
 
