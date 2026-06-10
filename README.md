@@ -175,6 +175,7 @@ The design notes live in [`docs/design`](docs/design):
 - [HTTP server design](docs/design/http-server.md)
 - [Server-Sent Events design](docs/design/sse.md)
 - [Multipart design](docs/design/multipart.md)
+- [TLS design](docs/design/tls.md)
 - [Roadmap](docs/design/roadmap.md)
 
 ## Status

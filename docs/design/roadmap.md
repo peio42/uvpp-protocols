@@ -57,11 +57,17 @@
 
 ## Milestone 4: TLS
 
-- TLS context and stream adapter.
-- Server-side TLS listener integration for HTTP.
-- Client-side TLS connector for future HTTP/SMTP clients.
-- Backend boundary that keeps OpenSSL, mbedTLS, or another provider out of the
-  generic public API as much as possible.
+- Reusable TLS context and stream adapter over `uvp::io::byte_stream`; see
+  [TLS design](tls.md).
+- `accept(byte_stream, server_context, callback)` and
+  `connect(byte_stream, client_context, callback)` primitives for protocols that
+  start encrypted or upgrade with STARTTLS.
+- Generic TLS listener adapter over `uvp::io::stream_listener`.
+- OpenSSL 3.x backend kept private to the TLS module.
+- ALPN, client SNI, peer verification defaults, TLS errors, and graceful
+  shutdown policy.
+- HTTP-over-TLS example as one consumer, without making TLS depend on HTTP or
+  HTTP depend on TLS.
 
 ## Milestone 5+: Additional Protocols
 

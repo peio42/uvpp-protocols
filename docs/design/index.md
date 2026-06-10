@@ -52,6 +52,8 @@ loop.run();
   policies for HTTP.
 - [WebSocket design](websocket.md): HTTP upgrade integration, session
   ownership, and protocols over WebSocket.
+- [TLS design](tls.md): reusable TLS stream adaptation over `uvp::io`,
+  OpenSSL backend boundaries, STARTTLS, ALPN, SNI, and shutdown.
 - [Roadmap](roadmap.md): suggested implementation order and milestones.
 
 ## Design Posture

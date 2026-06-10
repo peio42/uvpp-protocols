@@ -136,25 +136,22 @@ Do not adopt libcurl for the first HTTP server milestones.
 
 ## TLS
 
-TLS needs a dedicated design note. The likely first candidate is OpenSSL 3.x,
-but the project should evaluate:
-
-- OpenSSL 3.x availability and API stability;
-- BoringSSL compatibility if users want it;
-- mbedTLS or wolfSSL for embedded targets;
-- QUIC implications for future HTTP/3;
-- certificate loading, SNI, ALPN, and client-auth APIs;
-- whether TLS is a stream adapter, listener adapter, or both.
+TLS has a dedicated [design note](tls.md). The initial backend should be
+OpenSSL 3.x, kept private to the TLS module behind `uvp::tls` context and stream
+types.
 
 TLS must remain a module boundary:
 
 ```text
-uv::tcp
-  -> uvp::tls::stream
-    -> uvp::http::server/session
+uvp::io::byte_stream
+  -> uvp::tls
+    -> uvp::io::byte_stream
+      -> HTTP, SMTP, MQTT, or another byte-oriented protocol
 ```
 
-HTTP must not directly depend on a TLS provider.
+HTTP must not directly depend on a TLS provider, and TLS must not depend on
+HTTP. TLS should also support STARTTLS-style upgrades where an application
+protocol begins in clear text and later hands its transport to `uvp::tls`.
 
 ## Database Protocols
 
