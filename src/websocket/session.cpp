@@ -493,7 +493,9 @@ struct session::state : public std::enable_shared_from_this<state> {
     if (options.on_ping()) {
       options.on_ping()(handle, payload);
     }
-    send_frame(opcode::pong, payload);
+    if (options.auto_pong()) {
+      send_frame(opcode::pong, payload);
+    }
   }
 
   void dispatch_pong(std::span<const std::byte> payload) {
@@ -788,6 +790,16 @@ accept_options& accept_options::subprotocol(std::string_view value) & {
 
 accept_options&& accept_options::subprotocol(std::string_view value) && {
   subprotocol(value);
+  return std::move(*this);
+}
+
+accept_options& accept_options::auto_pong(bool value) & noexcept {
+  auto_pong_ = value;
+  return *this;
+}
+
+accept_options&& accept_options::auto_pong(bool value) && noexcept {
+  auto_pong(value);
   return std::move(*this);
 }
 

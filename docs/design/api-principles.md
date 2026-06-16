@@ -53,6 +53,28 @@ Borrowed values must be documented as borrowed. Values that can reasonably be
 needed after the callback should either be cheap to copy or have an explicit
 copying API.
 
+## Layered Protocol Control
+
+Protocol APIs should default to compliant automatic behavior for mandatory
+control flow. A small service should not need to implement protocol maintenance
+frames, parser bookkeeping, or required response handshakes just to stay
+correct.
+
+Advanced users may opt out through explicit options. Once opted out, they own
+the corresponding protocol obligation:
+
+```cpp
+uvp::websocket::accept_options{}
+  .auto_pong(false)
+  .on_ping([](uvp::websocket::session& ws, std::span<const std::byte> payload) {
+    ws.pong(payload);
+  });
+```
+
+Hooks in the automatic mode are observational by default. If a callback both
+observes and takes over protocol behavior, the opt-out should be visible at the
+call site.
+
 ## Errors
 
 Immediate setup failures should throw `uv::error` or protocol-specific errors

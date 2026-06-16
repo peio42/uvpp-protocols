@@ -10,11 +10,14 @@ path. The first implementation covers:
 - text, binary, ping, pong, and close frames;
 - per-session callbacks;
 - configurable message and pending-write limits;
+- configurable automatic pong responses;
 - a backpressure-aware send queue.
 
 Ping/pong scheduling and close-handshake timeouts remain follow-up
-refinements. The initial implementation responds to ping frames automatically
-and closes the transport after sending an application-initiated close frame.
+refinements. The implementation responds to ping frames automatically by
+default and lets advanced users opt out with `accept_options::auto_pong(false)`.
+The session closes the transport after sending an application-initiated close
+frame.
 
 Client-side WebSocket support can follow the same session and framing model
 later, but it is not required for the first server milestone.
@@ -170,6 +173,8 @@ upgrade request.
 - `close(close_code code = close_code::normal, std::string_view reason = {})`;
 - callback registration through `accept_options` for text, binary, ping, pong,
   close, and errors;
+- `auto_pong(bool)` to keep the default automatic ping response or make
+  `on_ping` responsible for replying;
 - accessors for local and remote endpoints through the underlying transport;
 - `into_byte_stream()` for binary byte-stream protocols over WebSocket.
 
@@ -187,8 +192,8 @@ adding a WebSocket dependency. The server must:
 - never mask server-to-client frames;
 - handle fragmented data messages;
 - require control frames to be unfragmented and at most 125 bytes;
-- automatically respond to ping with pong unless the user callback overrides
-  that policy;
+- automatically respond to ping with pong unless `auto_pong(false)` makes the
+  application responsible for that protocol obligation;
 - perform a close handshake. Timeout enforcement can be added when the session
   grows timer-owned liveness policies.
 

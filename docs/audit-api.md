@@ -182,7 +182,7 @@ même résultat sans recourir au préprocesseur.
 `accept_options` mélange deux natures distinctes :
 
 - **Configuration :** `max_message_bytes`, `max_pending_write_bytes`,
-  `subprotocol`
+  `subprotocol`, `auto_pong`
 - **Comportement :** `on_text`, `on_binary`, `on_ping`, `on_pong`,
   `on_close`, `on_error`
 

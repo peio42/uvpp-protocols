@@ -30,9 +30,11 @@ mettre à jour `impl_->owner = *this`, ou supprimer le déplacement.
 
 ---
 
-## 2. Double envoi de pong possible dans WebSocket
+## 2. WebSocket : responsabilité explicite du pong
 
 **Fichier :** `src/websocket/session.cpp`
+
+Ce point a été corrigé avec `accept_options::auto_pong(bool)`.
 
 ```cpp
 void dispatch_ping(std::span<const std::byte> payload) {
@@ -40,17 +42,16 @@ void dispatch_ping(std::span<const std::byte> payload) {
     if (options.on_ping()) {
         options.on_ping()(handle, payload);  // user callback
     }
-    send_frame(opcode::pong, payload);       // auto-pong systématique
+    if (options.auto_pong()) {
+        send_frame(opcode::pong, payload);
+    }
 }
 ```
 
-Le pong automatique est envoyé **après** le callback utilisateur. Si
-l'utilisateur appelle `ws.pong(payload)` dans son `on_ping`, deux frames
-pong sont émises, ce qui viole RFC 6455 (un seul pong par ping).
-
-**Correctif :** soit envoyer le pong automatiquement sans exposer `on_ping`,
-soit laisser l'utilisateur en charge et ne pas envoyer de pong automatique,
-soit ne plus appeler `send_frame(pong)` quand le callback a été invoqué.
+Par défaut, la session répond automatiquement aux ping avec un pong conforme ;
+`on_ping` est alors un hook d'observation. Les utilisateurs avancés peuvent
+appeler `.auto_pong(false)` et prennent alors explicitement la responsabilité
+de répondre depuis `on_ping`.
 
 ---
 
@@ -330,7 +331,6 @@ lisibilité.
 | Priorité | Fichier(s) | Problème |
 |---|---|---|
 | 🔴 Bug | `server.cpp` | Référence pendante après déplacement de `server` |
-| 🔴 Bug | `websocket/session.cpp` | Double pong possible sur `on_ping` |
 | 🔴 Correctness | `local_json_api.cpp` | Booléen sérialisé en string JSON |
 | 🟠 Sécurité / maintenance | `websocket/session.cpp` | SHA-1 fait maison, non testé |
 | 🟠 Performance | `websocket/session.cpp` | `read_buffer` : erase O(n) en tête |

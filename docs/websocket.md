@@ -53,8 +53,8 @@ auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
   .on_text([](uvp::websocket::session& ws, std::string_view message) {
     ws.text(message);
   })
-  .on_ping([](uvp::websocket::session& ws, std::span<const std::byte> payload) {
-    ws.pong(payload);
+  .on_ping([](uvp::websocket::session&, std::span<const std::byte> payload) {
+    (void)payload;
   })
   .on_close([](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {})
   .on_error([](uvp::websocket::session&, std::error_code) {}));
@@ -71,7 +71,22 @@ ws.close(uvp::websocket::close_code::normal, "bye");
 ```
 
 Inbound client frames must be masked. Server frames are never masked. Ping
-frames are automatically answered with pong frames.
+frames are automatically answered with pong frames by default. In that mode,
+`on_ping` is an observation hook and should not send the protocol pong itself.
+
+Applications that need full control can opt out and assume responsibility for
+the required pong response:
+
+```cpp
+auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
+  .auto_pong(false)
+  .on_ping([](uvp::websocket::session& ws, std::span<const std::byte> payload) {
+    ws.pong(payload);
+  }));
+```
+
+`pong()` remains available for manual ping handling and for unsolicited pong
+heartbeats.
 
 ## Protocols Above WebSocket
 

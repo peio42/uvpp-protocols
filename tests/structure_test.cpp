@@ -136,10 +136,13 @@ int main() {
   });
   assert(server.routes().size() == 1);
 
+  assert(uvp::websocket::accept_options{}.auto_pong());
+
   auto websocket_options = uvp::websocket::accept_options{}
     .max_message_bytes(64 * 1024)
     .max_pending_write_bytes(64 * 1024)
     .subprotocol("chat")
+    .auto_pong(false)
     .on_text([](uvp::websocket::session& ws, std::string_view message) {
       ws.text(message);
     })
@@ -154,6 +157,7 @@ int main() {
   assert(websocket_options.max_message_bytes() == 64 * 1024);
   assert(websocket_options.max_pending_write_bytes() == 64 * 1024);
   assert(websocket_options.subprotocol() == "chat");
+  assert(!websocket_options.auto_pong());
 
   auto tcp_listener = uvp::io::tcp_listener{loop};
   tcp_listener.bind("127.0.0.1", 0);

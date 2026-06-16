@@ -44,6 +44,10 @@ struct accept_options {
   accept_options&& subprotocol(std::string_view value) &&;
   [[nodiscard]] const std::string& subprotocol() const noexcept { return subprotocol_; }
 
+  accept_options& auto_pong(bool value) & noexcept;
+  accept_options&& auto_pong(bool value) && noexcept;
+  [[nodiscard]] bool auto_pong() const noexcept { return auto_pong_; }
+
   accept_options& on_text(text_callback callback) &;
   accept_options&& on_text(text_callback callback) &&;
   [[nodiscard]] const text_callback& on_text() const noexcept { return on_text_; }
@@ -72,6 +76,7 @@ private:
   std::size_t max_message_bytes_ = 1024 * 1024;
   std::size_t max_pending_write_bytes_ = 1024 * 1024;
   std::string subprotocol_;
+  bool auto_pong_ = true;
 
   text_callback on_text_;
   binary_callback on_binary_;
