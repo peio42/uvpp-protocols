@@ -370,7 +370,7 @@ struct session::state : public std::enable_shared_from_this<state> {
       }
 
       if (length > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
-          length > static_cast<std::uint64_t>(options.max_message_bytes_)) {
+          length > static_cast<std::uint64_t>(options.max_message_bytes())) {
         close_with_error(close_code::message_too_large, std::make_error_code(std::errc::message_size));
         return;
       }
@@ -446,7 +446,7 @@ struct session::state : public std::enable_shared_from_this<state> {
       close_with_error(close_code::protocol_error, protocol_error());
       return;
     }
-    if (fragmented_message.size() + payload.size() > options.max_message_bytes_) {
+    if (fragmented_message.size() + payload.size() > options.max_message_bytes()) {
       close_with_error(close_code::message_too_large, std::make_error_code(std::errc::message_size));
       return;
     }
@@ -477,29 +477,29 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
 
     if (data_opcode == opcode::text) {
-      if (options.on_text_) {
-        options.on_text_(handle, std::string_view{reinterpret_cast<const char*>(payload.data()), payload.size()});
+      if (options.on_text()) {
+        options.on_text()(handle, std::string_view{reinterpret_cast<const char*>(payload.data()), payload.size()});
       }
       return;
     }
 
-    if (options.on_binary_) {
-      options.on_binary_(handle, payload);
+    if (options.on_binary()) {
+      options.on_binary()(handle, payload);
     }
   }
 
   void dispatch_ping(std::span<const std::byte> payload) {
     auto handle = session{shared_from_this()};
-    if (options.on_ping_) {
-      options.on_ping_(handle, payload);
+    if (options.on_ping()) {
+      options.on_ping()(handle, payload);
     }
     send_frame(opcode::pong, payload);
   }
 
   void dispatch_pong(std::span<const std::byte> payload) {
     auto handle = session{shared_from_this()};
-    if (options.on_pong_) {
-      options.on_pong_(handle, payload);
+    if (options.on_pong()) {
+      options.on_pong()(handle, payload);
     }
   }
 
@@ -523,8 +523,8 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
 
     auto handle = session{shared_from_this()};
-    if (options.on_close_) {
-      options.on_close_(handle, code, reason);
+    if (options.on_close()) {
+      options.on_close()(handle, code, reason);
     }
     if (byte_read) {
       byte_read(uvp::io::read_result{{}, {}, true});
@@ -553,7 +553,7 @@ struct session::state : public std::enable_shared_from_this<state> {
       }
       return false;
     }
-    if (pending_write_bytes + payload.size() > options.max_pending_write_bytes_) {
+    if (pending_write_bytes + payload.size() > options.max_pending_write_bytes()) {
       if (on_write) {
         on_write(uvp::io::stream_error{std::make_error_code(std::errc::operation_would_block)});
       }
@@ -590,8 +590,8 @@ struct session::state : public std::enable_shared_from_this<state> {
 
   void notify_error(std::error_code error) {
     auto handle = session{shared_from_this()};
-    if (options.on_error_) {
-      options.on_error_(handle, error);
+    if (options.on_error()) {
+      options.on_error()(handle, error);
     }
   }
 
@@ -918,7 +918,7 @@ session accept(uvp::http::upgrade_request& req, accept_options options) {
 
   auto state = std::make_shared<session::state>(std::move(options));
   auto handle = session{state};
-  const auto response = handshake_response(req, state->options.subprotocol_);
+  const auto response = handshake_response(req, state->options.subprotocol());
   std::vector<std::byte> extra_bytes(req.extra_bytes().begin(), req.extra_bytes().end());
   req.accept(response, [state, extra_bytes = std::move(extra_bytes)](uvp::io::byte_stream stream) {
     state->start(std::move(stream), extra_bytes);

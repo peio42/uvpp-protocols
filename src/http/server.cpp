@@ -117,7 +117,7 @@ std::string serialize_response_head(const response& response, bool keep_alive, c
   if (!has_connection) {
     out << "connection: " << (keep_alive ? "keep-alive" : "close") << "\r\n";
   }
-  if (options.server_header_ && !has_server) {
+  if (options.server_header() && !has_server) {
     out << "server: uvpp-protocols\r\n";
   }
 
@@ -266,7 +266,7 @@ struct server::impl {
     }
 
     std::size_t route_body_limit(const router::match_result& route) const noexcept {
-      return route.max_body_bytes == 0 ? owner_.owner.options_.max_body_bytes_ : route.max_body_bytes;
+      return route.max_body_bytes == 0 ? owner_.owner.options_.max_body_bytes() : route.max_body_bytes;
     }
 
     void process_parser_events(bool stop_before_complete = false) {
@@ -323,7 +323,7 @@ struct server::impl {
         return;
       }
 
-      const auto keep_alive = owner_.owner.options_.keep_alive_;
+      const auto keep_alive = owner_.owner.options_.keep_alive();
       active_request_->slot = create_response_slot(!keep_alive);
       if (!active_request_->slot) {
         active_request_->rejected = true;
@@ -411,7 +411,7 @@ struct server::impl {
 
     void handle_buffered_message(const detail::http1_message& message, router::match_result route_match) {
       const auto [path, query] = split_path_query(message.target);
-      const auto keep_alive = owner_.owner.options_.keep_alive_ && message.keep_alive;
+      const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive;
       auto slot = create_response_slot(!keep_alive);
       if (!slot) {
         return;
@@ -573,7 +573,7 @@ struct server::impl {
 
     std::shared_ptr<response_slot> create_response_slot(bool close_after) {
       const auto pending_responses = responses_.size() + pending_response_writes_;
-      if (pending_responses >= owner_.owner.options_.max_pending_responses_per_connection_) {
+      if (pending_responses >= owner_.owner.options_.max_pending_responses_per_connection()) {
         close();
         return {};
       }
@@ -673,7 +673,7 @@ struct server::impl {
     }
 
     [[nodiscard]] std::size_t low_watermark() const noexcept {
-      return owner_.owner.options_.max_pending_write_bytes_ / 2;
+      return owner_.owner.options_.max_pending_write_bytes() / 2;
     }
 
     stream_write_result write_stream_chunk(response_slot& slot, std::string payload) {
@@ -697,7 +697,7 @@ struct server::impl {
 
       flush_response_slots();
 
-      if (pending_write_bytes_ >= owner_.owner.options_.max_pending_write_bytes_) {
+      if (pending_write_bytes_ >= owner_.owner.options_.max_pending_write_bytes()) {
         slot.stream_backpressured = true;
         return stream_write_result::backpressure();
       }

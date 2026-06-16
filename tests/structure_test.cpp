@@ -25,11 +25,11 @@ int main() {
     .idle_timeout(30s)
     .server_header(false);
 
-  assert(options.max_header_bytes_ == 32 * 1024);
-  assert(options.max_body_bytes_ == 1024 * 1024);
-  assert(options.max_pending_responses_per_connection_ == 8);
-  assert(options.idle_timeout_ == 30s);
-  assert(!options.server_header_);
+  assert(options.max_header_bytes() == 32 * 1024);
+  assert(options.max_body_bytes() == 1024 * 1024);
+  assert(options.max_pending_responses_per_connection() == 8);
+  assert(options.idle_timeout() == 30s);
+  assert(!options.server_header());
 
   uvp::http::headers headers;
   headers.set("Content-Type", "text/plain");
@@ -151,9 +151,9 @@ int main() {
     })
     .on_close([](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {})
     .on_error([](uvp::websocket::session&, std::error_code) {});
-  assert(websocket_options.max_message_bytes_ == 64 * 1024);
-  assert(websocket_options.max_pending_write_bytes_ == 64 * 1024);
-  assert(websocket_options.subprotocol_ == "chat");
+  assert(websocket_options.max_message_bytes() == 64 * 1024);
+  assert(websocket_options.max_pending_write_bytes() == 64 * 1024);
+  assert(websocket_options.subprotocol() == "chat");
 
   auto tcp_listener = uvp::io::tcp_listener{loop};
   tcp_listener.bind("127.0.0.1", 0);

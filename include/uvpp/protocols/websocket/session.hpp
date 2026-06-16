@@ -26,36 +26,59 @@ enum class close_code : unsigned short {
 };
 
 struct accept_options {
+  using text_callback = std::function<void(session&, std::string_view)>;
+  using binary_callback = std::function<void(session&, std::span<const std::byte>)>;
+  using control_callback = std::function<void(session&, std::span<const std::byte>)>;
+  using close_callback = std::function<void(session&, close_code, std::string_view)>;
+  using error_callback = std::function<void(session&, std::error_code)>;
+
+  accept_options& max_message_bytes(std::size_t value) &;
+  accept_options&& max_message_bytes(std::size_t value) &&;
+  [[nodiscard]] std::size_t max_message_bytes() const noexcept { return max_message_bytes_; }
+
+  accept_options& max_pending_write_bytes(std::size_t value) &;
+  accept_options&& max_pending_write_bytes(std::size_t value) &&;
+  [[nodiscard]] std::size_t max_pending_write_bytes() const noexcept { return max_pending_write_bytes_; }
+
+  accept_options& subprotocol(std::string_view value) &;
+  accept_options&& subprotocol(std::string_view value) &&;
+  [[nodiscard]] const std::string& subprotocol() const noexcept { return subprotocol_; }
+
+  accept_options& on_text(text_callback callback) &;
+  accept_options&& on_text(text_callback callback) &&;
+  [[nodiscard]] const text_callback& on_text() const noexcept { return on_text_; }
+
+  accept_options& on_binary(binary_callback callback) &;
+  accept_options&& on_binary(binary_callback callback) &&;
+  [[nodiscard]] const binary_callback& on_binary() const noexcept { return on_binary_; }
+
+  accept_options& on_ping(control_callback callback) &;
+  accept_options&& on_ping(control_callback callback) &&;
+  [[nodiscard]] const control_callback& on_ping() const noexcept { return on_ping_; }
+
+  accept_options& on_pong(control_callback callback) &;
+  accept_options&& on_pong(control_callback callback) &&;
+  [[nodiscard]] const control_callback& on_pong() const noexcept { return on_pong_; }
+
+  accept_options& on_close(close_callback callback) &;
+  accept_options&& on_close(close_callback callback) &&;
+  [[nodiscard]] const close_callback& on_close() const noexcept { return on_close_; }
+
+  accept_options& on_error(error_callback callback) &;
+  accept_options&& on_error(error_callback callback) &&;
+  [[nodiscard]] const error_callback& on_error() const noexcept { return on_error_; }
+
+private:
   std::size_t max_message_bytes_ = 1024 * 1024;
   std::size_t max_pending_write_bytes_ = 1024 * 1024;
   std::string subprotocol_;
 
-  std::function<void(session&, std::string_view)> on_text_;
-  std::function<void(session&, std::span<const std::byte>)> on_binary_;
-  std::function<void(session&, std::span<const std::byte>)> on_ping_;
-  std::function<void(session&, std::span<const std::byte>)> on_pong_;
-  std::function<void(session&, close_code, std::string_view)> on_close_;
-  std::function<void(session&, std::error_code)> on_error_;
-
-  accept_options& max_message_bytes(std::size_t value) &;
-  accept_options&& max_message_bytes(std::size_t value) &&;
-  accept_options& max_pending_write_bytes(std::size_t value) &;
-  accept_options&& max_pending_write_bytes(std::size_t value) &&;
-  accept_options& subprotocol(std::string_view value) &;
-  accept_options&& subprotocol(std::string_view value) &&;
-
-  accept_options& on_text(std::function<void(session&, std::string_view)> callback) &;
-  accept_options&& on_text(std::function<void(session&, std::string_view)> callback) &&;
-  accept_options& on_binary(std::function<void(session&, std::span<const std::byte>)> callback) &;
-  accept_options&& on_binary(std::function<void(session&, std::span<const std::byte>)> callback) &&;
-  accept_options& on_ping(std::function<void(session&, std::span<const std::byte>)> callback) &;
-  accept_options&& on_ping(std::function<void(session&, std::span<const std::byte>)> callback) &&;
-  accept_options& on_pong(std::function<void(session&, std::span<const std::byte>)> callback) &;
-  accept_options&& on_pong(std::function<void(session&, std::span<const std::byte>)> callback) &&;
-  accept_options& on_close(std::function<void(session&, close_code, std::string_view)> callback) &;
-  accept_options&& on_close(std::function<void(session&, close_code, std::string_view)> callback) &&;
-  accept_options& on_error(std::function<void(session&, std::error_code)> callback) &;
-  accept_options&& on_error(std::function<void(session&, std::error_code)> callback) &&;
+  text_callback on_text_;
+  binary_callback on_binary_;
+  control_callback on_ping_;
+  control_callback on_pong_;
+  close_callback on_close_;
+  error_callback on_error_;
 };
 
 class session {

@@ -119,34 +119,44 @@ validation should happen when the options are consumed by a protocol owner:
 
 ```cpp
 struct server_options {
+  server_options& max_header_bytes(std::size_t value) &;
+  server_options&& max_header_bytes(std::size_t value) &&;
+  [[nodiscard]] std::size_t max_header_bytes() const noexcept;
+
+  server_options& body_timeout(std::chrono::milliseconds value) &;
+  server_options&& body_timeout(std::chrono::milliseconds value) &&;
+  [[nodiscard]] std::chrono::milliseconds body_timeout() const noexcept;
+
+  server_options& keep_alive(bool value) & noexcept;
+  server_options&& keep_alive(bool value) && noexcept;
+  [[nodiscard]] bool keep_alive() const noexcept;
+
+private:
   std::size_t max_header_bytes_ = 16 * 1024;
   std::size_t max_body_bytes_ = 1024 * 1024;
   std::chrono::milliseconds body_timeout_ = std::chrono::seconds{30};
   bool keep_alive_ = true;
-
-  server_options& max_header_bytes(std::size_t value) &;
-  server_options&& max_header_bytes(std::size_t value) &&;
-
-  server_options& body_timeout(std::chrono::milliseconds value) &;
-  server_options&& body_timeout(std::chrono::milliseconds value) &&;
 };
 ```
 
-When a field and a fluent setter would represent the exact same value, the
-setter should keep the canonical public name and the storage field should use a
-trailing underscore:
+When storage and a fluent setter represent the exact same value, the setter
+keeps the canonical public name and the storage field stays private with a
+trailing underscore. If public reads are useful, expose a const accessor with
+the same canonical name rather than a `get_` prefix:
 
 ```cpp
 struct server_options {
-  std::size_t max_header_bytes_ = 16 * 1024;
-
   server_options& max_header_bytes(std::size_t value) &;
   server_options&& max_header_bytes(std::size_t value) &&;
+  [[nodiscard]] std::size_t max_header_bytes() const noexcept;
+
+private:
+  std::size_t max_header_bytes_ = 16 * 1024;
 };
 ```
 
-This avoids maintaining two user-facing names for the same concept. It also
-makes the fluent call site match the option name used in documentation:
+This avoids maintaining two user-facing write paths for the same concept. It
+also makes the fluent call site match the option name used in documentation:
 
 ```cpp
 uvp::http::server srv(
