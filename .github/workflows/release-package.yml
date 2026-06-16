@@ -1,0 +1,132 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to package, for example 0.1.0 or 0.1.0-rc.1
+        required: true
+        type: string
+      run_tests:
+        description: Run GCC and Clang tests again instead of requiring existing CI checks
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  checks: read
+  contents: write
+
+jobs:
+  validate-and-release:
+    runs-on: ubuntu-latest
+    name: Validate and release
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ clang libuv1-dev
+
+      - name: Validate version
+        env:
+          UVPP_PROTOCOLS_VERSION: ${{ inputs.version }}
+        run: |
+          version="$UVPP_PROTOCOLS_VERSION"
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
+            echo "Invalid version: $version"
+            echo "Expected semver-like value, example: 0.1.0 or 0.1.0-rc.1"
+            exit 1
+          fi
+
+      - name: Verify existing CI checks
+        if: ${{ !inputs.run_tests }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs"
+          for check in GCC Clang; do
+            conclusion="$(gh api "$api" --jq ".check_runs[] | select(.name == \"$check\") | .conclusion" | tail -n 1)"
+            if [ "$conclusion" != "success" ]; then
+              echo "Required CI check is not successful for $GITHUB_SHA: $check ($conclusion)"
+              echo "Run the CI workflow for this commit, or dispatch the release with run_tests=true."
+              exit 1
+            fi
+            echo "$check: $conclusion"
+          done
+
+      - name: Run validation tests
+        if: ${{ inputs.run_tests }}
+        run: make clean test-all
+
+      - name: Build package
+        env:
+          UVPP_PROTOCOLS_VERSION: ${{ inputs.version }}
+        run: make package VERSION="$UVPP_PROTOCOLS_VERSION"
+
+      - name: Commit VERSION
+        id: commit_version
+        env:
+          UVPP_PROTOCOLS_VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          if git diff --cached --quiet; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "Release $UVPP_PROTOCOLS_VERSION"
+            git push origin HEAD:"$GITHUB_REF_NAME"
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release tag
+        env:
+          UVPP_PROTOCOLS_VERSION: ${{ inputs.version }}
+        run: |
+          tag="v$UVPP_PROTOCOLS_VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "Tag already exists: $tag"
+            exit 1
+          fi
+
+          git tag -a "$tag" -m "uvpp-protocols $UVPP_PROTOCOLS_VERSION"
+          git push origin "refs/tags/$tag"
+
+      - name: Publish GitHub release
+        id: release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ inputs.version }}
+          name: uvpp-protocols ${{ inputs.version }}
+          target_commitish: ${{ steps.commit_version.outputs.sha }}
+          prerelease: ${{ contains(inputs.version, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/uvpp-protocols-${{ inputs.version }}.tar.gz
+            dist/checksums.txt
+
+      - name: Write release summary
+        env:
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+          UVPP_PROTOCOLS_VERSION: ${{ inputs.version }}
+        run: |
+          {
+            echo "## Release published"
+            echo
+            echo "- Version: \`$UVPP_PROTOCOLS_VERSION\`"
+            echo "- Tag: \`v$UVPP_PROTOCOLS_VERSION\`"
+            echo "- URL: $RELEASE_URL"
+            echo
+            echo "Assets:"
+            echo "- \`uvpp-protocols-$UVPP_PROTOCOLS_VERSION.tar.gz\`"
+            echo "- \`checksums.txt\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    name: ${{ matrix.compiler.name }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler:
+          - name: GCC
+            cc: gcc
+            cxx: g++
+            id: gcc
+          - name: Clang
+            cc: clang
+            cxx: clang++
+            id: clang
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ clang libuv1-dev
+
+      - name: Build and run tests
+        run: make clean test CC=${{ matrix.compiler.cc }} CXX=${{ matrix.compiler.cxx }} CXX_ID=${{ matrix.compiler.id }} BUILD_DIR=build/${{ matrix.compiler.id }}

@@ -3,6 +3,7 @@ build/
 build-*/
 cmake-build-*/
 out/
+dist/
 
 # CMake generated files
 CMakeCache.txt
@@ -42,4 +43,3 @@ lcov.info
 # OS files
 .DS_Store
 Thumbs.db
-

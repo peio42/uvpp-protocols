@@ -1,8 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" _uvpp_protocols_version)
+string(STRIP "${_uvpp_protocols_version}" _uvpp_protocols_version)
+
 project(
   uvpp-protocols
-  VERSION 0.1.0
+  VERSION ${_uvpp_protocols_version}
   DESCRIPTION "Higher-level protocol modules for uvpp"
   HOMEPAGE_URL "https://github.com/peio42/uvpp-protocols"
   LANGUAGES C CXX)
