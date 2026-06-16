@@ -132,7 +132,7 @@ request::request(
   http::headers headers,
   std::vector<std::byte> body,
   route_params params,
-  http::connection connection)
+  http::connection_info connection)
     : method_(method),
       target_(std::move(target)),
       path_(std::move(path)),
@@ -140,7 +140,7 @@ request::request(
       headers_(std::move(headers)),
       body_(std::move(body)),
       params_(std::move(params)),
-      connection_(connection) {}
+      connection_(std::move(connection)) {}
 
 std::string_view request::header(std::string_view name) const noexcept {
   return headers_.get(name);

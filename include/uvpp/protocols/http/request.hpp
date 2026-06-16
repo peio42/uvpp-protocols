@@ -85,7 +85,7 @@ public:
     http::headers headers,
     std::vector<std::byte> body,
     route_params params,
-    http::connection connection);
+    http::connection_info connection);
 
   [[nodiscard]] http::method method() const noexcept { return method_; }
   [[nodiscard]] std::string_view target() const noexcept { return target_; }
@@ -99,8 +99,7 @@ public:
   [[nodiscard]] std::string_view body() const noexcept;
 
   [[nodiscard]] const route_params& params() const noexcept { return params_; }
-  [[nodiscard]] http::connection& connection() noexcept { return connection_; }
-  [[nodiscard]] const http::connection& connection() const noexcept { return connection_; }
+  [[nodiscard]] const http::connection_info& connection() const noexcept { return connection_; }
 
 private:
   friend class router;
@@ -113,7 +112,7 @@ private:
   http::headers headers_;
   std::vector<std::byte> body_;
   route_params params_;
-  http::connection connection_;
+  http::connection_info connection_;
 };
 
 } // namespace uvp::http

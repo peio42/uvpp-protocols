@@ -88,8 +88,10 @@ until close callbacks complete.
 Expose raw or lower-level access only through named functions:
 
 ```cpp
-uvp::io::byte_stream& stream = req.connection().stream();
-uv::tcp& tcp = tcp_stream.tcp();
+auto remote = req.connection().remote_endpoint();
+upgrade_req.accept(response, [](uvp::io::byte_stream stream) {
+  uv::tcp* tcp = stream.tcp();
+});
 ```
 
 Any borrowed view returned by a protocol object must have callback-scoped or

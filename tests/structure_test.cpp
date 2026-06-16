@@ -36,6 +36,13 @@ int main() {
   assert(headers.contains("content-type"));
   assert(headers.get("CONTENT-TYPE") == "text/plain");
 
+  auto connection = uvp::http::connection_info{
+    uvp::io::tcp_endpoint{"127.0.0.1", 8080},
+    uvp::io::pipe_endpoint{"/tmp/uvpp.sock"},
+  };
+  assert(std::holds_alternative<uvp::io::tcp_endpoint>(connection.local_endpoint()));
+  assert(std::holds_alternative<uvp::io::pipe_endpoint>(connection.remote_endpoint()));
+
   uvp::http::router router;
   router.get("/health", [](uvp::http::request&, uvp::http::response& res) {
     res.text("ok");

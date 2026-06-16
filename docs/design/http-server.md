@@ -30,7 +30,7 @@ Initial public types:
 - `uvp::http::server_options`
 - `uvp::http::request`
 - `uvp::http::response`
-- `uvp::http::connection`
+- `uvp::http::connection_info`
 - `uvp::http::router`
 - `uvp::http::headers`
 - `uvp::http::method`
@@ -215,12 +215,15 @@ public:
   std::string_view body() const noexcept;
 
   const route_params& params() const noexcept;
-  connection& connection() noexcept;
+  const connection_info& connection() const noexcept;
 };
 ```
 
 Borrowed string views remain valid only for the lifetime of the request object.
 Applications should copy values they need after the handler returns.
+Connection metadata is a snapshot of local and remote endpoints. Handlers that
+need to take over the transport should use the explicit upgrade path rather
+than `request`.
 
 ## Request Body Streaming
 

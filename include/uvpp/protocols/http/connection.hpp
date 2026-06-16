@@ -1,30 +1,24 @@
 #pragma once
 
-namespace uv {
-class tcp;
-} // namespace uv
+#include <utility>
 
-namespace uvp::io {
-class byte_stream;
-} // namespace uvp::io
+#include <uvpp/protocols/io/endpoint.hpp>
 
 namespace uvp::http {
 
-class connection {
+class connection_info {
 public:
-  connection() = default;
+  connection_info() = default;
 
-  [[nodiscard]] uv::tcp* tcp() noexcept { return tcp_; }
-  [[nodiscard]] const uv::tcp* tcp() const noexcept { return tcp_; }
-  [[nodiscard]] uvp::io::byte_stream* stream() noexcept { return stream_; }
-  [[nodiscard]] const uvp::io::byte_stream* stream() const noexcept { return stream_; }
+  connection_info(uvp::io::endpoint local, uvp::io::endpoint remote)
+      : local_endpoint_(std::move(local)), remote_endpoint_(std::move(remote)) {}
 
-  explicit connection(uv::tcp* tcp) noexcept : tcp_(tcp) {}
-  explicit connection(uvp::io::byte_stream* stream) noexcept : stream_(stream) {}
+  [[nodiscard]] const uvp::io::endpoint& local_endpoint() const noexcept { return local_endpoint_; }
+  [[nodiscard]] const uvp::io::endpoint& remote_endpoint() const noexcept { return remote_endpoint_; }
 
 private:
-  uv::tcp* tcp_ = nullptr;
-  uvp::io::byte_stream* stream_ = nullptr;
+  uvp::io::endpoint local_endpoint_;
+  uvp::io::endpoint remote_endpoint_;
 };
 
 } // namespace uvp::http

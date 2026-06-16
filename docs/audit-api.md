@@ -35,26 +35,26 @@ underscore.
 
 ---
 
-## 2. `connection` : union informelle de raw pointers
+## 2. `connection_info` : métadonnées de connexion sans accès transport
 
 **Fichier :** `include/uvpp/protocols/http/connection.hpp`
 
+Ce point a été corrigé : `request::connection()` n'expose plus de pointeurs
+vers le transport. Le type public est désormais une vue immutable de
+métadonnées :
+
 ```cpp
-class connection {
-  uv::tcp* tcp_ = nullptr;
-  uvp::io::byte_stream* stream_ = nullptr;
+class connection_info {
+public:
+  const uvp::io::endpoint& local_endpoint() const noexcept;
+  const uvp::io::endpoint& remote_endpoint() const noexcept;
 };
 ```
 
-Les deux pointeurs peuvent être nuls simultanément, ou seulement l'un des
-deux est non nul. C'est un `std::variant` déguisé sans ses garanties
-d'exclusivité ni ses outils de dispatch. `request` expose ce type via
-`req.connection()`, faisant fuir `uv::tcp*` dans l'API utilisateur — ce que
-les principes de conception interdisent explicitement (« no implicit conversion
-from protocol objects to raw libuv pointers »).
-
-**En zéro-compatibilité :** `std::variant<uv::tcp*, uvp::io::byte_stream*>`,
-ou simplement `byte_stream*` seul puisque c'est l'abstraction cible du projet.
+Les handlers HTTP normaux peuvent inspecter les endpoints local et distant,
+mais ne peuvent plus lire, écrire, fermer, ni spécialiser directement le
+transport sous-jacent. La prise de possession du `uvp::io::byte_stream` reste
+réservée au chemin explicite d'upgrade via `upgrade_request::accept()`.
 
 ---
 
@@ -264,7 +264,6 @@ assertions de structure (`assert`). Manquent notamment :
 
 | Priorité | Problème |
 |---|---|
-| 🔴 API confuse | `connection` avec raw pointers nullables exposés dans `request` |
 | 🔴 API trompeuse | `json()` limité aux string values |
 | 🟠 Surprise runtime | Session WebSocket à durée de vie implicite |
 | 🟠 Fuite d'implémentation | `route_handler_type`, `body_mode` dans le namespace public |

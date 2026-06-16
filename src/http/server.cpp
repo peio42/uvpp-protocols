@@ -269,6 +269,10 @@ struct server::impl {
       return route.max_body_bytes == 0 ? owner_.owner.options_.max_body_bytes() : route.max_body_bytes;
     }
 
+    connection_info connection() const {
+      return connection_info{stream_.local_endpoint(), stream_.remote_endpoint()};
+    }
+
     void process_parser_events(bool stop_before_complete = false) {
       const auto& events = parser_.events();
       while (!closed_ && !body_processing_paused_ && handled_events_ < events.size()) {
@@ -303,7 +307,7 @@ struct server::impl {
         message.headers,
         {},
         route_params{},
-        connection{&stream_},
+        connection(),
       };
       auto route_match = owner_.owner.router_.match(req.method(), req.path());
       if (route_match) {
@@ -433,7 +437,7 @@ struct server::impl {
         message.headers,
         body_bytes(message.body),
         route_params{},
-        connection{&stream_},
+        connection(),
       };
 
       response& res = slot->res;
@@ -547,6 +551,7 @@ struct server::impl {
         query,
         active_request_->headers.headers,
         std::move(params),
+        connection(),
         extra_bytes,
         [self = weak_from_this()](std::string response, upgrade_request::accept_callback on_accept) {
           if (auto session = self.lock()) {
