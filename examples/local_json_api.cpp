@@ -2,7 +2,6 @@
 #include <cctype>
 #include <iostream>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,92 +17,33 @@ struct item {
   bool done = false;
 };
 
-std::string escape_json(std::string_view value) {
-  std::string out;
-  out.reserve(value.size());
-  for (char ch : value) {
-    switch (ch) {
-    case '"':
-      out += "\\\"";
-      break;
-    case '\\':
-      out += "\\\\";
-      break;
-    case '\n':
-      out += "\\n";
-      break;
-    case '\r':
-      out += "\\r";
-      break;
-    case '\t':
-      out += "\\t";
-      break;
-    default:
-      out += ch;
-      break;
-    }
-  }
-  return out;
+uvp::json item_json(const item& value) {
+  return uvp::json{
+    {"id", value.id},
+    {"title", value.title},
+    {"done", value.done},
+  };
 }
 
-std::string item_json(const item& value) {
-  std::ostringstream out;
-  out << "{\"id\":\"" << value.id
-      << "\",\"title\":\"" << escape_json(value.title)
-      << "\",\"done\":\"" << (value.done ? "true" : "false")
-      << "\"}";
-  return out.str();
-}
-
-std::string items_json(const std::vector<item>& values) {
-  std::string out = "[";
-  bool first = true;
+uvp::json items_json(const std::vector<item>& values) {
+  auto out = uvp::json::array();
   for (const auto& value : values) {
-    if (!first) {
-      out += ",";
-    }
-    first = false;
-    out += item_json(value);
+    out.push_back(item_json(value));
   }
-  out += "]";
   return out;
 }
 
 std::optional<std::string> json_string_field(std::string_view body, std::string_view field) {
-  const auto key = std::string("\"") + std::string(field) + "\"";
-  auto offset = body.find(key);
-  if (offset == std::string_view::npos) {
-    return {};
-  }
-
-  offset = body.find(':', offset + key.size());
-  if (offset == std::string_view::npos) {
-    return {};
-  }
-
-  ++offset;
-  while (offset < body.size() && std::isspace(static_cast<unsigned char>(body[offset]))) {
-    ++offset;
-  }
-
-  if (offset >= body.size() || body[offset] != '"') {
-    return {};
-  }
-
-  ++offset;
-  std::string value;
-  while (offset < body.size()) {
-    const auto ch = body[offset++];
-    if (ch == '"') {
-      return value;
+  try {
+    const auto parsed = uvp::json::parse(body.begin(), body.end());
+    const auto it = parsed.find(field);
+    if (it == parsed.end() || !it->is_string()) {
+      return {};
     }
-    if (ch == '\\' && offset < body.size()) {
-      value += body[offset++];
-      continue;
-    }
-    value += ch;
+    return it->get<std::string>();
+  } catch (const uvp::json::exception&) {
+    return {};
   }
-  return {};
 }
 
 std::optional<unsigned int> parse_id(std::string_view value) {
@@ -140,7 +80,7 @@ int main() {
   srv.get("/v1/items/:id", [&items](uvp::http::request& req, uvp::http::response& res) {
     const auto id = parse_id(req.params().get("id"));
     if (!id) {
-      res.status(400).json({{"error", "invalid id"}});
+      res.status(400).json(uvp::json{{"error", "invalid id"}});
       return;
     }
 
@@ -148,7 +88,7 @@ int main() {
       return value.id == *id;
     });
     if (found == items.end()) {
-      res.status(uvp::http::status::not_found).json({{"error", "item not found"}});
+      res.status(uvp::http::status::not_found).json(uvp::json{{"error", "item not found"}});
       return;
     }
 
@@ -161,7 +101,7 @@ int main() {
     std::string_view body) {
     auto title = json_string_field(body, "title");
     if (!title || title->empty()) {
-      res.status(400).json({{"error", "body must contain a string title field"}});
+      res.status(400).json(uvp::json{{"error", "body must contain a string title field"}});
       return;
     }
 
@@ -171,11 +111,11 @@ int main() {
 
   srv.not_found([](uvp::http::request& req, uvp::http::response& res) {
     res.status(uvp::http::status::not_found)
-      .json({{"error", "route not found"}, {"path", req.path()}});
+      .json(uvp::json{{"error", "route not found"}, {"path", std::string(req.path())}});
   });
 
   srv.on_error([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
-    res.status(uvp::http::status::internal_server_error).json({{"error", "internal server error"}});
+    res.status(uvp::http::status::internal_server_error).json(uvp::json{{"error", "internal server error"}});
   });
 
   srv.listen("127.0.0.1", 8082);

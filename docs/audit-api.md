@@ -58,27 +58,27 @@ réservée au chemin explicite d'upgrade via `upgrade_request::accept()`.
 
 ---
 
-## 3. `response::json` limité aux valeurs string
+## 3. `response::json` basé sur `uvp::json`
 
 **Fichier :** `include/uvpp/protocols/http/response.hpp`
 
-```cpp
-void json(std::initializer_list<std::pair<std::string_view, std::string_view>> object);
-```
-
-La surcharge utilitaire `json(initializer_list<...>)` ne supporte que des
-valeurs de type chaîne. Il est impossible de représenter un nombre, un
-booléen, null ou un objet imbriqué. Le nom `json` induit en erreur sur la
-portée réelle de la fonction.
+Ce point a été corrigé : l'ancienne surcharge
+`initializer_list<pair<string_view, string_view>>` a été supprimée. Le projet
+expose maintenant `uvp::json`, alias public de `nlohmann::json`, et
+`response::json` accepte soit du JSON déjà sérialisé, soit une vraie valeur
+JSON :
 
 ```cpp
-// Impossible, mais l'API laisse croire le contraire :
-res.json({{"count", 42}, {"active", true}});
+void json(std::string_view serialized_json);
+void json(const uvp::json& value);
 ```
 
-**En zéro-compatibilité :** supprimer cette surcharge ou la renommer
-explicitement (`json_string_object`). Laisser à l'utilisateur le soin de
-sérialiser via une lib JSON, et n'accepter que `std::string_view serialized`.
+```cpp
+res.json(uvp::json{{"count", 42}, {"active", true}, {"meta", nullptr}});
+```
+
+Cela prépare aussi les futures routes à body typé JSON (`body::json<T>`) en
+utilisant le même type de valeur et les conversions `from_json` / `to_json`.
 
 ---
 
@@ -264,7 +264,6 @@ assertions de structure (`assert`). Manquent notamment :
 
 | Priorité | Problème |
 |---|---|
-| 🔴 API trompeuse | `json()` limité aux string values |
 | 🟠 Surprise runtime | Session WebSocket à durée de vie implicite |
 | 🟠 Fuite d'implémentation | `route_handler_type`, `body_mode` dans le namespace public |
 | 🟠 Build time | Logique de routing non triviale inline dans le header |

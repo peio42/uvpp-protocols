@@ -14,7 +14,7 @@ int main() {
   srv.get("/health",
     uvp::http::body::none{},
     [](uvp::http::request&, uvp::http::response& res) {
-      res.json({{"status", "ok"}});
+      res.json(uvp::json{{"status", "ok"}});
     });
 
   srv.listen("127.0.0.1", 8080);
@@ -272,7 +272,7 @@ srv.get("/users/:id",
   uvp::http::body::none{},
   [](uvp::http::request& req, uvp::http::response& res) {
     auto id = req.params().get("id");
-    res.json({{"id", id}});
+    res.json(uvp::json{{"id", std::string(id)}});
   });
 ```
 
@@ -283,7 +283,7 @@ policy:
 
 ```cpp
 srv.on_error([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
-  res.status(500).json({{"error", "internal server error"}});
+  res.status(500).json(uvp::json{{"error", "internal server error"}});
 });
 ```
 
@@ -291,6 +291,6 @@ Use `not_found()` to customize missing routes:
 
 ```cpp
 srv.not_found([](uvp::http::request&, uvp::http::response& res) {
-  res.status(404).json({{"error", "not found"}});
+  res.status(404).json(uvp::json{{"error", "not found"}});
 });
 ```

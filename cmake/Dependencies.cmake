@@ -89,3 +89,54 @@ function(uvpp_protocols_require_llhttp target)
   message(STATUS "uvpp-protocols: HTTP/1 parser: llhttp")
   message(STATUS "uvpp-protocols: HTTP/2 backend: not configured in current milestones")
 endfunction()
+
+function(uvpp_protocols_require_nlohmann_json target)
+  set(_uvpp_protocols_nlohmann_json_from_package OFF)
+  if(NOT TARGET nlohmann_json::nlohmann_json)
+    find_package(nlohmann_json CONFIG QUIET)
+    if(TARGET nlohmann_json::nlohmann_json)
+      set(_uvpp_protocols_nlohmann_json_from_package ON)
+    endif()
+  else()
+    set(_uvpp_protocols_nlohmann_json_from_package ON)
+  endif()
+
+  if(NOT TARGET nlohmann_json::nlohmann_json)
+    if(NOT UVPP_PROTOCOLS_FETCH_NLOHMANN_JSON)
+      message(FATAL_ERROR "nlohmann_json::nlohmann_json was not found. Enable UVPP_PROTOCOLS_FETCH_NLOHMANN_JSON or install nlohmann_json.")
+    endif()
+
+    if(NOT UVPP_PROTOCOLS_UPDATE_FETCHED_NLOHMANN_JSON)
+      set(FETCHCONTENT_UPDATES_DISCONNECTED_JSON ON)
+    endif()
+
+    set(JSON_BuildTests OFF CACHE INTERNAL "")
+    FetchContent_Declare(
+      json
+      URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+      DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(json)
+    set(UVPP_PROTOCOLS_BUNDLED_NLOHMANN_JSON ON PARENT_SCOPE)
+  else()
+    set(UVPP_PROTOCOLS_BUNDLED_NLOHMANN_JSON OFF PARENT_SCOPE)
+  endif()
+
+  if(NOT TARGET nlohmann_json::nlohmann_json)
+    message(FATAL_ERROR "nlohmann_json was fetched, but target nlohmann_json::nlohmann_json is not available")
+  endif()
+
+  if(_uvpp_protocols_nlohmann_json_from_package)
+    target_link_libraries(${target} PUBLIC nlohmann_json::nlohmann_json)
+  else()
+    target_include_directories(
+      ${target}
+      PUBLIC
+        "$<BUILD_INTERFACE:${json_SOURCE_DIR}/include>"
+        "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+    install(
+      DIRECTORY "${json_SOURCE_DIR}/include/nlohmann"
+      DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+  endif()
+
+  message(STATUS "uvpp-protocols: JSON value: nlohmann/json")
+endfunction()

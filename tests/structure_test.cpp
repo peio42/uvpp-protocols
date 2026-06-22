@@ -83,7 +83,7 @@ int main() {
   assert(none_match.body == uvp::http::body_mode::none);
 
   uvp::http::response response;
-  response.json({{"status", "ok"}});
+  response.json(uvp::json{{"status", "ok"}});
   assert(response.ended());
   assert(response.body() == "{\"status\":\"ok\"}");
 

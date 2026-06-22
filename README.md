@@ -8,8 +8,8 @@ explicit libuv/uvpp event-loop model while avoiding repeated implementations of
 common protocols such as HTTP, WebSocket, TLS, SMTP, and MQTT.
 
 This repository is in its early implementation milestones. The first modules
-are an HTTP/1.1 server built on uvpp, libuv, and `llhttp`, plus server-side
-WebSocket sessions on top of HTTP upgrade routes.
+are an HTTP/1.1 server built on uvpp, libuv, `llhttp`, and `nlohmann/json`,
+plus server-side WebSocket sessions on top of HTTP upgrade routes.
 
 ## Build
 
@@ -20,10 +20,10 @@ ctest --test-dir build --output-on-failure
 ```
 
 The default build compiles the library, a structure test, and the HTTP examples.
-The examples require `uvpp::uvpp`; CMake first tries `find_package(uvpp CONFIG)`
-and then fetches [`uvpp`](https://github.com/peio42/uvpp) when needed. Because
-`uvpp::uvpp` links `LibUV::LibUV` and `Threads::Threads`, the examples are built
-against libuv.
+The examples require `uvpp::uvpp` and `nlohmann_json::nlohmann_json`; CMake
+first tries `find_package(...)` and then fetches missing dependencies when
+enabled. Because `uvpp::uvpp` links `LibUV::LibUV` and `Threads::Threads`, the
+examples are built against libuv.
 
 Run the HTTP example:
 
@@ -69,7 +69,7 @@ uv::loop loop;
 uvp::http::server srv(loop);
 
 srv.get("/health", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
-  res.json({{"status", "ok"}});
+  res.json(uvp::json{{"status", "ok"}});
 });
 
 srv.get("/logs", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {

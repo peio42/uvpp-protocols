@@ -24,6 +24,8 @@ option(UVPP_PROTOCOLS_FETCH_UVPP "Fetch uvpp when uvpp::uvpp is not already avai
 option(UVPP_PROTOCOLS_UPDATE_FETCHED_UVPP "Allow CMake to update an already fetched uvpp checkout" OFF)
 option(UVPP_PROTOCOLS_FETCH_LLHTTP "Fetch llhttp when it is not already available" ON)
 option(UVPP_PROTOCOLS_UPDATE_FETCHED_LLHTTP "Allow CMake to update an already fetched llhttp checkout" OFF)
+option(UVPP_PROTOCOLS_FETCH_NLOHMANN_JSON "Fetch nlohmann/json when nlohmann_json::nlohmann_json is not already available" ON)
+option(UVPP_PROTOCOLS_UPDATE_FETCHED_NLOHMANN_JSON "Allow CMake to update an already fetched nlohmann/json checkout" OFF)
 set(UVPP_PROTOCOLS_LLHTTP_SOURCE_DIR
     ""
     CACHE PATH "Use an existing llhttp source checkout instead of fetching one")
@@ -64,6 +66,7 @@ set_target_properties(
 include(cmake/Dependencies.cmake)
 uvpp_protocols_require_uvpp()
 uvpp_protocols_require_llhttp(uvpp_protocols)
+uvpp_protocols_require_nlohmann_json(uvpp_protocols)
 target_include_directories(
   uvpp_protocols
   PRIVATE

@@ -65,46 +65,6 @@ struct response_state {
 
 } // namespace detail
 
-namespace {
-
-std::string escape_json_string(std::string_view value) {
-  std::string escaped;
-  escaped.reserve(value.size() + 2);
-
-  for (char ch : value) {
-    switch (ch) {
-    case '"':
-      escaped += "\\\"";
-      break;
-    case '\\':
-      escaped += "\\\\";
-      break;
-    case '\b':
-      escaped += "\\b";
-      break;
-    case '\f':
-      escaped += "\\f";
-      break;
-    case '\n':
-      escaped += "\\n";
-      break;
-    case '\r':
-      escaped += "\\r";
-      break;
-    case '\t':
-      escaped += "\\t";
-      break;
-    default:
-      escaped += ch;
-      break;
-    }
-  }
-
-  return escaped;
-}
-
-} // namespace
-
 stream_write_result::stream_write_result(bool accepted, bool should_continue, std::error_code error) noexcept
     : accepted_(accepted), should_continue_(should_continue), error_(std::move(error)) {}
 
@@ -171,6 +131,14 @@ void response::text(std::string_view body) {
   end();
 }
 
+void response::json(const char* serialized_json) {
+  json(std::string_view{serialized_json});
+}
+
+void response::json(const std::string& serialized_json) {
+  json(std::string_view{serialized_json});
+}
+
 void response::json(std::string_view serialized_json) {
   if (state().streaming) {
     throw std::logic_error("HTTP response is streaming");
@@ -180,29 +148,9 @@ void response::json(std::string_view serialized_json) {
   end();
 }
 
-void response::json(std::initializer_list<std::pair<std::string_view, std::string_view>> object) {
-  if (state().streaming) {
-    throw std::logic_error("HTTP response is streaming");
-  }
-  type("application/json");
-
-  auto& storage = state().body;
-  storage = "{";
-  bool first = true;
-  for (const auto& [key, value] : object) {
-    if (!first) {
-      storage += ",";
-    }
-    first = false;
-    storage += '"';
-    storage += escape_json_string(key);
-    storage += "\":\"";
-    storage += escape_json_string(value);
-    storage += '"';
-  }
-  storage += "}";
-
-  end();
+void response::json(const uvp::json& value) {
+  const auto serialized = value.dump();
+  json(serialized);
 }
 
 void response::bytes(std::span<const std::byte> body) {
@@ -386,15 +334,27 @@ void deferred_response::text(std::string_view body) {
   }
 }
 
+void deferred_response::json(const char* serialized_json) {
+  if (auto state = lock_active()) {
+    response{std::move(state)}.json(serialized_json);
+  }
+}
+
+void deferred_response::json(const std::string& serialized_json) {
+  if (auto state = lock_active()) {
+    response{std::move(state)}.json(serialized_json);
+  }
+}
+
 void deferred_response::json(std::string_view serialized_json) {
   if (auto state = lock_active()) {
     response{std::move(state)}.json(serialized_json);
   }
 }
 
-void deferred_response::json(std::initializer_list<std::pair<std::string_view, std::string_view>> object) {
+void deferred_response::json(const uvp::json& value) {
   if (auto state = lock_active()) {
-    response{std::move(state)}.json(object);
+    response{std::move(state)}.json(value);
   }
 }
 

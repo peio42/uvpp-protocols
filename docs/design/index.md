@@ -15,7 +15,7 @@ uv::loop loop;
 uvp::http::server srv(loop);
 
 srv.get("/health", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
-  res.json({{"status", "ok"}});
+  res.json(uvp::json{{"status", "ok"}});
 });
 
 srv.get("/logs", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {

@@ -91,24 +91,15 @@ buffer circulaire, ou maintenir un index de lecture sans réallouer.
 
 ---
 
-## 5. `escape_json` dupliqué trois fois
+## 5. JSON sérialisé par `uvp::json`
 
 **Fichiers :** `src/http/response.cpp`, `examples/log_streaming.cpp`,
 `examples/local_json_api.cpp`
 
-La même fonction d'échappement JSON est définie trois fois, sous deux noms
-différents (`escape_json_string` et `escape_json`), avec des différences
-subtiles : `response.cpp` gère `\b` et `\f`, les deux exemples ne les gèrent
-pas.
-
-```cpp
-// response.cpp
-case '\b': escaped += "\\b"; break;
-case '\f': escaped += "\\f"; break;
-// absent dans log_streaming.cpp et local_json_api.cpp
-```
-
-**Correctif :** extraire une fonction partagée dans un header utilitaire.
+Ce point a été corrigé : les helpers `escape_json` locaux ont été supprimés au
+profit de `uvp::json` (`nlohmann::json`). `response::json(const uvp::json&)`
+utilise `dump()`, et les exemples construisent de vraies valeurs JSON au lieu
+de concaténer des chaînes.
 
 ---
 
@@ -331,10 +322,8 @@ lisibilité.
 | Priorité | Fichier(s) | Problème |
 |---|---|---|
 | 🔴 Bug | `server.cpp` | Référence pendante après déplacement de `server` |
-| 🔴 Correctness | `local_json_api.cpp` | Booléen sérialisé en string JSON |
 | 🟠 Sécurité / maintenance | `websocket/session.cpp` | SHA-1 fait maison, non testé |
 | 🟠 Performance | `websocket/session.cpp` | `read_buffer` : erase O(n) en tête |
-| 🟠 Duplication | `response.cpp`, exemples | `escape_json` dupliqué 3× avec différences |
 | 🟠 Duplication | `server.cpp`, `websocket/session.cpp` | File d'écriture dupliquée |
 | 🟡 Lisibilité | `server.cpp` | `header_name_equals` alloue inutilement |
 | 🟡 Lisibilité | `server.cpp` | `reason_phrase_for` duplique `reason_phrase` |

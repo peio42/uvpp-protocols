@@ -1,6 +1,7 @@
 #pragma once
 
 #include <uvpp/protocols/io.hpp>
+#include <uvpp/protocols/json.hpp>
 
 #include <uvpp/protocols/http/connection.hpp>
 #include <uvpp/protocols/http/headers.hpp>

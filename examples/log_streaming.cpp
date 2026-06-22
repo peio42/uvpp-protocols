@@ -4,7 +4,6 @@
 #include <deque>
 #include <iostream>
 #include <memory>
-#include <sstream>
 #include <span>
 #include <string>
 #include <string_view>
@@ -32,44 +31,12 @@ struct log_state {
   std::size_t errored_clients = 0;
 };
 
-std::string escape_json(std::string_view value) {
-  std::string out;
-  out.reserve(value.size());
-  for (char ch : value) {
-    switch (ch) {
-    case '"':
-      out += "\\\"";
-      break;
-    case '\\':
-      out += "\\\\";
-      break;
-    case '\n':
-      out += "\\n";
-      break;
-    case '\r':
-      out += "\\r";
-      break;
-    case '\t':
-      out += "\\t";
-      break;
-    default:
-      out += ch;
-      break;
-    }
-  }
-  return out;
-}
-
 std::span<const std::byte> as_bytes(const std::string& value) noexcept {
   return std::as_bytes(std::span{value.data(), value.size()});
 }
 
 std::string ndjson_event(unsigned int sequence, std::string_view message) {
-  std::ostringstream out;
-  out << "{\"sequence\":\"" << sequence
-      << "\",\"message\":\"" << escape_json(message)
-      << "\"}\n";
-  return out.str();
+  return uvp::json{{"sequence", sequence}, {"message", std::string(message)}}.dump() + "\n";
 }
 
 std::string recent_text(const log_state& state) {
@@ -132,7 +99,7 @@ int main() {
 
   srv.get("/logs/stream", [&state](uvp::http::request&, uvp::http::response& res) {
     if (state.clients.size() >= 32) {
-      res.status(503).json({{"error", "too many pending log stream clients"}});
+      res.status(503).json(uvp::json{{"error", "too many pending log stream clients"}});
       return;
     }
 
@@ -159,21 +126,17 @@ int main() {
   });
 
   srv.get("/logs/stats", [&state](uvp::http::request&, uvp::http::response& res) {
-    const auto recent = std::to_string(state.recent.size());
-    const auto clients = std::to_string(state.clients.size());
-    const auto cancelled = std::to_string(state.cancelled_clients);
-    const auto errored = std::to_string(state.errored_clients);
-    res.json({
-      {"recent", recent},
-      {"stream_clients", clients},
-      {"cancelled_stream_clients", cancelled},
-      {"errored_stream_clients", errored},
+    res.json(uvp::json{
+      {"recent", state.recent.size()},
+      {"stream_clients", state.clients.size()},
+      {"cancelled_stream_clients", state.cancelled_clients},
+      {"errored_stream_clients", state.errored_clients},
     });
   });
 
   srv.not_found([](uvp::http::request&, uvp::http::response& res) {
     res.status(uvp::http::status::not_found)
-      .json({{"error", "try /logs/recent, /logs/stream, or /logs/stats"}});
+      .json(uvp::json{{"error", "try /logs/recent, /logs/stream, or /logs/stats"}});
   });
 
   uv::timer ticker(loop);

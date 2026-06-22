@@ -11,7 +11,7 @@ The API should make simple cases terse:
 uvp::http::server srv(loop);
 
 srv.get("/health", uvp::http::body::none{}, [](uvp::http::request& req, uvp::http::response& res) {
-  res.json({{"status", "ok"}});
+  res.json(uvp::json{{"status", "ok"}});
 });
 
 srv.listen("127.0.0.1", 8080);
@@ -172,8 +172,8 @@ The body policy is part of the route contract:
   with `std::string_view`;
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`;
-- `body::json<T>{}` is the intended typed JSON policy once JSON integration is
-  selected;
+- `body::json<T>{}` is the intended typed JSON policy and should parse through
+  `uvp::json` before converting with `from_json`;
 - future policies such as multipart, form data, or protocol-specific decoders
   should use the same route declaration shape.
 
@@ -267,7 +267,8 @@ public:
   response& type(std::string_view content_type);
 
   void text(std::string_view body);
-  void json(/* JSON-compatible value, exact type TBD */);
+  void json(std::string_view serialized_json);
+  void json(const uvp::json& value);
   void bytes(std::span<const std::byte> body);
   void end();
   deferred_response defer();
@@ -279,16 +280,12 @@ public:
 };
 ```
 
-The exact JSON integration should stay undecided until the build and dependency
-policy is chosen. Options include:
-
-- no built-in JSON dependency, only `json(std::string_view serialized_json)`;
-- optional adapter for a popular C++ JSON library;
-- tiny object builder for simple values only.
-
-The user-facing example can keep `res.json({{"status", "ok"}})` as the desired
-ergonomic target, but the implementation should avoid forcing a heavy JSON
-dependency into users who only need HTTP.
+JSON is represented by `uvp::json`, a public alias for `nlohmann::json`.
+`json(std::string_view)` remains available for already serialized payloads.
+`json(const uvp::json&)` serializes with `dump()` and supports strings,
+numbers, booleans, arrays, objects, and null values. Future typed JSON request
+bodies should build on the same type and nlohmann's `from_json` / `to_json`
+customization points.
 
 ## Handler Completion
 
@@ -341,6 +338,7 @@ public:
 
   void text(std::string_view body);
   void json(std::string_view serialized_json);
+  void json(const uvp::json& value);
   void bytes(std::span<const std::byte> body);
   void end();
 };

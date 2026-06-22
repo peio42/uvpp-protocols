@@ -17,13 +17,9 @@ struct admin_state {
   std::vector<std::string> audit_log{"server started"};
 };
 
-std::string yes_no(bool value) {
-  return value ? "true" : "false";
-}
-
-std::string uptime_seconds(const admin_state& state) {
+long long uptime_seconds(const admin_state& state) {
   const auto elapsed = std::chrono::steady_clock::now() - state.started_at;
-  return std::to_string(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
+  return std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
 }
 
 std::string audit_text(const admin_state& state) {
@@ -49,12 +45,10 @@ int main() {
       .server_header(false));
 
   srv.get("/admin/health", [&state](uvp::http::request&, uvp::http::response& res) {
-    const auto maintenance = yes_no(state.maintenance);
-    const auto uptime = uptime_seconds(state);
-    res.json({
+    res.json(uvp::json{
       {"status", state.maintenance ? "maintenance" : "ok"},
-      {"maintenance", maintenance},
-      {"uptime_seconds", uptime},
+      {"maintenance", state.maintenance},
+      {"uptime_seconds", uptime_seconds(state)},
     });
   });
 
@@ -77,17 +71,17 @@ int main() {
     } else if (requested == "off") {
       state.maintenance = false;
     } else {
-      res.status(400).json({{"error", "state must be on or off"}});
+      res.status(400).json(uvp::json{{"error", "state must be on or off"}});
       return;
     }
 
     state.audit_log.push_back(std::string("maintenance ") + std::string(requested));
-    res.json({{"maintenance", yes_no(state.maintenance)}});
+    res.json(uvp::json{{"maintenance", state.maintenance}});
   });
 
   srv.not_found([](uvp::http::request& req, uvp::http::response& res) {
     res.status(uvp::http::status::not_found)
-      .json({{"error", "unknown admin endpoint"}, {"path", req.path()}});
+      .json(uvp::json{{"error", "unknown admin endpoint"}, {"path", std::string(req.path())}});
   });
 
   srv.listen("127.0.0.1", 8081);

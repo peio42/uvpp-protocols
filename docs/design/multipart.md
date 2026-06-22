@@ -92,7 +92,7 @@ srv.post("/upload",
 
     mp.on_error([reply](std::error_code) {
       if (reply->active()) {
-        reply->status(400).json({{"error", "upload failed"}});
+        reply->status(400).json(uvp::json{{"error", "upload failed"}});
       }
     });
   });

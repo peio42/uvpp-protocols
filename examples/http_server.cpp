@@ -42,7 +42,7 @@ int main() {
 
   srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
     (void)req;
-    res.json({{"status", "ok"}});
+    res.json(uvp::json{{"status", "ok"}});
   });
 
   srv.get("/logs", [](uvp::http::request& req, uvp::http::response& res) {
@@ -65,12 +65,12 @@ int main() {
     });
     body.on_end([total, reply] {
       if (reply->active()) {
-        reply->status(uvp::http::status::created).json({{"bytes", std::to_string(*total)}});
+        reply->status(uvp::http::status::created).json(uvp::json{{"bytes", *total}});
       }
     });
     body.on_error([reply](std::error_code) {
       if (reply->active()) {
-        reply->status(400).json({{"error", "upload failed"}});
+        reply->status(400).json(uvp::json{{"error", "upload failed"}});
       }
     });
   });

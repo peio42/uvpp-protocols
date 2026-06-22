@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <functional>
-#include <initializer_list>
 #include <memory>
 #include <span>
 #include <string>
@@ -12,6 +11,7 @@
 
 #include <uvpp/protocols/http/headers.hpp>
 #include <uvpp/protocols/http/status.hpp>
+#include <uvpp/protocols/json.hpp>
 
 namespace uvp::http {
 
@@ -52,8 +52,10 @@ public:
   response& type(std::string_view content_type);
 
   void text(std::string_view body);
+  void json(const char* serialized_json);
+  void json(const std::string& serialized_json);
   void json(std::string_view serialized_json);
-  void json(std::initializer_list<std::pair<std::string_view, std::string_view>> object);
+  void json(const uvp::json& value);
   void bytes(std::span<const std::byte> body);
   void end();
   [[nodiscard]] deferred_response defer();
@@ -110,8 +112,10 @@ public:
   deferred_response& type(std::string_view content_type);
 
   void text(std::string_view body);
+  void json(const char* serialized_json);
+  void json(const std::string& serialized_json);
   void json(std::string_view serialized_json);
-  void json(std::initializer_list<std::pair<std::string_view, std::string_view>> object);
+  void json(const uvp::json& value);
   void bytes(std::span<const std::byte> body);
   void end();
 
