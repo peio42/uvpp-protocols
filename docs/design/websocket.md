@@ -47,7 +47,7 @@ The intended server-side API is:
 uvp::http::server srv(loop);
 
 srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
-  (void)uvp::websocket::accept(req, uvp::websocket::accept_options{}
+  uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
     .on_text([](uvp::websocket::session& ws, std::string_view message) {
       ws.text(message);
     })
@@ -70,9 +70,15 @@ mapping explicitly.
 
 After the `101 Switching Protocols` response is queued, the HTTP session stops
 HTTP parsing and transfers the underlying transport to the accepted protocol
-owner. The returned `uvp::websocket::session` is still useful as an application
-handle, but the internal session state keeps itself alive while the upgraded
-transport remains open.
+owner. `uvp::websocket::accept()` returns a `[[nodiscard]]` owning application
+handle; the caller must keep that handle, move it into a higher-level protocol,
+or convert it into a byte stream. Destroying the owning handle closes the
+WebSocket session.
+
+Callback-only endpoints that intentionally do not keep a handle should call
+`uvp::websocket::accept_detached()`. The detached form is the only WebSocket
+acceptance path where the internal session state keeps itself alive while the
+upgraded transport remains open.
 
 ## Protocols Above WebSocket
 

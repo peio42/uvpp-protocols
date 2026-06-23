@@ -111,15 +111,20 @@ public:
 
 private:
   friend session accept(uvp::http::upgrade_request& req, accept_options options);
+  friend void accept_detached(uvp::http::upgrade_request& req, accept_options options);
   friend class websocket_byte_stream;
 
   struct state;
-  explicit session(std::shared_ptr<state> state);
+  explicit session(std::shared_ptr<state> state, bool owns_lifetime = false);
+
+  void release_owned() noexcept;
 
   std::shared_ptr<state> state_;
+  bool owns_lifetime_ = false;
 };
 
-session accept(uvp::http::upgrade_request& req, accept_options options = {});
+[[nodiscard]] session accept(uvp::http::upgrade_request& req, accept_options options = {});
+void accept_detached(uvp::http::upgrade_request& req, accept_options options = {});
 uvp::io::byte_stream accept_byte_stream(uvp::http::upgrade_request& req, accept_options options = {});
 
 } // namespace uvp::websocket

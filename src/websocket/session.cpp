@@ -292,8 +292,14 @@ struct session::state : public std::enable_shared_from_this<state> {
 
   explicit state(accept_options options) : options(std::move(options)) {}
 
-  void start(uvp::io::byte_stream accepted_stream, std::span<const std::byte> extra_bytes = {}) {
-    keep_alive = shared_from_this();
+  void start(uvp::io::byte_stream accepted_stream, std::span<const std::byte> extra_bytes = {}, bool detached = false) {
+    if (closed) {
+      accepted_stream.close();
+      return;
+    }
+    if (detached) {
+      keep_alive = shared_from_this();
+    }
     stream = std::move(accepted_stream);
     if (!extra_bytes.empty()) {
       read_buffer.insert(read_buffer.end(), extra_bytes.begin(), extra_bytes.end());
@@ -863,14 +869,36 @@ accept_options&& accept_options::on_error(std::function<void(session&, std::erro
   return std::move(*this);
 }
 
-session::session(std::shared_ptr<state> state)
-    : state_(std::move(state)) {}
+session::session(std::shared_ptr<state> state, bool owns_lifetime)
+    : state_(std::move(state)), owns_lifetime_(owns_lifetime) {}
 
-session::~session() = default;
+session::~session() {
+  release_owned();
+}
 
-session::session(session&&) noexcept = default;
+session::session(session&& other) noexcept
+    : state_(std::move(other.state_)),
+      owns_lifetime_(std::exchange(other.owns_lifetime_, false)) {}
 
-session& session::operator=(session&&) noexcept = default;
+session& session::operator=(session&& other) noexcept {
+  if (this != &other) {
+    release_owned();
+    state_ = std::move(other.state_);
+    owns_lifetime_ = std::exchange(other.owns_lifetime_, false);
+  }
+  return *this;
+}
+
+void session::release_owned() noexcept {
+  if (!owns_lifetime_ || !state_) {
+    return;
+  }
+  owns_lifetime_ = false;
+  try {
+    state_->close_transport();
+  } catch (...) {
+  }
+}
 
 void session::text(std::string_view message) {
   if (state_) {
@@ -914,6 +942,7 @@ uvp::io::byte_stream session::into_byte_stream() && {
   if (!state_) {
     return {};
   }
+  owns_lifetime_ = false;
   state_->byte_mode = true;
   return uvp::io::byte_stream{std::make_unique<websocket_byte_stream>(std::move(state_))};
 }
@@ -929,13 +958,27 @@ session accept(uvp::http::upgrade_request& req, accept_options options) {
   }
 
   auto state = std::make_shared<session::state>(std::move(options));
-  auto handle = session{state};
+  auto handle = session{state, true};
   const auto response = handshake_response(req, state->options.subprotocol());
   std::vector<std::byte> extra_bytes(req.extra_bytes().begin(), req.extra_bytes().end());
   req.accept(response, [state, extra_bytes = std::move(extra_bytes)](uvp::io::byte_stream stream) {
     state->start(std::move(stream), extra_bytes);
   });
   return handle;
+}
+
+void accept_detached(uvp::http::upgrade_request& req, accept_options options) {
+  if (!valid_handshake(req)) {
+    req.reject(bad_request_response());
+    return;
+  }
+
+  auto state = std::make_shared<session::state>(std::move(options));
+  const auto response = handshake_response(req, state->options.subprotocol());
+  std::vector<std::byte> extra_bytes(req.extra_bytes().begin(), req.extra_bytes().end());
+  req.accept(response, [state, extra_bytes = std::move(extra_bytes)](uvp::io::byte_stream stream) {
+    state->start(std::move(stream), extra_bytes, true);
+  });
 }
 
 uvp::io::byte_stream accept_byte_stream(uvp::http::upgrade_request& req, accept_options options) {

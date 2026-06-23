@@ -88,19 +88,18 @@ utilisant le même type de valeur et les conversions `from_json` / `to_json`.
 `examples/websocket_echo.cpp`
 
 ```cpp
-(void)uvp::websocket::accept(req, uvp::websocket::accept_options{}.on_text(...));
+uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}.on_text(...));
 ```
 
-La session est détruite immédiatement après sa création, mais les callbacks
-continuent de fonctionner grâce au `shared_ptr` interne. Ce comportement
-viole le principe de moindre étonnement : une valeur de retour que l'on peut
-ignorer sans conséquence visible masque une propriété importante de la durée
-de vie de l'objet.
+**Résolu :** `uvp::websocket::accept()` retourne maintenant une session
+`[[nodiscard]]` propriétaire. Le code applicatif doit conserver ce handle,
+le déplacer vers un protocole supérieur, ou le convertir explicitement en
+`byte_stream`.
 
-**En zéro-compatibilité :** la session doit être capturée explicitement
-(`[[nodiscard]]` sur `accept`), ou la documentation doit rendre le contrat de
-durée de vie immédiatement évident. L'auto-entretien via `shared_ptr` devrait
-être opt-in, pas le comportement par défaut silencieux.
+Le comportement auto-entretenu via `shared_ptr` existe toujours pour les
+endpoints callback-only, mais il est opt-in via
+`uvp::websocket::accept_detached()`. L'exemple echo utilise cette API détachée
+afin que la propriété de durée de vie soit visible au point d'appel.
 
 ---
 
@@ -264,7 +263,7 @@ assertions de structure (`assert`). Manquent notamment :
 
 | Priorité | Problème |
 |---|---|
-| 🟠 Surprise runtime | Session WebSocket à durée de vie implicite |
+| ✅ Résolu | Session WebSocket : `accept()` propriétaire, `accept_detached()` explicite |
 | 🟠 Fuite d'implémentation | `route_handler_type`, `body_mode` dans le namespace public |
 | 🟠 Build time | Logique de routing non triviale inline dans le header |
 | 🟠 Ergonomie | Pas de parsing des query parameters |

@@ -117,7 +117,7 @@ module:
 
 ```cpp
 srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
-  (void)uvp::websocket::accept(req, uvp::websocket::accept_options{}
+  uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
     .on_text([](uvp::websocket::session& ws, std::string_view msg) {
       ws.text(msg);
     }));
@@ -136,6 +136,10 @@ uvp::http      -> no dependency on uvp::websocket
 Protocols can run above WebSocket either by consuming the WebSocket session
 directly or by consuming an explicit byte-stream adapter derived from that
 session.
+
+`uvp::websocket::accept()` returns a `[[nodiscard]]` owning session handle. A
+caller that wants callback-only, fire-and-forget behavior must request it
+explicitly with `uvp::websocket::accept_detached()`.
 
 Message-oriented protocols should accept `uvp::websocket::session` directly.
 That keeps WebSocket message boundaries, text/binary distinction, close reasons,

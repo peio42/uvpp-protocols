@@ -11,7 +11,7 @@ uv::loop loop;
 uvp::http::server srv(loop);
 
 srv.upgrade("/echo", [](uvp::http::upgrade_request& req) {
-  (void)uvp::websocket::accept(req, uvp::websocket::accept_options{}
+  uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
     .on_text([](uvp::websocket::session& ws, std::string_view message) {
       ws.text(message);
     })
@@ -29,8 +29,11 @@ loop.run();
 Upgrade routes are separate from normal HTTP routes:
 
 ```cpp
-srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
-  (void)uvp::websocket::accept(req, options);
+std::vector<uvp::websocket::session> sessions;
+
+srv.upgrade("/events", [&sessions](uvp::http::upgrade_request& req) {
+  auto ws = uvp::websocket::accept(req, options);
+  sessions.push_back(std::move(ws));
 });
 ```
 
@@ -41,7 +44,12 @@ closed.
 
 ## Session API
 
-`uvp::websocket::accept()` returns a move-only `uvp::websocket::session` handle.
+`uvp::websocket::accept()` returns a `[[nodiscard]]` move-only
+`uvp::websocket::session` handle. The handle owns the accepted WebSocket
+session: keep it for as long as the connection should remain open, or move it
+to a higher-level protocol object. Destroying the owning handle closes the
+session.
+
 The session owns WebSocket framing, message assembly, control frames, close
 state, and queued writes.
 
@@ -68,6 +76,19 @@ ws.binary(bytes);
 ws.ping();
 ws.pong(payload);
 ws.close(uvp::websocket::close_code::normal, "bye");
+```
+
+For callback-only endpoints that intentionally do not keep a session handle,
+use `uvp::websocket::accept_detached()`. The detached form keeps the internal
+session alive until the WebSocket closes:
+
+```cpp
+srv.upgrade("/echo", [](uvp::http::upgrade_request& req) {
+  uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
+    .on_text([](uvp::websocket::session& ws, std::string_view message) {
+      ws.text(message);
+    }));
+});
 ```
 
 Inbound client frames must be masked. Server frames are never masked. Ping

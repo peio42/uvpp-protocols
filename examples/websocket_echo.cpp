@@ -15,7 +15,7 @@ int main() {
   });
 
   srv.upgrade("/echo", [](uvp::http::upgrade_request& req) {
-    (void)uvp::websocket::accept(req, uvp::websocket::accept_options{}
+    uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
       .on_text([](uvp::websocket::session& ws, std::string_view message) {
         ws.text(message);
       })
