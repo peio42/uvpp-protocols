@@ -30,8 +30,8 @@ public:
 
   server(const server&) = delete;
   server& operator=(const server&) = delete;
-  server(server&&) noexcept;
-  server& operator=(server&&) noexcept;
+  server(server&&) = delete;
+  server& operator=(server&&) = delete;
 
 #define UVP_HTTP_SERVER_ROUTE_METHOD(name) \
   template<class BodyPolicy, class Handler> \

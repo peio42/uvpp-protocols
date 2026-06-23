@@ -873,10 +873,6 @@ server::server(uv::loop& loop, server_options options)
 
 server::~server() = default;
 
-server::server(server&&) noexcept = default;
-
-server& server::operator=(server&&) noexcept = default;
-
 void server::listen(std::string_view host, unsigned int port) {
   auto listener = uvp::io::tcp_listener{*loop_};
   listener.bind(host, port);

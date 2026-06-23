@@ -11,6 +11,8 @@ complètent.
 
 **Fichier :** `src/http/server.cpp`
 
+**Résolu :** `uvp::http::server` est maintenant explicitement non déplaçable.
+
 `server::impl` stocke une référence `server& owner` initialisée dans le
 constructeur de `server` :
 
@@ -19,14 +21,15 @@ server::server(uv::loop& loop, server_options options)
     : loop_(&loop), options_(options), impl_(std::make_unique<impl>(*this)) {
 ```
 
-Le constructeur de déplacement est `= default`, ce qui déplace `impl_` sans
-mettre à jour `impl_->owner`. Après un déplacement, `impl_->owner` référence
+Le constructeur de déplacement était `= default`, ce qui déplaçait `impl_` sans
+mettre à jour `impl_->owner`. Après un déplacement, `impl_->owner` référençait
 l'ancien objet `server` (moved-from). Tous les accès ultérieurs à
 `owner_.owner.router_`, `owner_.owner.options_`, etc. depuis les sessions
-actives sont un comportement indéfini.
+actives étaient un comportement indéfini.
 
-**Correctif :** définir le constructeur de déplacement explicitement pour
-mettre à jour `impl_->owner = *this`, ou supprimer le déplacement.
+Le déplacement a été supprimé plutôt que réparé, car un serveur actif possède
+des listeners, sessions et callbacks asynchrones dont le contrat de déplacement
+serait ambigu.
 
 ---
 
@@ -321,7 +324,7 @@ lisibilité.
 
 | Priorité | Fichier(s) | Problème |
 |---|---|---|
-| 🔴 Bug | `server.cpp` | Référence pendante après déplacement de `server` |
+| ✅ Résolu | `server.cpp` | `server` non déplaçable, plus de référence pendante |
 | 🟠 Sécurité / maintenance | `websocket/session.cpp` | SHA-1 fait maison, non testé |
 | 🟠 Performance | `websocket/session.cpp` | `read_buffer` : erase O(n) en tête |
 | 🟠 Duplication | `server.cpp`, `websocket/session.cpp` | File d'écriture dupliquée |
