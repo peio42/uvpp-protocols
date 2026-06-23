@@ -319,8 +319,8 @@ struct server::impl {
       active_request_->route = std::move(route_match);
       active_request_->req = std::move(req);
 
-      if (!active_request_->route || active_request_->route.body != body_mode::stream) {
-        if (active_request_->route && active_request_->route.body == body_mode::none && request_has_body(message)) {
+      if (!active_request_->route || active_request_->route.body != detail::body_mode::stream) {
+        if (active_request_->route && active_request_->route.body == detail::body_mode::none && request_has_body(message)) {
           active_request_->rejected = true;
           send_error(status::bad_request, false);
         }
@@ -379,14 +379,14 @@ struct server::impl {
       active.received_body_bytes += chunk.size();
       if (active.route && active.received_body_bytes > route_body_limit(active.route)) {
         active.rejected = true;
-        if (active.route.body == body_mode::stream) {
+        if (active.route.body == detail::body_mode::stream) {
           active.body_stream.emit_error(std::make_error_code(std::errc::message_size));
         }
         send_error(status::payload_too_large, false);
         return;
       }
 
-      if (active.route && active.route.body == body_mode::stream) {
+      if (active.route && active.route.body == detail::body_mode::stream) {
         active.body_stream.emit_data(std::as_bytes(std::span{chunk.data(), chunk.size()}));
         if (active.body_stream.paused()) {
           body_processing_paused_ = true;
@@ -405,7 +405,7 @@ struct server::impl {
         return;
       }
 
-      if (active->route && active->route.body == body_mode::stream) {
+      if (active->route && active->route.body == detail::body_mode::stream) {
         active->body_stream.emit_end();
         return;
       }

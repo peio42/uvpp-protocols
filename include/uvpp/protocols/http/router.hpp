@@ -16,6 +16,8 @@
 
 namespace uvp::http {
 
+namespace detail {
+
 enum class body_mode {
   none,
   bytes,
@@ -25,7 +27,6 @@ enum class body_mode {
 
 using route_handler_type = std::function<void(request&, response&, std::span<const std::byte>, request_body_stream*)>;
 
-namespace detail {
 template<class Handler>
 route_handler_type wrap_none_handler(Handler&& handler);
 template<class Handler>
@@ -40,11 +41,11 @@ constexpr auto infer_body_policy();
 
 class router {
 public:
-  using handler_type = route_handler_type;
+  using handler_type = detail::route_handler_type;
 
   struct match_result {
     const handler_type* handler = nullptr;
-    body_mode body = body_mode::none;
+    detail::body_mode body = detail::body_mode::none;
     std::size_t max_body_bytes = 0;
     route_params params;
 
@@ -59,7 +60,7 @@ public:
     routes_.push_back(route_entry{
       method_value,
       std::string(pattern),
-      body_mode::none,
+      detail::body_mode::none,
       0,
       detail::wrap_none_handler(std::forward<Handler>(handler)),
     });
@@ -71,7 +72,7 @@ public:
     routes_.push_back(route_entry{
       method_value,
       std::string(pattern),
-      body_mode::bytes,
+      detail::body_mode::bytes,
       policy.max_size,
       detail::wrap_bytes_handler(std::forward<Handler>(handler)),
     });
@@ -83,7 +84,7 @@ public:
     routes_.push_back(route_entry{
       method_value,
       std::string(pattern),
-      body_mode::text,
+      detail::body_mode::text,
       policy.max_size,
       detail::wrap_text_handler(std::forward<Handler>(handler)),
     });
@@ -95,7 +96,7 @@ public:
     routes_.push_back(route_entry{
       method_value,
       std::string(pattern),
-      body_mode::stream,
+      detail::body_mode::stream,
       policy.max_size,
       detail::wrap_stream_handler(std::forward<Handler>(handler)),
     });
@@ -136,7 +137,7 @@ private:
   struct route_entry {
     method method_value;
     std::string pattern;
-    body_mode body;
+    detail::body_mode body;
     std::size_t max_body_bytes;
     handler_type handler;
   };

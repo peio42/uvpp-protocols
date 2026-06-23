@@ -65,22 +65,22 @@ int main() {
   router.post("/echo", [](uvp::http::request&, uvp::http::response&, std::span<const std::byte>) {});
   auto bytes_match = router.match(uvp::http::method::post, "/echo");
   assert(bytes_match);
-  assert(bytes_match.body == uvp::http::body_mode::bytes);
+  assert(bytes_match.body == uvp::http::detail::body_mode::bytes);
 
   router.post("/message", [](uvp::http::request&, uvp::http::response&, std::string_view) {});
   auto text_match = router.match(uvp::http::method::post, "/message");
   assert(text_match);
-  assert(text_match.body == uvp::http::body_mode::text);
+  assert(text_match.body == uvp::http::detail::body_mode::text);
 
   router.post("/upload", [](uvp::http::request&, uvp::http::response&, uvp::http::request_body_stream&) {});
   auto stream_match = router.match(uvp::http::method::post, "/upload");
   assert(stream_match);
-  assert(stream_match.body == uvp::http::body_mode::stream);
+  assert(stream_match.body == uvp::http::detail::body_mode::stream);
 
   router.post("/empty", uvp::http::body::none{}, [](uvp::http::request&, uvp::http::response&) {});
   auto none_match = router.match(uvp::http::method::post, "/empty");
   assert(none_match);
-  assert(none_match.body == uvp::http::body_mode::none);
+  assert(none_match.body == uvp::http::detail::body_mode::none);
 
   uvp::http::response response;
   response.json(uvp::json{{"status", "ok"}});

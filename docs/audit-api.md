@@ -108,19 +108,19 @@ afin que la propriété de durée de vie soit visible au point d'appel.
 **Fichier :** `include/uvpp/protocols/http/router.hpp`
 
 ```cpp
-// Namespace uvp::http — donc API publique
+// Namespace uvp::http::detail — détails de dispatch interne
 using route_handler_type = std::function<void(request&, response&,
     std::span<const std::byte>, request_body_stream*)>;
 
 enum class body_mode { none, bytes, text, stream };
 ```
 
-Ces types sont des détails du système de dispatch interne. Un utilisateur n'a
-jamais besoin d'écrire un `route_handler_type` à la main : il passe un lambda
-typé à `srv.get(...)`. L'exposition de `body_mode` dans l'espace de noms
-public encourage un usage qui ne devrait pas exister.
+**Résolu :** ces types ont été déplacés dans `uvp::http::detail`.
 
-**En zéro-compatibilité :** déplacer dans `uvp::http::detail::`.
+Ils restent utilisés par `router` et `server` pour le dispatch interne, mais
+ne sont plus des noms directs de l'espace `uvp::http`. Un utilisateur continue
+à passer des lambdas typés à `srv.get(...)`, `srv.post(...)`, etc., sans écrire
+de `route_handler_type` ni de `body_mode`.
 
 ---
 
@@ -264,7 +264,7 @@ assertions de structure (`assert`). Manquent notamment :
 | Priorité | Problème |
 |---|---|
 | ✅ Résolu | Session WebSocket : `accept()` propriétaire, `accept_detached()` explicite |
-| 🟠 Fuite d'implémentation | `route_handler_type`, `body_mode` dans le namespace public |
+| ✅ Résolu | `route_handler_type`, `body_mode` déplacés dans `uvp::http::detail` |
 | 🟠 Build time | Logique de routing non triviale inline dans le header |
 | 🟠 Ergonomie | Pas de parsing des query parameters |
 | 🟠 Couverture | Tests insuffisants |
