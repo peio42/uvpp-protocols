@@ -20,6 +20,7 @@
 #include <uvpp/protocols/io/tcp_listener.hpp>
 
 #include "detail/http1_state_machine.hpp"
+#include "detail/route_matching.hpp"
 
 namespace uvp::http {
 

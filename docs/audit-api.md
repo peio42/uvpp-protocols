@@ -128,13 +128,14 @@ de `route_handler_type` ni de `body_mode`.
 
 **Fichier :** `include/uvpp/protocols/http/router.hpp`
 
-Les fonctions `next_route_segment` et `route_pattern_matches` sont
-`inline` dans le header, dans `uvp::http::detail`. Elles contiennent
-une logique non triviale (segments, wildcards, paramètres nommés) qui
-sera compilée dans chaque unité de traduction incluant `router.hpp`.
+**Résolu :** la logique de matching runtime a été déplacée dans
+`src/http/router.cpp`.
 
-**En zéro-compatibilité :** les déplacer dans un `.cpp`. Le header ne
-devrait exposer que les déclarations.
+`next_route_segment` est maintenant une fonction locale au `.cpp`.
+`route_pattern_matches` est déclaré dans le header interne
+`src/http/detail/route_matching.hpp`, partagé par `router.cpp` et
+`server.cpp` pour les routes d'upgrade. Le header public conserve seulement
+les templates nécessaires à l'enregistrement ergonomique des handlers.
 
 ---
 
@@ -265,7 +266,7 @@ assertions de structure (`assert`). Manquent notamment :
 |---|---|
 | ✅ Résolu | Session WebSocket : `accept()` propriétaire, `accept_detached()` explicite |
 | ✅ Résolu | `route_handler_type`, `body_mode` déplacés dans `uvp::http::detail` |
-| 🟠 Build time | Logique de routing non triviale inline dans le header |
+| ✅ Résolu | Logique de routing runtime déplacée dans `src/http/router.cpp` |
 | 🟠 Ergonomie | Pas de parsing des query parameters |
 | 🟠 Couverture | Tests insuffisants |
 | 🟡 Performance | Router O(n) |

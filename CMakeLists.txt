@@ -43,6 +43,7 @@ target_sources(
     src/http/request.cpp
     src/http/response.cpp
     src/http/route_params.cpp
+    src/http/router.cpp
     src/http/server.cpp
     src/http/server_options.cpp
     src/http/status.cpp
