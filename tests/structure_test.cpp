@@ -62,6 +62,48 @@ int main() {
   assert(static_match);
   assert(static_match.params.get("path") == "css/app.css");
 
+  router.get("/priority/:id", [](uvp::http::request&, uvp::http::response&) {});
+  router.get("/priority/me", [](uvp::http::request&, uvp::http::response&) {});
+  router.get("/priority/me/details", [](uvp::http::request&, uvp::http::response&) {});
+  auto priority_static_match = router.match(uvp::http::method::get, "/priority/me");
+  assert(priority_static_match);
+  assert(priority_static_match.params.get("id").empty());
+  auto priority_param_match = router.match(uvp::http::method::get, "/priority/you");
+  assert(priority_param_match);
+  assert(priority_param_match.params.get("id") == "you");
+
+  bool duplicate_rejected = false;
+  try {
+    router.get("/health", [](uvp::http::request&, uvp::http::response&) {});
+  } catch (const std::invalid_argument&) {
+    duplicate_rejected = true;
+  }
+  assert(duplicate_rejected);
+
+  bool parameter_conflict_rejected = false;
+  try {
+    router.get("/priority/:name", [](uvp::http::request&, uvp::http::response&) {});
+  } catch (const std::invalid_argument&) {
+    parameter_conflict_rejected = true;
+  }
+  assert(parameter_conflict_rejected);
+
+  bool unnamed_wildcard_rejected = false;
+  try {
+    router.get("/assets/*", [](uvp::http::request&, uvp::http::response&) {});
+  } catch (const std::invalid_argument&) {
+    unnamed_wildcard_rejected = true;
+  }
+  assert(unnamed_wildcard_rejected);
+
+  bool wildcard_tail_rejected = false;
+  try {
+    router.get("/assets/*path/thumb", [](uvp::http::request&, uvp::http::response&) {});
+  } catch (const std::invalid_argument&) {
+    wildcard_tail_rejected = true;
+  }
+  assert(wildcard_tail_rejected);
+
   router.post("/echo", [](uvp::http::request&, uvp::http::response&, std::span<const std::byte>) {});
   auto bytes_match = router.match(uvp::http::method::post, "/echo");
   assert(bytes_match);

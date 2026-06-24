@@ -1,11 +1,14 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -57,50 +60,43 @@ public:
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, body::none policy, Handler&& handler) {
-    routes_.push_back(route_entry{
+    (void)policy;
+    return add_route(
       method_value,
-      std::string(pattern),
+      pattern,
       detail::body_mode::none,
       0,
-      detail::wrap_none_handler(std::forward<Handler>(handler)),
-    });
-    return *this;
+      detail::wrap_none_handler(std::forward<Handler>(handler)));
   }
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, body::bytes policy, Handler&& handler) {
-    routes_.push_back(route_entry{
+    return add_route(
       method_value,
-      std::string(pattern),
+      pattern,
       detail::body_mode::bytes,
       policy.max_size,
-      detail::wrap_bytes_handler(std::forward<Handler>(handler)),
-    });
-    return *this;
+      detail::wrap_bytes_handler(std::forward<Handler>(handler)));
   }
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, body::text policy, Handler&& handler) {
-    routes_.push_back(route_entry{
+    return add_route(
       method_value,
-      std::string(pattern),
+      pattern,
       detail::body_mode::text,
       policy.max_size,
-      detail::wrap_text_handler(std::forward<Handler>(handler)),
-    });
-    return *this;
+      detail::wrap_text_handler(std::forward<Handler>(handler)));
   }
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, body::stream policy, Handler&& handler) {
-    routes_.push_back(route_entry{
+    return add_route(
       method_value,
-      std::string(pattern),
+      pattern,
       detail::body_mode::stream,
       policy.max_size,
-      detail::wrap_stream_handler(std::forward<Handler>(handler)),
-    });
-    return *this;
+      detail::wrap_stream_handler(std::forward<Handler>(handler)));
   }
 
   template<class Handler>
@@ -130,19 +126,44 @@ public:
 
   [[nodiscard]] match_result match(method method_value, std::string_view path) const;
   [[nodiscard]] const handler_type* find(method method_value, std::string_view path) const;
-  [[nodiscard]] bool empty() const noexcept { return routes_.empty(); }
-  [[nodiscard]] std::size_t size() const noexcept { return routes_.size(); }
+  [[nodiscard]] bool empty() const noexcept { return route_count_ == 0; }
+  [[nodiscard]] std::size_t size() const noexcept { return route_count_; }
 
 private:
-  struct route_entry {
-    method method_value;
-    std::string pattern;
+  struct route_target {
     detail::body_mode body;
     std::size_t max_body_bytes;
     handler_type handler;
   };
 
-  std::vector<route_entry> routes_;
+  static constexpr std::size_t method_count_ = static_cast<std::size_t>(method::unknown) + 1U;
+
+  struct named_child {
+    std::string name;
+    std::size_t node = 0;
+  };
+
+  struct trie_node {
+    std::unordered_map<std::string, std::size_t> static_children;
+    std::optional<named_child> parameter_child;
+    std::optional<named_child> wildcard_child;
+    std::array<std::optional<route_target>, method_count_> targets;
+  };
+
+  router& add_route(
+    method method_value,
+    std::string_view pattern,
+    detail::body_mode body,
+    std::size_t max_body_bytes,
+    handler_type handler);
+  [[nodiscard]] const route_target* match_node(
+    std::size_t node_index,
+    std::size_t method_index,
+    std::string_view path,
+    route_params& params) const;
+
+  std::vector<trie_node> nodes_{{}};
+  std::size_t route_count_ = 0;
 };
 
 namespace detail {

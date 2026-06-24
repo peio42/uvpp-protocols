@@ -276,6 +276,15 @@ srv.get("/users/:id",
   });
 ```
 
+Routes are matched by path segment. Static segments have priority over named
+parameters, and named parameters have priority over wildcard tails. If a static
+branch does not produce a complete match, the router can still fall back to a
+parameter or wildcard branch.
+
+HTTP route registration rejects duplicate method/pattern pairs, unnamed
+parameters, wildcards that are not the final segment, and conflicting parameter
+names at the same tree position.
+
 ## Errors
 
 Route handlers may throw. Uncaught exceptions are handled by the server error

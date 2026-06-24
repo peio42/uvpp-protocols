@@ -126,7 +126,8 @@ de `route_handler_type` ni de `body_mode`.
 
 ## 6. Logique de routing inline dans le header public
 
-**Fichier :** `include/uvpp/protocols/http/router.hpp`
+**Fichiers :** `include/uvpp/protocols/http/router.hpp`,
+`src/http/router.cpp`
 
 **Résolu :** la logique de matching runtime a été déplacée dans
 `src/http/router.cpp`.
@@ -141,15 +142,22 @@ les templates nécessaires à l'enregistrement ergonomique des handlers.
 
 ## 7. Router en O(n) par scan linéaire
 
-**Fichier :** `include/uvpp/protocols/http/router.hpp`
+**Fichiers :** `include/uvpp/protocols/http/router.hpp`,
+`src/http/router.cpp`
 
-```cpp
-for (const auto& route_entry : routes_) { ... }
-```
+**Résolu :** le routeur HTTP principal utilise maintenant un trie de segments.
 
-Toutes les routes sont comparées séquentiellement pour chaque requête.
-Pour un usage en production avec un grand nombre de routes, un trie de
-segments ou une table de dispatch par méthode + préfixe serait plus adapté.
+Les routes sont indexées par segment, avec des handlers par méthode stockés aux
+nœuds terminaux. Le matching n'est plus proportionnel au nombre total de routes,
+mais au nombre de segments du chemin, avec priorité stable :
+
+1. segment statique ;
+2. segment paramétré ;
+3. wildcard final.
+
+Le changement ajoute aussi la validation des patterns au moment de
+l'enregistrement : paramètres nommés, wildcard final nommé, doublons et
+conflits de paramètres.
 
 ---
 
@@ -269,7 +277,7 @@ assertions de structure (`assert`). Manquent notamment :
 | ✅ Résolu | Logique de routing runtime déplacée dans `src/http/router.cpp` |
 | 🟠 Ergonomie | Pas de parsing des query parameters |
 | 🟠 Couverture | Tests insuffisants |
-| 🟡 Performance | Router O(n) |
+| ✅ Résolu | Router par trie de segments |
 | 🟡 Exhaustivité | `status` enum incomplet |
 | 🟡 Maintenabilité | Macros pour générer les méthodes HTTP |
 | 🟡 Conception | Callbacks et config mélangés dans `accept_options` |

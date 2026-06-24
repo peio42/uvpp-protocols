@@ -125,8 +125,7 @@ according to the configured close policy.
 
 ## Routing
 
-The MVP router may start with exact method/path matches. The intended route
-model should support:
+The route model supports:
 
 - exact paths: `/health`;
 - named parameters: `/users/:id`;
@@ -136,6 +135,39 @@ model should support:
 
 Route matching should operate on the decoded path component, not the raw target.
 The raw target remains available on `request`.
+
+The router is implemented as a segment trie rather than a linear scan. The trie
+matches in time proportional to the number of path segments, with route targets
+stored at terminal nodes and method-specific handlers attached to each target.
+Matching priority is:
+
+1. static segment;
+2. named parameter segment;
+3. wildcard tail segment.
+
+Static branches are tried first, but matching still falls back to a parameter or
+wildcard branch if the static branch does not produce a complete match. This
+preserves intuitive behavior for combinations such as `/users/me/details` and
+`/users/:id`.
+
+HTTP route registration validates patterns early:
+
+- named parameters must have a non-empty name;
+- wildcard tails must have a non-empty name and be the final segment;
+- duplicate method + pattern registrations are rejected;
+- conflicting parameter names at the same tree position, such as `/users/:id`
+  and `/users/:name`, are rejected.
+
+The trie also gives a natural foundation for future versions:
+
+- `405 Method Not Allowed` with `Allow` when the path matches another method;
+- `HEAD` fallback to `GET` while suppressing the response body;
+- automatic `OPTIONS` for known paths;
+- route groups with shared prefixes;
+- middleware or hooks attached to subtrees.
+
+Those features should build on the trie, but they should remain separate API
+changes from the first trie implementation.
 
 Handlers receive request and response references, plus a body argument when the
 body policy produces one:
