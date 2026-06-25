@@ -144,6 +144,38 @@ body.on_data([&body](std::span<const std::byte> chunk) {
 `on_end` runs after the whole body is received. `on_error` reports parser
 errors, body limit violations, disconnects, and read failures.
 
+## Query Parameters
+
+`request::query()` returns the raw query string, which is useful for logging,
+signature checks, proxies, and diagnostics. For application logic, use the
+parsed query parameter helpers:
+
+```cpp
+srv.get("/search", [](uvp::http::request& req, uvp::http::response& res) {
+  const auto q = req.query_or("q", "");
+  const auto tags = req.query_all("tag");
+
+  if (req.query("debug")) {
+    // The parameter is present, even if its value is empty.
+  }
+
+  res.json(uvp::json{
+    {"q", std::string(q)},
+    {"tag_count", tags.size()},
+  });
+});
+```
+
+Repeated keys are preserved:
+
+```text
+/search?q=uvpp&tag=cxx&tag=networking
+```
+
+`req.query("tag")` returns the first value, while `req.query_all("tag")`
+returns all values in request order. Names and values are decoded with `%XX`
+escapes and `+` as a space. Invalid percent escapes are kept literally.
+
 ## Responses
 
 Simple responses end immediately:

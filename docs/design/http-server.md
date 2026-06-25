@@ -239,6 +239,10 @@ public:
   std::string_view target() const noexcept;
   std::string_view path() const noexcept;
   std::string_view query() const noexcept;
+  std::optional<std::string_view> query(std::string_view name) const noexcept;
+  std::string_view query_or(std::string_view name, std::string_view fallback = {}) const noexcept;
+  std::span<const std::string> query_all(std::string_view name) const noexcept;
+  const query_params& query_params() const noexcept;
 
   const headers& headers() const noexcept;
   std::string_view header(std::string_view name) const noexcept;
@@ -256,6 +260,26 @@ Applications should copy values they need after the handler returns.
 Connection metadata is a snapshot of local and remote endpoints. Handlers that
 need to take over the transport should use the explicit upgrade path rather
 than `request`.
+
+`query()` without arguments returns the raw query string exactly as received in
+the request target. Structured query access is provided by an immutable
+`query_params` view owned by the request:
+
+```cpp
+class query_params {
+public:
+  bool contains(std::string_view name) const noexcept;
+  std::optional<std::string_view> first(std::string_view name) const noexcept;
+  std::string_view get(std::string_view name, std::string_view fallback = {}) const noexcept;
+  std::span<const std::string> all(std::string_view name) const noexcept;
+};
+```
+
+Parsing keeps duplicate keys, treats a key without `=` as present with an empty
+value, decodes `%XX` escapes, and maps `+` to a space. Invalid percent escapes
+are left literal instead of rejecting the request. The initial API intentionally
+stays string-based; typed extraction and validation can be added later as a
+separate body/query binding layer.
 
 ## Request Body Streaming
 

@@ -43,6 +43,30 @@ int main() {
   assert(std::holds_alternative<uvp::io::tcp_endpoint>(connection.local_endpoint()));
   assert(std::holds_alternative<uvp::io::pipe_endpoint>(connection.remote_endpoint()));
 
+  uvp::http::request request(
+    uvp::http::method::get,
+    "/search?tag=cxx&tag=networking&q=&encoded=a+b%2Fc&bad=%zz",
+    "/search",
+    "tag=cxx&tag=networking&q=&encoded=a+b%2Fc&bad=%zz",
+    uvp::http::headers{},
+    {},
+    uvp::http::route_params{},
+    connection);
+  assert(request.query() == "tag=cxx&tag=networking&q=&encoded=a+b%2Fc&bad=%zz");
+  assert(request.query("tag"));
+  assert(*request.query("tag") == "cxx");
+  const auto tags = request.query_all("tag");
+  assert(tags.size() == 2);
+  assert(tags[0] == "cxx");
+  assert(tags[1] == "networking");
+  assert(request.query("q"));
+  assert(request.query("q")->empty());
+  assert(!request.query("missing"));
+  assert(request.query_or("missing", "fallback") == "fallback");
+  assert(request.query_or("encoded") == "a b/c");
+  assert(request.query_or("bad") == "%zz");
+  assert(request.query_params().contains("tag"));
+
   uvp::http::router router;
   router.get("/health", [](uvp::http::request&, uvp::http::response& res) {
     res.text("ok");

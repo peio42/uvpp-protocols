@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -74,6 +75,32 @@ private:
   std::shared_ptr<detail::request_body_stream_state> state_;
 };
 
+class query_params {
+public:
+  struct entry {
+    std::string name;
+    std::vector<std::string> values;
+  };
+
+  using container_type = std::vector<entry>;
+  using const_iterator = container_type::const_iterator;
+
+  query_params() = default;
+  explicit query_params(std::string_view raw_query);
+
+  [[nodiscard]] bool contains(std::string_view name) const noexcept;
+  [[nodiscard]] std::optional<std::string_view> first(std::string_view name) const noexcept;
+  [[nodiscard]] std::string_view get(std::string_view name, std::string_view fallback = {}) const noexcept;
+  [[nodiscard]] std::span<const std::string> all(std::string_view name) const noexcept;
+  [[nodiscard]] bool empty() const noexcept { return entries_.empty(); }
+
+  [[nodiscard]] const_iterator begin() const noexcept { return entries_.begin(); }
+  [[nodiscard]] const_iterator end() const noexcept { return entries_.end(); }
+
+private:
+  container_type entries_;
+};
+
 class request {
 public:
   request() = default;
@@ -91,6 +118,16 @@ public:
   [[nodiscard]] std::string_view target() const noexcept { return target_; }
   [[nodiscard]] std::string_view path() const noexcept { return path_; }
   [[nodiscard]] std::string_view query() const noexcept { return query_; }
+  [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const noexcept {
+    return query_params_.first(name);
+  }
+  [[nodiscard]] std::string_view query_or(std::string_view name, std::string_view fallback = {}) const noexcept {
+    return query_params_.get(name, fallback);
+  }
+  [[nodiscard]] std::span<const std::string> query_all(std::string_view name) const noexcept {
+    return query_params_.all(name);
+  }
+  [[nodiscard]] const http::query_params& query_params() const noexcept { return query_params_; }
 
   [[nodiscard]] const http::headers& headers() const noexcept { return headers_; }
   [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
@@ -109,6 +146,7 @@ private:
   std::string target_;
   std::string path_;
   std::string query_;
+  http::query_params query_params_;
   http::headers headers_;
   std::vector<std::byte> body_;
   route_params params_;

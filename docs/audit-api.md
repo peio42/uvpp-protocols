@@ -236,6 +236,20 @@ d'usage tout à fait ordinaires.
 de `req.query("foo")` pour accéder directement à un paramètre. L'utilisateur
 doit parser lui-même, ce qui est une lacune ergonomique pour une API HTTP.
 
+**Statut : résolu.** `request` conserve `query()` pour la chaîne brute et
+expose maintenant une vue structurée immuable :
+
+```cpp
+std::optional<std::string_view> req.query("foo");
+std::string_view req.query_or("foo", "fallback");
+std::span<const std::string> req.query_all("tag");
+const uvp::http::query_params& params = req.query_params();
+```
+
+Le parsing conserve les clés répétées, distingue absence et valeur vide, décode
+les échappements `%XX`, traite `+` comme un espace et laisse les échappements
+invalides sous forme littérale.
+
 ---
 
 ## 12. Pas de middleware ni de groupes de routes

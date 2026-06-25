@@ -4,6 +4,50 @@
 
 namespace uvp::http {
 
+namespace {
+
+int hex_value(char value) noexcept {
+  if (value >= '0' && value <= '9') {
+    return value - '0';
+  }
+  if (value >= 'a' && value <= 'f') {
+    return value - 'a' + 10;
+  }
+  if (value >= 'A' && value <= 'F') {
+    return value - 'A' + 10;
+  }
+  return -1;
+}
+
+std::string decode_query_component(std::string_view component) {
+  std::string decoded;
+  decoded.reserve(component.size());
+
+  for (std::size_t offset = 0; offset < component.size(); ++offset) {
+    const auto value = component[offset];
+    if (value == '+') {
+      decoded.push_back(' ');
+      continue;
+    }
+
+    if (value == '%' && offset + 2 < component.size()) {
+      const auto high = hex_value(component[offset + 1]);
+      const auto low = hex_value(component[offset + 2]);
+      if (high >= 0 && low >= 0) {
+        decoded.push_back(static_cast<char>((high << 4) | low));
+        offset += 2;
+        continue;
+      }
+    }
+
+    decoded.push_back(value);
+  }
+
+  return decoded;
+}
+
+} // namespace
+
 namespace detail {
 
 struct request_body_stream_state {
@@ -124,6 +168,72 @@ void request_body_stream::on_pause_resume(std::function<void()> on_pause, std::f
   }
 }
 
+query_params::query_params(std::string_view raw_query) {
+  std::size_t offset = 0;
+  while (offset <= raw_query.size()) {
+    const auto next = raw_query.find('&', offset);
+    const auto segment_end = next == std::string_view::npos ? raw_query.size() : next;
+    const auto segment = raw_query.substr(offset, segment_end - offset);
+
+    if (!segment.empty()) {
+      const auto separator = segment.find('=');
+      const auto raw_name = separator == std::string_view::npos ? segment : segment.substr(0, separator);
+      const auto raw_value =
+        separator == std::string_view::npos ? std::string_view{} : segment.substr(separator + 1);
+
+      auto name = decode_query_component(raw_name);
+      auto value = decode_query_component(raw_value);
+      bool appended = false;
+      for (auto& entry : entries_) {
+        if (entry.name == name) {
+          entry.values.push_back(std::move(value));
+          appended = true;
+          break;
+        }
+      }
+      if (!appended) {
+        auto& entry = entries_.emplace_back();
+        entry.name = std::move(name);
+        entry.values.push_back(std::move(value));
+      }
+    }
+
+    if (next == std::string_view::npos) {
+      break;
+    }
+    offset = next + 1;
+  }
+}
+
+bool query_params::contains(std::string_view name) const noexcept {
+  return first(name).has_value();
+}
+
+std::optional<std::string_view> query_params::first(std::string_view name) const noexcept {
+  for (const auto& entry : entries_) {
+    if (entry.name == name) {
+      return std::string_view(entry.values.front());
+    }
+  }
+  return std::nullopt;
+}
+
+std::string_view query_params::get(std::string_view name, std::string_view fallback) const noexcept {
+  if (const auto value = first(name)) {
+    return *value;
+  }
+  return fallback;
+}
+
+std::span<const std::string> query_params::all(std::string_view name) const noexcept {
+  for (const auto& entry : entries_) {
+    if (entry.name == name) {
+      return entry.values;
+    }
+  }
+  return {};
+}
+
 request::request(
   http::method method,
   std::string target,
@@ -137,6 +247,7 @@ request::request(
       target_(std::move(target)),
       path_(std::move(path)),
       query_(std::move(query)),
+      query_params_(query_),
       headers_(std::move(headers)),
       body_(std::move(body)),
       params_(std::move(params)),
