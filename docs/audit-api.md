@@ -267,7 +267,7 @@ l'ergonomie applicative.
 
 ## 13. Couverture de tests insuffisante
 
-**Fichier :** `tests/structure_test.cpp`
+**Fichier :** `tests/`
 
 Le seul fichier de test vérifie essentiellement la compilation et quelques
 assertions de structure (`assert`). Manquent notamment :
@@ -280,6 +280,24 @@ assertions de structure (`assert`). Manquent notamment :
   double `end`)
 - Tests d'intégration réseau réels (client-serveur sur socket local)
 
+**Statut : résolu pour le socle initial.** Le test monolithique
+`tests/structure_test.cpp` a été remplacé par un runner léger sans dépendance
+externe et par des fichiers de tests spécialisés :
+
+- `tests/http1_parser_test.cpp`
+- `tests/http_request_test.cpp`
+- `tests/http_router_test.cpp`
+- `tests/http_response_test.cpp`
+- `tests/http_server_integration_test.cpp`
+- `tests/io_test.cpp`
+- `tests/websocket_test.cpp`
+
+La couverture inclut désormais le parser HTTP/1 (requête complète, parsing en
+plusieurs passes, événements, chunked, erreur, upgrade), le routeur (priorités,
+collisions, patterns invalides, body policies), les query parameters, les
+cycles de vie de réponses principales et un test d'intégration TCP local avec
+un vrai `uvp::http::server`.
+
 ---
 
 ## Résumé priorisé
@@ -289,8 +307,8 @@ assertions de structure (`assert`). Manquent notamment :
 | ✅ Résolu | Session WebSocket : `accept()` propriétaire, `accept_detached()` explicite |
 | ✅ Résolu | `route_handler_type`, `body_mode` déplacés dans `uvp::http::detail` |
 | ✅ Résolu | Logique de routing runtime déplacée dans `src/http/router.cpp` |
-| 🟠 Ergonomie | Pas de parsing des query parameters |
-| 🟠 Couverture | Tests insuffisants |
+| ✅ Résolu | Query parameters structurés sur `request` |
+| ✅ Résolu | Socle de tests insuffisant remplacé par une suite structurée |
 | ✅ Résolu | Router par trie de segments |
 | 🟡 Exhaustivité | `status` enum incomplet |
 | 🟡 Maintenabilité | Macros pour générer les méthodes HTTP |

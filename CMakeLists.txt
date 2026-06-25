@@ -88,9 +88,19 @@ endif()
 
 if(UVPP_PROTOCOLS_BUILD_TESTS)
   enable_testing()
-  add_executable(uvpp_protocols_structure_test tests/structure_test.cpp)
-  target_link_libraries(uvpp_protocols_structure_test PRIVATE uvpp::protocols uvpp::uvpp)
-  add_test(NAME uvpp_protocols_structure_test COMMAND uvpp_protocols_structure_test)
+  add_executable(
+    uvpp_protocols_tests
+    tests/test_main.cpp
+    tests/http1_parser_test.cpp
+    tests/http_request_test.cpp
+    tests/http_response_test.cpp
+    tests/http_router_test.cpp
+    tests/http_server_integration_test.cpp
+    tests/io_test.cpp
+    tests/websocket_test.cpp)
+  target_include_directories(uvpp_protocols_tests PRIVATE ${PROJECT_SOURCE_DIR})
+  target_link_libraries(uvpp_protocols_tests PRIVATE uvpp::protocols uvpp::uvpp)
+  add_test(NAME uvpp_protocols_tests COMMAND uvpp_protocols_tests)
 endif()
 
 install(
