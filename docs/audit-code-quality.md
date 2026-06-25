@@ -72,6 +72,13 @@ d'intégration si l'autre côté de la connexion est indulgent.
 (`<openssl/sha.h>`, ou une dépendance légère déjà présente). À défaut,
 extraire et tester unitairement cette fonction.
 
+**Statut : résolu.** Le calcul `Sec-WebSocket-Accept` a été extrait dans
+`src/websocket/detail/handshake.cpp` et utilise OpenSSL `Crypto` via l'API EVP
+haut niveau. OpenSSL reste un détail d'implémentation privé du module
+WebSocket, compatible avec la modularisation future des targets. Le vecteur RFC
+6455 (`dGhlIHNhbXBsZSBub25jZQ==` -> `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=`) est testé
+unitairement.
+
 ---
 
 ## 4. `read_buffer` : `erase` au début d'un `std::vector`
@@ -91,6 +98,13 @@ significative.
 
 **Correctif :** utiliser un `std::deque<std::byte>` avec `pop_front` ou un
 buffer circulaire, ou maintenir un index de lecture sans réallouer.
+
+**Statut : résolu.** Le buffer entrant reste un `std::vector<std::byte>` pour
+conserver un parsing contigu et cache-friendly, mais la session maintient
+maintenant un `read_offset`. Les frames consommées avancent cet offset et le
+buffer n'est compacté que lorsque tout est consommé ou lorsque le préfixe mort
+devient significatif. Un test WebSocket local envoie deux frames client
+coalescées dans un même write pour valider l'enchaînement.
 
 ---
 
@@ -325,8 +339,8 @@ lisibilité.
 | Priorité | Fichier(s) | Problème |
 |---|---|---|
 | ✅ Résolu | `server.cpp` | `server` non déplaçable, plus de référence pendante |
-| 🟠 Sécurité / maintenance | `websocket/session.cpp` | SHA-1 fait maison, non testé |
-| 🟠 Performance | `websocket/session.cpp` | `read_buffer` : erase O(n) en tête |
+| ✅ Résolu | `websocket/detail/handshake.cpp` | SHA-1 WebSocket délégué à OpenSSL EVP et testé |
+| ✅ Résolu | `websocket/session.cpp` | `read_buffer` utilise un offset et un compactage amorti |
 | 🟠 Duplication | `server.cpp`, `websocket/session.cpp` | File d'écriture dupliquée |
 | 🟡 Lisibilité | `server.cpp` | `header_name_equals` alloue inutilement |
 | 🟡 Lisibilité | `server.cpp` | `reason_phrase_for` duplique `reason_phrase` |

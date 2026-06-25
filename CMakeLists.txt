@@ -48,6 +48,7 @@ target_sources(
     src/http/server_options.cpp
     src/http/status.cpp
     src/http/upgrade.cpp
+    src/websocket/detail/handshake.cpp
     src/websocket/session.cpp)
 
 target_include_directories(
@@ -68,6 +69,7 @@ include(cmake/Dependencies.cmake)
 uvpp_protocols_require_uvpp()
 uvpp_protocols_require_llhttp(uvpp_protocols)
 uvpp_protocols_require_nlohmann_json(uvpp_protocols)
+uvpp_protocols_require_openssl_crypto(uvpp_protocols)
 target_include_directories(
   uvpp_protocols
   PRIVATE

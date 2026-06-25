@@ -203,5 +203,15 @@ adding a WebSocket dependency. The server must:
 - perform a close handshake. Timeout enforcement can be added when the session
   grows timer-owned liveness policies.
 
-The implementation should keep SHA-1 and base64 helpers private to the
-WebSocket module unless a later shared utility need appears.
+The implementation should keep the accept-value helper private to the WebSocket
+module unless a later shared utility need appears. SHA-1 should be delegated to
+OpenSSL `Crypto` through the high-level EVP digest API, with OpenSSL headers and
+types kept out of public uvpp-protocols headers. In the current monolithic
+target, this is a private implementation dependency; once package targets are
+split, it belongs to the WebSocket target only.
+
+Inbound bytes are accumulated in a contiguous `std::vector<std::byte>` plus a
+read offset. The parser advances the offset as complete frames are consumed and
+compacts the vector only when all bytes have been consumed or when the consumed
+prefix becomes large enough to matter. This avoids an O(n) erase at the front
+of the buffer for every frame while preserving cache-friendly indexed parsing.

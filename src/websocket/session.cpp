@@ -16,11 +16,13 @@
 #include <utility>
 #include <vector>
 
+#include "detail/handshake.hpp"
+
 namespace uvp::websocket {
 
 namespace {
 
-constexpr std::string_view websocket_guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+constexpr std::size_t read_buffer_compaction_threshold = 4U * 1024U;
 
 enum class opcode : std::uint8_t {
   continuation = 0x0,
@@ -30,10 +32,6 @@ enum class opcode : std::uint8_t {
   ping = 0x9,
   pong = 0xA,
 };
-
-std::byte as_byte(unsigned char value) noexcept {
-  return static_cast<std::byte>(value);
-}
 
 std::error_code protocol_error() {
   return std::make_error_code(std::errc::protocol_error);
@@ -94,121 +92,6 @@ bool token_list_contains(std::string_view header, std::string_view expected) {
   return false;
 }
 
-std::uint32_t rotate_left(std::uint32_t value, unsigned bits) noexcept {
-  return (value << bits) | (value >> (32U - bits));
-}
-
-std::array<std::byte, 20> sha1(std::string_view message) {
-  std::uint64_t bit_size = static_cast<std::uint64_t>(message.size()) * 8U;
-  std::vector<std::byte> bytes;
-  bytes.reserve(((message.size() + 9U + 63U) / 64U) * 64U);
-  for (char ch : message) {
-    bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(ch)));
-  }
-  bytes.push_back(as_byte(0x80));
-  while ((bytes.size() % 64U) != 56U) {
-    bytes.push_back(as_byte(0));
-  }
-  for (int shift = 56; shift >= 0; shift -= 8) {
-    bytes.push_back(as_byte(static_cast<unsigned char>((bit_size >> shift) & 0xffU)));
-  }
-
-  std::uint32_t h0 = 0x67452301U;
-  std::uint32_t h1 = 0xefcdab89U;
-  std::uint32_t h2 = 0x98badcfeU;
-  std::uint32_t h3 = 0x10325476U;
-  std::uint32_t h4 = 0xc3d2e1f0U;
-
-  for (std::size_t chunk = 0; chunk < bytes.size(); chunk += 64U) {
-    std::array<std::uint32_t, 80> words{};
-    for (std::size_t index = 0; index < 16U; ++index) {
-      const auto offset = chunk + index * 4U;
-      words[index] =
-        (static_cast<std::uint32_t>(bytes[offset]) << 24U) |
-        (static_cast<std::uint32_t>(bytes[offset + 1U]) << 16U) |
-        (static_cast<std::uint32_t>(bytes[offset + 2U]) << 8U) |
-        static_cast<std::uint32_t>(bytes[offset + 3U]);
-    }
-    for (std::size_t index = 16U; index < 80U; ++index) {
-      words[index] = rotate_left(words[index - 3U] ^ words[index - 8U] ^ words[index - 14U] ^ words[index - 16U], 1U);
-    }
-
-    std::uint32_t a = h0;
-    std::uint32_t b = h1;
-    std::uint32_t c = h2;
-    std::uint32_t d = h3;
-    std::uint32_t e = h4;
-
-    for (std::size_t index = 0; index < 80U; ++index) {
-      std::uint32_t f = 0;
-      std::uint32_t k = 0;
-      if (index < 20U) {
-        f = (b & c) | ((~b) & d);
-        k = 0x5a827999U;
-      } else if (index < 40U) {
-        f = b ^ c ^ d;
-        k = 0x6ed9eba1U;
-      } else if (index < 60U) {
-        f = (b & c) | (b & d) | (c & d);
-        k = 0x8f1bbcdcU;
-      } else {
-        f = b ^ c ^ d;
-        k = 0xca62c1d6U;
-      }
-
-      const auto temp = rotate_left(a, 5U) + f + e + k + words[index];
-      e = d;
-      d = c;
-      c = rotate_left(b, 30U);
-      b = a;
-      a = temp;
-    }
-
-    h0 += a;
-    h1 += b;
-    h2 += c;
-    h3 += d;
-    h4 += e;
-  }
-
-  std::array<std::byte, 20> digest{};
-  const std::array words{h0, h1, h2, h3, h4};
-  for (std::size_t index = 0; index < words.size(); ++index) {
-    digest[index * 4U] = as_byte(static_cast<unsigned char>((words[index] >> 24U) & 0xffU));
-    digest[index * 4U + 1U] = as_byte(static_cast<unsigned char>((words[index] >> 16U) & 0xffU));
-    digest[index * 4U + 2U] = as_byte(static_cast<unsigned char>((words[index] >> 8U) & 0xffU));
-    digest[index * 4U + 3U] = as_byte(static_cast<unsigned char>(words[index] & 0xffU));
-  }
-  return digest;
-}
-
-std::string base64(std::span<const std::byte> bytes) {
-  static constexpr char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  std::string output;
-  output.reserve(((bytes.size() + 2U) / 3U) * 4U);
-
-  for (std::size_t index = 0; index < bytes.size(); index += 3U) {
-    const auto b0 = static_cast<unsigned int>(bytes[index]);
-    const auto b1 = index + 1U < bytes.size() ? static_cast<unsigned int>(bytes[index + 1U]) : 0U;
-    const auto b2 = index + 2U < bytes.size() ? static_cast<unsigned int>(bytes[index + 2U]) : 0U;
-    const auto value = (b0 << 16U) | (b1 << 8U) | b2;
-
-    output.push_back(alphabet[(value >> 18U) & 0x3fU]);
-    output.push_back(alphabet[(value >> 12U) & 0x3fU]);
-    output.push_back(index + 1U < bytes.size() ? alphabet[(value >> 6U) & 0x3fU] : '=');
-    output.push_back(index + 2U < bytes.size() ? alphabet[value & 0x3fU] : '=');
-  }
-
-  return output;
-}
-
-std::string websocket_accept_value(std::string_view key) {
-  auto input = std::string(key);
-  input += websocket_guid;
-  const auto digest = sha1(input);
-  return base64(digest);
-}
-
 bool valid_handshake(const uvp::http::upgrade_request& req) {
   return req.method() == uvp::http::method::get &&
          lowercase(req.header("upgrade")) == "websocket" &&
@@ -231,7 +114,7 @@ std::string handshake_response(const uvp::http::upgrade_request& req, std::strin
   response += "upgrade: websocket\r\n";
   response += "connection: Upgrade\r\n";
   response += "sec-websocket-accept: ";
-  response += websocket_accept_value(trim(req.header("sec-websocket-key")));
+  response += detail::websocket_accept_value(trim(req.header("sec-websocket-key")));
   response += "\r\n";
   if (!subprotocol.empty()) {
     response += "sec-websocket-protocol: ";
@@ -340,17 +223,18 @@ struct session::state : public std::enable_shared_from_this<state> {
 
   void parse_frames() {
     while (!closed) {
-      if (read_buffer.size() < 2U) {
+      if (read_buffer.size() - read_offset < 2U) {
+        compact_read_buffer();
         return;
       }
 
-      const auto first = static_cast<unsigned char>(read_buffer[0]);
-      const auto second = static_cast<unsigned char>(read_buffer[1]);
+      const auto first = static_cast<unsigned char>(read_buffer[read_offset]);
+      const auto second = static_cast<unsigned char>(read_buffer[read_offset + 1U]);
       const bool fin = (first & 0x80U) != 0U;
       const bool masked = (second & 0x80U) != 0U;
       const auto raw_opcode = static_cast<unsigned char>(first & 0x0fU);
       std::uint64_t length = second & 0x7fU;
-      std::size_t offset = 2U;
+      std::size_t offset = read_offset + 2U;
 
       if ((first & 0x70U) != 0U || !masked) {
         close_with_error(close_code::protocol_error, protocol_error());
@@ -397,10 +281,28 @@ struct session::state : public std::enable_shared_from_this<state> {
       for (std::size_t index = 0; index < payload.size(); ++index) {
         payload[index] = read_buffer[offset + index] ^ mask[index % 4U];
       }
-      read_buffer.erase(read_buffer.begin(), read_buffer.begin() + static_cast<std::ptrdiff_t>(offset + payload.size()));
+      read_offset = offset + payload.size();
+      compact_read_buffer();
 
       handle_frame(fin, raw_opcode, payload);
     }
+  }
+
+  void compact_read_buffer() {
+    if (read_offset == 0U) {
+      return;
+    }
+    if (read_offset == read_buffer.size()) {
+      read_buffer.clear();
+      read_offset = 0U;
+      return;
+    }
+    if (read_offset < read_buffer_compaction_threshold && read_offset <= read_buffer.size() / 2U) {
+      return;
+    }
+
+    read_buffer.erase(read_buffer.begin(), read_buffer.begin() + static_cast<std::ptrdiff_t>(read_offset));
+    read_offset = 0U;
   }
 
   void handle_frame(bool fin, unsigned char raw_opcode, std::span<const std::byte> payload) {
@@ -700,6 +602,7 @@ struct session::state : public std::enable_shared_from_this<state> {
   accept_options options;
   uvp::io::byte_stream stream;
   std::vector<std::byte> read_buffer;
+  std::size_t read_offset = 0;
   std::deque<pending_write> writes;
   std::size_t pending_write_bytes = 0;
   bool writing = false;

@@ -5,6 +5,11 @@ if(NOT @UVPP_PROTOCOLS_BUNDLED_NLOHMANN_JSON@)
   find_dependency(nlohmann_json CONFIG)
 endif()
 
+if(@UVPP_PROTOCOLS_USES_OPENSSL_CRYPTO@)
+  include(CMakeFindDependencyMacro)
+  find_dependency(OpenSSL REQUIRED COMPONENTS Crypto)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/uvpp-protocolsTargets.cmake")
 
 check_required_components(uvpp-protocols)

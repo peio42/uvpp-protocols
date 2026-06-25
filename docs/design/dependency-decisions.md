@@ -153,6 +153,34 @@ HTTP must not directly depend on a TLS provider, and TLS must not depend on
 HTTP. TLS should also support STARTTLS-style upgrades where an application
 protocol begins in clear text and later hands its transport to `uvp::tls`.
 
+## WebSocket Handshake Digest
+
+RFC 6455 requires SHA-1 for `Sec-WebSocket-Accept`. This use is protocol
+compatibility, not a new security construction selected by uvpp-protocols.
+The project should not maintain a handwritten SHA-1 implementation for this
+handshake.
+
+Decision:
+
+- use OpenSSL `Crypto` for the WebSocket SHA-1 digest;
+- call the high-level EVP digest API rather than algorithm-specific low-level
+  SHA-1 functions;
+- keep OpenSSL includes and calls inside private WebSocket implementation files;
+- link OpenSSL as a private implementation dependency of the current monolithic
+  target;
+- when package targets are split, move that dependency to the WebSocket target
+  only, not HTTP or the aggregate headers.
+
+This keeps the current implementation maintainable while preserving the intended
+future module boundary:
+
+```text
+uvpp::protocols_http        -> no OpenSSL
+uvpp::protocols_websocket   -> HTTP upgrade + OpenSSL::Crypto for handshake digest
+uvpp::protocols_tls         -> OpenSSL::SSL + OpenSSL::Crypto
+uvpp::protocols             -> convenience aggregate
+```
+
 ## Database Protocols
 
 Database adapters are candidates for later milestones. They are not core

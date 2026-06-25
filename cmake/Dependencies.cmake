@@ -140,3 +140,10 @@ function(uvpp_protocols_require_nlohmann_json target)
 
   message(STATUS "uvpp-protocols: JSON value: nlohmann/json")
 endfunction()
+
+function(uvpp_protocols_require_openssl_crypto target)
+  find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+  target_link_libraries(${target} PRIVATE OpenSSL::Crypto)
+  set(UVPP_PROTOCOLS_USES_OPENSSL_CRYPTO ON PARENT_SCOPE)
+  message(STATUS "uvpp-protocols: WebSocket handshake digest: OpenSSL Crypto")
+endfunction()
