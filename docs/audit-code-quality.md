@@ -274,6 +274,24 @@ sans retour synchrone, close-after, compteur de bytes en attente) avec la
 même logique. Une abstraction commune (`async_write_queue` ou similaire)
 éviterait cette duplication et centraliserait les corrections futures.
 
+**Décision : abstraction différée.** La duplication est réelle, mais les deux
+files n'ont déjà plus la même politique :
+
+- HTTP couple la file au pipelining, aux slots de réponse, au streaming
+  chunked, aux upgrades et au comptage des réponses en vol ;
+- WebSocket couple la file aux frames, aux callbacks d'écriture applicatifs,
+  au close handshake et à l'adaptateur `byte_stream`.
+
+Extraire maintenant un gestionnaire commun introduirait un vocabulaire
+générique et des hooks sans réduire fortement la complexité. Les deux
+cheminements restent donc séparés pour préserver la lisibilité locale.
+
+Le sujet doit être réouvert si un troisième protocole réimplémente le même
+noyau, ou si un correctif de file d'écriture doit être appliqué une seconde
+fois. Dans ce cas, l'abstraction devra porter uniquement la mécanique FIFO
+séquentielle (payload possédé, write actif, compteur de bytes), et laisser les
+politiques HTTP/WebSocket aux sessions.
+
 ---
 
 ## 14. `(void)req` vs paramètre non nommé dans les exemples
@@ -341,7 +359,7 @@ lisibilité.
 | ✅ Résolu | `server.cpp` | `server` non déplaçable, plus de référence pendante |
 | ✅ Résolu | `websocket/detail/handshake.cpp` | SHA-1 WebSocket délégué à OpenSSL EVP et testé |
 | ✅ Résolu | `websocket/session.cpp` | `read_buffer` utilise un offset et un compactage amorti |
-| 🟠 Duplication | `server.cpp`, `websocket/session.cpp` | File d'écriture dupliquée |
+| 🟢 Décision | `server.cpp`, `websocket/session.cpp` | Files d'écriture séparées, abstraction différée |
 | 🟡 Lisibilité | `server.cpp` | `header_name_equals` alloue inutilement |
 | 🟡 Lisibilité | `server.cpp` | `reason_phrase_for` duplique `reason_phrase` |
 | 🟡 Lisibilité | `http1_state_machine.cpp` | Nombre magique `return 2` sans commentaire |

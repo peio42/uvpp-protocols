@@ -69,6 +69,14 @@ writes. A module may own write request objects internally because that is part
 of the high-level abstraction. The queue must retain payload bytes until the
 write completion callback runs.
 
+Write queues should not be abstracted merely because two modules both serialize
+asynchronous writes. HTTP response pipelining, HTTP upgrades, WebSocket frames,
+close handshakes, and future TLS ciphertext flushing each carry different
+policy. A shared internal queue is appropriate only once at least three modules
+need the same FIFO mechanics, or once a write-queue bugfix has to be repeated
+across modules. Such an abstraction should own only the mechanics: payload
+lifetime, one active write, byte accounting, and FIFO completion.
+
 ## Timers
 
 Protocol timeouts should use `uv::timer` owned by the server or session:
