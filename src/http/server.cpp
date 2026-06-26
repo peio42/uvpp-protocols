@@ -46,6 +46,31 @@ std::vector<std::byte> body_bytes(std::string_view body) {
   return bytes;
 }
 
+bool contains_method(std::span<const method> methods, method value) noexcept {
+  return std::find(methods.begin(), methods.end(), value) != methods.end();
+}
+
+std::string allow_header_value(std::vector<method> methods) {
+  if (contains_method(methods, method::get) && !contains_method(methods, method::head)) {
+    methods.push_back(method::head);
+  }
+  if (!contains_method(methods, method::options)) {
+    methods.push_back(method::options);
+  }
+  std::sort(methods.begin(), methods.end(), [](method lhs, method rhs) {
+    return static_cast<unsigned int>(lhs) < static_cast<unsigned int>(rhs);
+  });
+
+  std::string value;
+  for (auto method_value : methods) {
+    if (!value.empty()) {
+      value += ", ";
+    }
+    value += to_string(method_value);
+  }
+  return value;
+}
+
 std::string reason_phrase_for(unsigned int status_code) {
   switch (status_code) {
   case 200:
@@ -97,7 +122,12 @@ bool header_name_equals(std::string_view name, std::string_view expected) noexce
   return headers{}.set(name, "").contains(expected);
 }
 
-std::string serialize_response_head(const response& response, bool keep_alive, const server_options& options, bool chunked) {
+std::string serialize_response_head(
+  const response& response,
+  bool keep_alive,
+  const server_options& options,
+  bool chunked,
+  bool suppress_body = false) {
   const auto status_code = response.status_code();
 
   std::ostringstream out;
@@ -128,7 +158,7 @@ std::string serialize_response_head(const response& response, bool keep_alive, c
     out << name << ": " << value << "\r\n";
   }
 
-  if (chunked) {
+  if (chunked && !suppress_body) {
     out << "transfer-encoding: chunked\r\n";
   } else if (!has_content_length) {
     auto body = std::string(response.body());
@@ -148,15 +178,21 @@ std::string serialize_response_head(const response& response, bool keep_alive, c
   return out.str();
 }
 
-std::string serialize_response(const response& response, bool keep_alive, const server_options& options) {
+std::string serialize_response(
+  const response& response,
+  bool keep_alive,
+  const server_options& options,
+  bool suppress_body = false) {
   const auto status_code = response.status_code();
   auto body = std::string(response.body());
   if (status_code == static_cast<unsigned int>(status::no_content)) {
     body.clear();
   }
 
-  auto out = serialize_response_head(response, keep_alive, options, false);
-  out += body;
+  auto out = serialize_response_head(response, keep_alive, options, false, suppress_body);
+  if (!suppress_body) {
+    out += body;
+  }
   return out;
 }
 
@@ -188,6 +224,7 @@ struct server::impl {
     response res;
     bool completed = false;
     bool close_after = false;
+    bool suppress_body = false;
     bool streaming = false;
     bool stream_headers_queued = false;
     bool stream_backpressured = false;
@@ -296,6 +333,29 @@ struct server::impl {
       return connection_info{stream_.local_endpoint(), stream_.remote_endpoint()};
     }
 
+    router::match_result match_request_route(method method_value, std::string_view path) const {
+      auto route_match = owner_.owner.router_.match(method_value, path);
+      if (!route_match && method_value == method::head) {
+        route_match = owner_.owner.router_.match(method::get, path);
+      }
+      return route_match;
+    }
+
+    void dispatch_automatic_method_response(
+      request& req,
+      response& res,
+      std::vector<method> allowed_methods) {
+      const auto allow = allow_header_value(std::move(allowed_methods));
+      if (req.method() == method::options) {
+        res.status(status::no_content).header("allow", allow).end();
+        return;
+      }
+
+      res.status(status::method_not_allowed)
+        .header("allow", allow)
+        .text("method not allowed\n");
+    }
+
     void process_parser_events(bool stop_before_complete = false) {
       const auto& events = parser_.events();
       while (!closed_ && !body_processing_paused_ && handled_events_ < events.size()) {
@@ -332,7 +392,7 @@ struct server::impl {
         route_params{},
         connection(),
       };
-      auto route_match = owner_.owner.router_.match(req.method(), req.path());
+      auto route_match = match_request_route(req.method(), req.path());
       if (route_match) {
         req.params_ = route_match.params;
       }
@@ -351,7 +411,7 @@ struct server::impl {
       }
 
       const auto keep_alive = owner_.owner.options_.keep_alive();
-      active_request_->slot = create_response_slot(!keep_alive);
+      active_request_->slot = create_response_slot(!keep_alive, active_request_->req.method() == method::head);
       if (!active_request_->slot) {
         active_request_->rejected = true;
         return;
@@ -439,7 +499,7 @@ struct server::impl {
     void handle_buffered_message(const detail::http1_message& message, router::match_result route_match) {
       const auto [path, query] = split_path_query(message.target);
       const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive;
-      auto slot = create_response_slot(!keep_alive);
+      auto slot = create_response_slot(!keep_alive, message.method == method::head);
       if (!slot) {
         return;
       }
@@ -467,7 +527,10 @@ struct server::impl {
 
       if (!route_match) {
         try {
-          if (owner_.owner.not_found_handler_) {
+          auto allowed_methods = owner_.owner.router_.allowed_methods(path);
+          if (!allowed_methods.empty()) {
+            dispatch_automatic_method_response(req, res, std::move(allowed_methods));
+          } else if (owner_.owner.not_found_handler_) {
             owner_.owner.not_found_handler_(req, res, {}, nullptr);
             if (!res.ended() && !res.deferred() && !res.streaming()) {
               res.end();
@@ -500,7 +563,7 @@ struct server::impl {
     }
 
     void handle_message(const detail::http1_message& message) {
-      handle_buffered_message(message, owner_.owner.router_.match(message.method, split_path_query(message.target).first));
+      handle_buffered_message(message, match_request_route(message.method, split_path_query(message.target).first));
     }
 
     void pause_request_body() {
@@ -599,7 +662,7 @@ struct server::impl {
       flush_next();
     }
 
-    std::shared_ptr<response_slot> create_response_slot(bool close_after) {
+    std::shared_ptr<response_slot> create_response_slot(bool close_after, bool suppress_body = false) {
       const auto pending_responses = responses_.size() + pending_response_writes_;
       if (pending_responses >= owner_.owner.options_.max_pending_responses_per_connection()) {
         close();
@@ -608,6 +671,7 @@ struct server::impl {
 
       auto slot = std::make_shared<response_slot>();
       slot->close_after = close_after;
+      slot->suppress_body = suppress_body;
 
       auto self = weak_from_this();
       std::weak_ptr<response_slot> weak_slot = slot;
@@ -672,7 +736,10 @@ struct server::impl {
         responses_.pop_front();
 
         ++pending_response_writes_;
-        enqueue(serialize_response(slot->res, !slot->close_after, owner_.owner.options_), slot->close_after, true);
+        enqueue(
+          serialize_response(slot->res, !slot->close_after, owner_.owner.options_, slot->suppress_body),
+          slot->close_after,
+          true);
         if (slot->close_after) {
           cancel_pending_responses();
           return;
@@ -713,13 +780,24 @@ struct server::impl {
       }
 
       slot.streaming = true;
+      if (slot.suppress_body) {
+        return stream_write_result::ready();
+      }
+
       if (!slot.stream_headers_queued) {
         slot.res.commit_headers();
-        queue_stream_write(slot, serialize_response_head(slot.res, !slot.close_after, owner_.owner.options_, true));
+        queue_stream_write(
+          slot,
+          serialize_response_head(
+            slot.res,
+            !slot.close_after,
+            owner_.owner.options_,
+            true,
+            slot.suppress_body));
         slot.stream_headers_queued = true;
       }
 
-      if (!payload.empty()) {
+      if (!slot.suppress_body && !payload.empty()) {
         queue_stream_write(slot, serialize_chunk(std::move(payload)));
       }
 
@@ -741,11 +819,21 @@ struct server::impl {
       slot.stream_ended = true;
       if (!slot.stream_headers_queued) {
         slot.res.commit_headers();
-        queue_stream_write(slot, serialize_response_head(slot.res, !slot.close_after, owner_.owner.options_, true));
+        queue_stream_write(
+          slot,
+          serialize_response_head(
+            slot.res,
+            !slot.close_after,
+            owner_.owner.options_,
+            true,
+            slot.suppress_body),
+          slot.suppress_body && slot.close_after);
         slot.stream_headers_queued = true;
       }
 
-      queue_stream_write(slot, "0\r\n\r\n", slot.close_after);
+      if (!slot.suppress_body) {
+        queue_stream_write(slot, "0\r\n\r\n", slot.close_after);
+      }
       slot.res.complete_stream();
       if (!dispatching_response_) {
         flush_response_slots();

@@ -114,3 +114,17 @@ UVP_TEST_CASE("http router exposes explicit convenience methods for every common
   UVP_CHECK(router.find(uvp::http::method::head, "/resource") != nullptr);
   UVP_CHECK(router.find(uvp::http::method::options, "/resource") != nullptr);
 }
+
+UVP_TEST_CASE("http router reports methods allowed for a matched path") {
+  uvp::http::router router;
+  router.get("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
+  router.post("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
+  router.delete_("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
+
+  const auto allowed = router.allowed_methods("/items/42");
+  UVP_REQUIRE(allowed.size() == 3U);
+  UVP_CHECK(allowed[0] == uvp::http::method::get);
+  UVP_CHECK(allowed[1] == uvp::http::method::post);
+  UVP_CHECK(allowed[2] == uvp::http::method::delete_);
+  UVP_CHECK(router.allowed_methods("/missing").empty());
+}

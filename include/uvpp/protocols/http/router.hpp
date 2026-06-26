@@ -176,6 +176,7 @@ public:
 
   [[nodiscard]] match_result match(method method_value, std::string_view path) const;
   [[nodiscard]] const handler_type* find(method method_value, std::string_view path) const;
+  [[nodiscard]] std::vector<method> allowed_methods(std::string_view path) const;
   [[nodiscard]] bool empty() const noexcept { return route_count_ == 0; }
   [[nodiscard]] std::size_t size() const noexcept { return route_count_; }
 

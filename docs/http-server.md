@@ -57,6 +57,14 @@ Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
 Use the explicit policy form when route limits or future typed policies such as
 JSON or multipart matter at the declaration site.
 
+## Method Handling
+
+Routes are method-specific. If a path exists for another method, the server
+returns `405 Method Not Allowed` with an `Allow` header. `HEAD` requests fall
+back to a matching `GET` route and omit the response body. `OPTIONS` requests
+for a known path are answered automatically with `204 No Content` and `Allow`
+unless an explicit `OPTIONS` route is registered.
+
 ## No Request Body
 
 Use `body::none{}` for routes that do not accept a request body:

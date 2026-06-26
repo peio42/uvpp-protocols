@@ -13,6 +13,18 @@ namespace detail {
 
 namespace {
 
+constexpr std::array routed_methods{
+  method::get,
+  method::head,
+  method::post,
+  method::put,
+  method::delete_,
+  method::connect,
+  method::options,
+  method::trace,
+  method::patch,
+};
+
 bool next_route_segment(std::string_view& input, std::string_view& segment) noexcept {
   if (input.empty()) {
     return false;
@@ -246,6 +258,18 @@ router::match_result router::match(method method_value, std::string_view path) c
 
 const router::handler_type* router::find(method method_value, std::string_view path) const {
   return match(method_value, path).handler;
+}
+
+std::vector<method> router::allowed_methods(std::string_view path) const {
+  std::vector<method> methods;
+  for (auto method_value : detail::routed_methods) {
+    auto params = route_params{};
+    const auto method_index = static_cast<std::size_t>(method_value);
+    if (method_index < method_count_ && match_node(0, method_index, path, params)) {
+      methods.push_back(method_value);
+    }
+  }
+  return methods;
 }
 
 } // namespace uvp::http

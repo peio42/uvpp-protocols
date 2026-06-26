@@ -158,16 +158,18 @@ HTTP route registration validates patterns early:
 - conflicting parameter names at the same tree position, such as `/users/:id`
   and `/users/:name`, are rejected.
 
-The trie also gives a natural foundation for future versions:
+The trie also drives method-aware HTTP behavior:
 
-- `405 Method Not Allowed` with `Allow` when the path matches another method;
-- `HEAD` fallback to `GET` while suppressing the response body;
-- automatic `OPTIONS` for known paths;
+- if a path matches another method, the server returns `405 Method Not Allowed`
+  with an `Allow` header;
+- `HEAD` falls back to a matching `GET` route and suppresses the response body;
+- `OPTIONS` is answered automatically for known paths when no explicit
+  `OPTIONS` route is registered.
+
+Future route ergonomics should build on the same trie:
+
 - route groups with shared prefixes;
-- middleware or hooks attached to subtrees.
-
-Those features should build on the trie, but they should remain separate API
-changes from the first trie implementation.
+- middleware or hooks attached to route groups or subtrees.
 
 Handlers receive request and response references, plus a body argument when the
 body policy produces one:

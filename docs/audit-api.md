@@ -276,6 +276,16 @@ Ce point est moins critique pour une lib bas-niveau axée sur la composition
 explicite, mais constitue un point d'attention si l'objectif inclut
 l'ergonomie applicative.
 
+**Statut : partiellement traité.** Les groupes de routes préfixées et les
+middlewares restent une étape d'API à concevoir séparément. En revanche, les
+ajouts peu coûteux rendus naturels par le trie sont implémentés :
+
+- `405 Method Not Allowed` avec header `Allow` quand le chemin existe pour une
+  autre méthode ;
+- fallback `HEAD` vers `GET` avec suppression du body ;
+- réponse `OPTIONS` automatique pour les chemins connus sans route `OPTIONS`
+  explicite.
+
 ---
 
 ## 13. Couverture de tests insuffisante
@@ -326,4 +336,4 @@ un vrai `uvp::http::server`.
 | ✅ Résolu | `status` enum enrichi avec les codes courants |
 | ✅ Résolu | Méthodes HTTP explicites, sans macros de génération |
 | 🟡 Conception | Callbacks et config mélangés dans `accept_options` |
-| 🟡 Ergonomie | Pas de middleware ni de groupes de routes |
+| 🟡 Ergonomie | Route groups et middleware à concevoir |
