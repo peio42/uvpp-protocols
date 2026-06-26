@@ -99,7 +99,8 @@ int main() {
 
   srv.get("/logs/stream", [&state](uvp::http::request&, uvp::http::response& res) {
     if (state.clients.size() >= 32) {
-      res.status(503).json(uvp::json{{"error", "too many pending log stream clients"}});
+      res.status(uvp::http::status::service_unavailable)
+        .json(uvp::json{{"error", "too many pending log stream clients"}});
       return;
     }
 

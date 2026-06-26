@@ -8,6 +8,26 @@
 
 #include <uvpp/protocols/http.hpp>
 
+UVP_TEST_CASE("http status enum covers common response codes") {
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::moved_permanently), 301U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::found), 302U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::not_modified), 304U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::unauthorized), 401U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::forbidden), 403U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::request_timeout), 408U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::conflict), 409U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::unprocessable_content), 422U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::unprocessable_entity), 422U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::too_many_requests), 429U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::bad_gateway), 502U);
+  UVP_CHECK_EQ(static_cast<unsigned int>(uvp::http::status::service_unavailable), 503U);
+
+  UVP_CHECK_EQ(uvp::http::reason_phrase(uvp::http::status::moved_permanently), "Moved Permanently");
+  UVP_CHECK_EQ(uvp::http::reason_phrase(uvp::http::status::unprocessable_content), "Unprocessable Content");
+  UVP_CHECK_EQ(uvp::http::reason_phrase(uvp::http::status::too_many_requests), "Too Many Requests");
+  UVP_CHECK_EQ(uvp::http::reason_phrase(uvp::http::status::service_unavailable), "Service Unavailable");
+}
+
 UVP_TEST_CASE("http response serializes common body helpers") {
   uvp::http::response response;
   response.json(uvp::json{{"status", "ok"}});
@@ -109,4 +129,3 @@ UVP_TEST_CASE("http stream write result reports accepted backpressure and reject
   UVP_CHECK(!rejected);
   UVP_CHECK(rejected.error() == std::make_error_code(std::errc::not_connected));
 }
-

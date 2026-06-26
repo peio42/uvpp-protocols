@@ -54,18 +54,40 @@ std::string reason_phrase_for(unsigned int status_code) {
     return std::string(reason_phrase(status::created));
   case 204:
     return std::string(reason_phrase(status::no_content));
+  case 301:
+    return std::string(reason_phrase(status::moved_permanently));
+  case 302:
+    return std::string(reason_phrase(status::found));
+  case 304:
+    return std::string(reason_phrase(status::not_modified));
   case 400:
     return std::string(reason_phrase(status::bad_request));
+  case 401:
+    return std::string(reason_phrase(status::unauthorized));
+  case 403:
+    return std::string(reason_phrase(status::forbidden));
   case 404:
     return std::string(reason_phrase(status::not_found));
   case 405:
     return std::string(reason_phrase(status::method_not_allowed));
+  case 408:
+    return std::string(reason_phrase(status::request_timeout));
+  case 409:
+    return std::string(reason_phrase(status::conflict));
   case 413:
     return std::string(reason_phrase(status::payload_too_large));
+  case 422:
+    return std::string(reason_phrase(status::unprocessable_content));
+  case 429:
+    return std::string(reason_phrase(status::too_many_requests));
   case 500:
     return std::string(reason_phrase(status::internal_server_error));
   case 501:
     return std::string(reason_phrase(status::not_implemented));
+  case 502:
+    return std::string(reason_phrase(status::bad_gateway));
+  case 503:
+    return std::string(reason_phrase(status::service_unavailable));
   default:
     return {};
   }

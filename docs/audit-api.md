@@ -222,6 +222,13 @@ Neuf valeurs seulement. Les codes courants absents : `301`, `302`, `304`,
 contraint de passer par l'entier brut (`res.status(429)`) pour des cas
 d'usage tout à fait ordinaires.
 
+**Statut : résolu.** L'enum expose maintenant les codes courants manquants :
+`moved_permanently`, `found`, `not_modified`, `unauthorized`, `forbidden`,
+`request_timeout`, `conflict`, `unprocessable_content`,
+`unprocessable_entity` (alias historique de `unprocessable_content`),
+`too_many_requests`, `bad_gateway` et `service_unavailable`. Les reason phrases
+associées sont également couvertes.
+
 ---
 
 ## 11. Pas de parsing des query parameters
@@ -310,7 +317,7 @@ un vrai `uvp::http::server`.
 | ✅ Résolu | Query parameters structurés sur `request` |
 | ✅ Résolu | Socle de tests insuffisant remplacé par une suite structurée |
 | ✅ Résolu | Router par trie de segments |
-| 🟡 Exhaustivité | `status` enum incomplet |
+| ✅ Résolu | `status` enum enrichi avec les codes courants |
 | 🟡 Maintenabilité | Macros pour générer les méthodes HTTP |
 | 🟡 Conception | Callbacks et config mélangés dans `accept_options` |
 | 🟡 Ergonomie | Pas de middleware ni de groupes de routes |
