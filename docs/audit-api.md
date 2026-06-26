@@ -181,6 +181,12 @@ d'analyse statique et aux générateurs de documentation. En C++17/20, une
 approche tag-dispatch ou des helpers `constexpr` permettraient d'obtenir le
 même résultat sans recourir au préprocesseur.
 
+**Statut : résolu.** Les macros ont été remplacées par des méthodes explicites
+dans `server` et `router`. Chaque verbe (`get`, `post`, `put`, `patch`,
+`delete_`, `head`, `options`) expose maintenant directement ses deux overloads
+publics, ce qui rend les signatures visibles aux IDEs, aux analyseurs statiques
+et aux générateurs de documentation.
+
 ---
 
 ## 9. Callbacks dans `accept_options` WebSocket
@@ -318,6 +324,6 @@ un vrai `uvp::http::server`.
 | ✅ Résolu | Socle de tests insuffisant remplacé par une suite structurée |
 | ✅ Résolu | Router par trie de segments |
 | ✅ Résolu | `status` enum enrichi avec les codes courants |
-| 🟡 Maintenabilité | Macros pour générer les méthodes HTTP |
+| ✅ Résolu | Méthodes HTTP explicites, sans macros de génération |
 | 🟡 Conception | Callbacks et config mélangés dans `accept_options` |
 | 🟡 Ergonomie | Pas de middleware ni de groupes de routes |

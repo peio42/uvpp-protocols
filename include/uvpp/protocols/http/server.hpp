@@ -33,27 +33,89 @@ public:
   server(server&&) = delete;
   server& operator=(server&&) = delete;
 
-#define UVP_HTTP_SERVER_ROUTE_METHOD(name) \
-  template<class BodyPolicy, class Handler> \
-  server& name(std::string_view pattern, BodyPolicy policy, Handler&& handler) { \
-    router_.name(pattern, policy, std::forward<Handler>(handler)); \
-    return *this; \
-  } \
-  template<class Handler> \
-  server& name(std::string_view pattern, Handler&& handler) { \
-    router_.name(pattern, std::forward<Handler>(handler)); \
-    return *this; \
+  template<class BodyPolicy, class Handler>
+  server& get(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_.get(pattern, policy, std::forward<Handler>(handler));
+    return *this;
   }
 
-  UVP_HTTP_SERVER_ROUTE_METHOD(get)
-  UVP_HTTP_SERVER_ROUTE_METHOD(post)
-  UVP_HTTP_SERVER_ROUTE_METHOD(put)
-  UVP_HTTP_SERVER_ROUTE_METHOD(patch)
-  UVP_HTTP_SERVER_ROUTE_METHOD(delete_)
-  UVP_HTTP_SERVER_ROUTE_METHOD(head)
-  UVP_HTTP_SERVER_ROUTE_METHOD(options)
+  template<class Handler>
+  server& get(std::string_view pattern, Handler&& handler) {
+    router_.get(pattern, std::forward<Handler>(handler));
+    return *this;
+  }
 
-#undef UVP_HTTP_SERVER_ROUTE_METHOD
+  template<class BodyPolicy, class Handler>
+  server& post(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_.post(pattern, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  server& post(std::string_view pattern, Handler&& handler) {
+    router_.post(pattern, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  server& put(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_.put(pattern, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  server& put(std::string_view pattern, Handler&& handler) {
+    router_.put(pattern, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  server& patch(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_.patch(pattern, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  server& patch(std::string_view pattern, Handler&& handler) {
+    router_.patch(pattern, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  server& delete_(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_.delete_(pattern, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  server& delete_(std::string_view pattern, Handler&& handler) {
+    router_.delete_(pattern, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  server& head(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_.head(pattern, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  server& head(std::string_view pattern, Handler&& handler) {
+    router_.head(pattern, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  server& options(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_.options(pattern, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  server& options(std::string_view pattern, Handler&& handler) {
+    router_.options(pattern, std::forward<Handler>(handler));
+    return *this;
+  }
 
   template<class BodyPolicy, class Handler>
   server& route(method method_value, std::string_view pattern, BodyPolicy policy, Handler&& handler) {

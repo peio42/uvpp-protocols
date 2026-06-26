@@ -99,3 +99,18 @@ UVP_TEST_CASE("http router infers body policies from handler signatures") {
   UVP_CHECK(none_match.body == uvp::http::detail::body_mode::none);
 }
 
+UVP_TEST_CASE("http router exposes explicit convenience methods for every common verb") {
+  uvp::http::router router;
+
+  router.put("/resource", [](uvp::http::request&, uvp::http::response&) {});
+  router.patch("/resource", [](uvp::http::request&, uvp::http::response&) {});
+  router.delete_("/resource", [](uvp::http::request&, uvp::http::response&) {});
+  router.head("/resource", [](uvp::http::request&, uvp::http::response&) {});
+  router.options("/resource", [](uvp::http::request&, uvp::http::response&) {});
+
+  UVP_CHECK(router.find(uvp::http::method::put, "/resource") != nullptr);
+  UVP_CHECK(router.find(uvp::http::method::patch, "/resource") != nullptr);
+  UVP_CHECK(router.find(uvp::http::method::delete_, "/resource") != nullptr);
+  UVP_CHECK(router.find(uvp::http::method::head, "/resource") != nullptr);
+  UVP_CHECK(router.find(uvp::http::method::options, "/resource") != nullptr);
+}

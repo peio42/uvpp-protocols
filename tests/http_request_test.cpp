@@ -5,6 +5,7 @@
 #include <string_view>
 #include <variant>
 
+#include <uvpp/uv.hpp>
 #include <uvpp/protocols/http.hpp>
 
 using namespace std::chrono_literals;
@@ -96,4 +97,26 @@ UVP_TEST_CASE("http request exposes borrowed body views") {
 
   UVP_CHECK_EQ(request.body(), "test");
   UVP_CHECK_EQ(request.body_bytes().size(), 4U);
+}
+
+UVP_TEST_CASE("http server exposes explicit convenience methods for every common verb") {
+  uv::loop loop;
+  uvp::http::server server(loop);
+
+  server
+    .get("/verbs/get", [](uvp::http::request&, uvp::http::response&) {})
+    .post("/verbs/post", [](uvp::http::request&, uvp::http::response&) {})
+    .put("/verbs/put", [](uvp::http::request&, uvp::http::response&) {})
+    .patch("/verbs/patch", [](uvp::http::request&, uvp::http::response&) {})
+    .delete_("/verbs/delete", [](uvp::http::request&, uvp::http::response&) {})
+    .head("/verbs/head", [](uvp::http::request&, uvp::http::response&) {})
+    .options("/verbs/options", [](uvp::http::request&, uvp::http::response&) {});
+
+  UVP_CHECK(server.routes().find(uvp::http::method::get, "/verbs/get") != nullptr);
+  UVP_CHECK(server.routes().find(uvp::http::method::post, "/verbs/post") != nullptr);
+  UVP_CHECK(server.routes().find(uvp::http::method::put, "/verbs/put") != nullptr);
+  UVP_CHECK(server.routes().find(uvp::http::method::patch, "/verbs/patch") != nullptr);
+  UVP_CHECK(server.routes().find(uvp::http::method::delete_, "/verbs/delete") != nullptr);
+  UVP_CHECK(server.routes().find(uvp::http::method::head, "/verbs/head") != nullptr);
+  UVP_CHECK(server.routes().find(uvp::http::method::options, "/verbs/options") != nullptr);
 }
