@@ -6,6 +6,8 @@ references, not stable design truth.
 ## Active Drafts
 
 - [Routing and middleware polish](routing-and-middleware-polish.md)
+- [Route path decoding](route-path-decoding.md)
+- [HTTP timeout enforcement](http-timeout-enforcement.md)
 - [Route groups and hooks](route-groups-and-hooks.md)
 - [Static file helper](static-file-helper.md)
 - [Typed JSON body policy](typed-json-body-policy.md)
@@ -22,4 +24,3 @@ references, not stable design truth.
 - [Redis support](redis-support.md)
 - [MQTT client](mqtt-client.md)
 - [Database client adapters](database-adapters.md)
-- [Documentation rework](documentation-rework.md)

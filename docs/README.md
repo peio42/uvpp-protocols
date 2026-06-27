@@ -16,6 +16,8 @@ Use this map to load only the documentation needed for the task.
   when a decision should remain discoverable after the proposal is gone.
 - [`audits/`](audits/): reviews, findings, and correction lists. Use these as
   inputs for cleanup work, not as stable design truth.
+- [`archive/`](archive/): obsolete or completed documents kept for history.
+  Ignore this directory unless you explicitly need historical context.
 
 Workflow:
 

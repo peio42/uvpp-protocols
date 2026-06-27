@@ -22,6 +22,47 @@ int main() {
 }
 ```
 
+## Listening
+
+`server::listen(host, port)` is the TCP convenience form:
+
+```cpp
+srv.listen("127.0.0.1", 8080);
+```
+
+For transport composition, HTTP can also listen on any
+`uvp::io::stream_listener`:
+
+```cpp
+auto listener = uvp::io::tcp_listener{loop}
+  .bind("127.0.0.1", 8080)
+  .backlog(128);
+
+srv.listen(std::move(listener));
+```
+
+The built-in listener adapters are:
+
+- `uvp::io::tcp_listener`: accepts TCP connections;
+- `uvp::io::pipe_listener`: accepts Unix socket or named pipe connections;
+- `uvp::io::stream_listener`: type-erased listener consumed by
+  `server::listen(...)`.
+
+Unix socket listeners use the same HTTP server:
+
+```cpp
+auto listener = uvp::io::pipe_listener{loop}
+  .bind("/run/my-service.sock");
+
+srv.listen(std::move(listener));
+```
+
+`stream_listener` yields `uvp::io::byte_stream` objects to HTTP. This is the
+composition point used by TCP, Unix sockets, and future transports such as TLS.
+At this stage, user code obtains stream listeners through the built-in adapters
+or future library adapters; implementing a third-party listener adapter is not
+part of the public API yet.
+
 ## Route Shape
 
 Routes declare how the request body should be handled:
@@ -77,8 +118,8 @@ srv.get("/health",
   });
 ```
 
-If a client sends a body to a `body::none{}` route, the server should reject the
-request according to the configured error policy.
+If a client sends a body to a `body::none{}` route, the server rejects the
+request with `400 Bad Request`.
 
 ## Buffered Bytes
 
@@ -149,8 +190,9 @@ body.on_data([&body](std::span<const std::byte> chunk) {
 });
 ```
 
-`on_end` runs after the whole body is received. `on_error` reports parser
-errors, body limit violations, disconnects, and read failures.
+`on_end` runs after the whole body is received. `on_error` reports body limit
+violations, disconnects, and read failures. Malformed HTTP is rejected by the
+server with `400 Bad Request`.
 
 ## Query Parameters
 
@@ -183,6 +225,26 @@ Repeated keys are preserved:
 `req.query("tag")` returns the first value, while `req.query_all("tag")`
 returns all values in request order. Names and values are decoded with `%XX`
 escapes and `+` as a space. Invalid percent escapes are kept literally.
+
+## Connection Info
+
+`request::connection()` exposes the local and remote endpoints associated with
+the accepted connection:
+
+```cpp
+srv.get("/whoami", [](uvp::http::request& req, uvp::http::response& res) {
+  const auto& connection = req.connection();
+  const auto& local = connection.local_endpoint();
+  const auto& remote = connection.remote_endpoint();
+
+  (void)local;
+  (void)remote;
+  res.text("ok\n");
+});
+```
+
+The endpoint value can represent TCP or pipe endpoints depending on the
+listener that accepted the connection.
 
 ## Responses
 
@@ -325,9 +387,54 @@ HTTP route registration rejects duplicate method/pattern pairs, unnamed
 parameters, wildcards that are not the final segment, and conflicting parameter
 names at the same tree position.
 
+## Upgrade Routes
+
+`server::upgrade(...)` registers upgrade routes separately from normal HTTP
+routes. The handler receives an `upgrade_request` with the parsed request
+metadata, route parameters, connection info, and any bytes already read after
+the upgrade boundary:
+
+```cpp
+srv.upgrade("/raw/:name", [](uvp::http::upgrade_request& req) {
+  auto name = req.params().get("name");
+  auto protocol = req.header("upgrade");
+  auto extra = req.extra_bytes();
+
+  (void)name;
+  (void)protocol;
+  (void)extra;
+
+  req.reject(
+    "HTTP/1.1 400 Bad Request\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 0\r\n"
+    "\r\n");
+});
+```
+
+Protocol helpers such as WebSocket normally call `req.accept(...)` or
+`req.reject(...)` for you. Applications that implement their own upgrade
+protocol can accept the connection manually:
+
+```cpp
+srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
+  req.accept(
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    "Connection: Upgrade\r\n"
+    "Upgrade: myproto\r\n"
+    "\r\n",
+    [](uvp::io::byte_stream stream) {
+      uvp::myproto::session::accept(std::move(stream));
+    });
+});
+```
+
+After acceptance, HTTP transfers ownership of the underlying byte stream to the
+upgrade protocol.
+
 ## Errors
 
-Route handlers may throw. Uncaught exceptions are handled by the server error
+Route handlers may throw. Uncaught exceptions are handled by the route error
 policy:
 
 ```cpp

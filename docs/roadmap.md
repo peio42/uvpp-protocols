@@ -12,6 +12,8 @@
   - Route groups and subtree hooks
   - Existing routing/error handling polish
   - See: [routing and middleware polish](proposals/routing-and-middleware-polish.md),
+    [route path decoding](proposals/route-path-decoding.md),
+    [HTTP timeout enforcement](proposals/http-timeout-enforcement.md),
     [route groups and hooks](proposals/route-groups-and-hooks.md)
 
 ## Next

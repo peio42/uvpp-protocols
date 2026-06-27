@@ -1,5 +1,11 @@
 # Documentation Rework Proposal
 
+Status: Archived
+
+This proposal has been completed. The documentation is now organized around
+user guides, stable design notes, proposals, ADRs, audits, and archived
+historical material.
+
 ## Context
 
 The documentation used to be split mostly between user-facing pages and design
@@ -13,7 +19,7 @@ tentative plans, audits, and historical context.
 - `docs/proposals`: active or tentative plans.
 - `docs/adr`: durable decision records for structural choices.
 - `docs/audits`: findings, reviews, and correction lists.
-- `docs/archive`: obsolete documents kept for history, deferred for now.
+- `docs/archive`: obsolete documents kept for history.
 
 ## Migration Plan
 

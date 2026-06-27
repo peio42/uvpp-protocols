@@ -19,11 +19,11 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-The default build compiles the library, a structure test, and the HTTP examples.
-The examples require `uvpp::uvpp` and `nlohmann_json::nlohmann_json`; CMake
-first tries `find_package(...)` and then fetches missing dependencies when
-enabled. Because `uvpp::uvpp` links `LibUV::LibUV` and `Threads::Threads`, the
-examples are built against libuv.
+The default top-level build compiles the library, the focused test executable,
+and the runnable HTTP and WebSocket examples. The examples require `uvpp::uvpp`
+and `nlohmann_json::nlohmann_json`; CMake first tries `find_package(...)` and
+then fetches missing dependencies when enabled. Because `uvpp::uvpp` links
+`LibUV::LibUV` and `Threads::Threads`, the examples are built against libuv.
 
 Run the HTTP example:
 
@@ -95,15 +95,20 @@ uvp::http::server srv(
   uvp::http::server_options{}
     .max_header_bytes(32 * 1024)
     .max_body_bytes(10 * 1024 * 1024)
-    .idle_timeout(2min)
+    .max_pending_write_bytes(2 * 1024 * 1024)
     .server_header(false));
 ```
 
 ## Modules
 
+Available:
+
 - `uvp::http`: HTTP/1.1 server is available; client primitives are planned.
 - `uvp::websocket`: server-side WebSocket sessions are available; client
   sessions are planned.
+
+Planned:
+
 - `uvp::tls`: TLS stream adapter over uvpp streams.
 - `uvp::smtp`: SMTP client primitives.
 - `uvp::sse`: Server-Sent Events helper on top of HTTP responses.
@@ -176,6 +181,7 @@ The design notes live in [`docs/design`](docs/design):
 - [Protocol composition](docs/design/protocol-composition.md)
 - [Transport abstractions](docs/design/transport-abstractions.md)
 - [HTTP server design](docs/design/http-server.md)
+- [WebSocket design](docs/design/websocket.md)
 
 Planning and review material:
 

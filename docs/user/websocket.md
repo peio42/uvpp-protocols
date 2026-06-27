@@ -64,6 +64,9 @@ auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
   .on_ping([](uvp::websocket::session&, std::span<const std::byte> payload) {
     (void)payload;
   })
+  .on_pong([](uvp::websocket::session&, std::span<const std::byte> payload) {
+    (void)payload;
+  })
   .on_close([](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {})
   .on_error([](uvp::websocket::session&, std::error_code) {}));
 ```
@@ -107,13 +110,49 @@ auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
 ```
 
 `pong()` remains available for manual ping handling and for unsolicited pong
-heartbeats.
+heartbeats. `on_pong()` observes inbound pong frames, which is useful for
+heartbeat or latency tracking after sending application pings.
+
+The session exposes endpoint metadata from the underlying transport:
+
+```cpp
+auto local = ws.local_endpoint();
+auto remote = ws.remote_endpoint();
+```
+
+Those endpoints may be TCP or pipe endpoints depending on how the HTTP server
+accepted the connection.
 
 ## Protocols Above WebSocket
 
-Message-oriented protocols should consume `uvp::websocket::session` directly.
+Message-oriented protocols should consume `uvp::websocket::session` directly:
+
+```cpp
+srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
+  auto ws = uvp::websocket::accept(req,
+    uvp::websocket::accept_options{}.subprotocol("myproto"));
+
+  uvp::myproto::websocket_session::accept(
+    std::move(ws),
+    uvp::myproto::server_options{});
+});
+```
+
 Byte-stream-oriented protocols can explicitly request a `uvp::io::byte_stream`
-adapter:
+adapter. `session::into_byte_stream()` consumes the WebSocket session handle:
+
+```cpp
+srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {
+  auto ws = uvp::websocket::accept(req,
+    uvp::websocket::accept_options{}.subprotocol("myproto"));
+
+  uvp::myproto::session::accept(
+    std::move(ws).into_byte_stream(),
+    uvp::myproto::server_options{});
+});
+```
+
+For the common case, `accept_byte_stream()` combines acceptance and conversion:
 
 ```cpp
 srv.upgrade("/myproto", [](uvp::http::upgrade_request& req) {

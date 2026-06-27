@@ -24,18 +24,23 @@ chunks, or reject a body entirely.
 
 ## Public Types
 
-Initial public types:
+Current public types:
 
 - `uvp::http::server`
 - `uvp::http::server_options`
 - `uvp::http::request`
 - `uvp::http::response`
+- `uvp::http::deferred_response`
+- `uvp::http::streaming_response`
+- `uvp::http::stream_write_result`
 - `uvp::http::connection_info`
+- `uvp::http::upgrade_request`
 - `uvp::http::router`
 - `uvp::http::headers`
 - `uvp::http::method`
 - `uvp::http::status`
 - `uvp::http::route_params`
+- `uvp::http::query_params`
 - `uvp::http::body::none`
 - `uvp::http::body::bytes`
 - `uvp::http::body::text`
@@ -305,8 +310,9 @@ is running. Applications must copy bytes they need to keep.
 `pause()` stops consuming additional body data after the current callback.
 `resume()` restarts reads. `on_end()` means the full request body has been
 received and the HTTP parser can continue to the next request on a keep-alive
-connection. `on_error()` covers parser errors, body limit violations, client
-disconnects, and stream read failures.
+connection. `on_error()` covers body limit violations, client disconnects, and
+stream read failures. Malformed HTTP is rejected by the protocol layer with
+`400 Bad Request` before application error hooks are involved.
 
 ## Response
 
@@ -533,33 +539,31 @@ writes. Payload bytes must live until write completion.
 
 ## Options
 
-Initial options:
+`server_options` uses the fluent value-object style defined in the API
+principles. Defaults should favor safe local services and small APIs. Larger
+uploads, longer-lived streams, and larger write queues should be explicit.
 
-```cpp
-struct server_options {
-  server_options& max_header_bytes(std::size_t value) &;
-  server_options&& max_header_bytes(std::size_t value) &&;
-  [[nodiscard]] std::size_t max_header_bytes() const noexcept;
+Currently enforced options:
 
-  server_options& max_body_bytes(std::size_t value) &;
-  server_options&& max_body_bytes(std::size_t value) &&;
-  [[nodiscard]] std::size_t max_body_bytes() const noexcept;
+- `max_header_bytes`: maximum accepted request header bytes;
+- `max_body_bytes`: default request body limit when a route does not override
+  it with a body policy limit;
+- `max_pending_write_bytes`: maximum queued serialized response bytes per
+  connection before write backpressure is reported;
+- `max_pending_responses_per_connection`: maximum open, deferred, streaming, or
+  completed-but-not-written response slots per connection;
+- `keep_alive`: whether the server keeps HTTP/1.1 connections open when the
+  request allows it;
+- `server_header`: whether the default `Server` response header is added.
 
-  server_options& keep_alive(bool value) & noexcept;
-  server_options&& keep_alive(bool value) && noexcept;
-  [[nodiscard]] bool keep_alive() const noexcept;
+Public but not yet enforced timeout options:
 
-  server_options& server_header(bool value) & noexcept;
-  server_options&& server_header(bool value) && noexcept;
-  [[nodiscard]] bool server_header() const noexcept;
+- `header_timeout`;
+- `body_timeout`;
+- `idle_timeout`.
 
-private:
-  // Defaults are safe for small services.
-};
-```
-
-Defaults should favor safe local services and small APIs. Larger uploads and
-long-lived streaming should be explicit.
+Timeout enforcement is tracked in
+[HTTP timeout enforcement](../proposals/http-timeout-enforcement.md).
 
 User-facing configuration should normally use the builder style defined in the
 API principles:
@@ -570,7 +574,7 @@ uvp::http::server srv(
   uvp::http::server_options{}
     .max_header_bytes(32 * 1024)
     .max_body_bytes(10 * 1024 * 1024)
-    .idle_timeout(2min)
+    .max_pending_write_bytes(2 * 1024 * 1024)
     .server_header(false));
 ```
 
@@ -579,6 +583,7 @@ uvp::http::server srv(
 Future HTTP work is tracked outside stable design:
 
 - [Routing and middleware polish](../proposals/routing-and-middleware-polish.md)
+- [HTTP timeout enforcement](../proposals/http-timeout-enforcement.md)
 - [Typed JSON body policy](../proposals/typed-json-body-policy.md)
 - [Multipart handling](../proposals/multipart-handling.md)
 - [Server-Sent Events support](../proposals/sse-support.md)
