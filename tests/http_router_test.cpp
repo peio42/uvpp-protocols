@@ -158,6 +158,9 @@ UVP_TEST_CASE("http router matches inherited group hooks from root to leaf") {
   router.pre_handler([&](uvp::http::request&, uvp::http::response&) {
     order.push_back("root-pre");
   });
+  router.on_response([&](const uvp::http::response_info&) {
+    order.push_back("root-response");
+  });
 
   auto api = router.group("/api");
   api.on_request([&](uvp::http::request&, uvp::http::response&) {
@@ -168,6 +171,9 @@ UVP_TEST_CASE("http router matches inherited group hooks from root to leaf") {
     order.push_back("api-pre");
     return uvp::http::hook_result::next;
   });
+  api.on_response([&](const uvp::http::response_info&) {
+    order.push_back("api-response");
+  });
 
   auto v1 = api.group("/v1");
   v1.on_request([&](uvp::http::request&, uvp::http::response&) {
@@ -176,12 +182,16 @@ UVP_TEST_CASE("http router matches inherited group hooks from root to leaf") {
   v1.pre_handler([&](uvp::http::request&, uvp::http::response&) {
     order.push_back("v1-pre");
   });
+  v1.on_response([&](const uvp::http::response_info&) {
+    order.push_back("v1-response");
+  });
   v1.get("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
 
   auto match = router.match(uvp::http::method::get, "/api/v1/items/42");
   UVP_REQUIRE(match);
   UVP_CHECK_EQ(match.on_request_hooks.size(), 3U);
   UVP_CHECK_EQ(match.pre_handler_hooks.size(), 3U);
+  UVP_CHECK_EQ(match.on_response_hooks.size(), 3U);
   UVP_CHECK_EQ(match.params.get("id"), "42");
 
   uvp::http::request req;
@@ -192,12 +202,27 @@ UVP_TEST_CASE("http router matches inherited group hooks from root to leaf") {
   for (const auto* hook : match.pre_handler_hooks) {
     UVP_CHECK((*hook)(req, res) == uvp::http::hook_result::next);
   }
+  uvp::http::request_snapshot snapshot;
+  uvp::http::headers headers;
+  const auto info = uvp::http::response_info{
+    snapshot,
+    200,
+    headers,
+    0,
+    uvp::http::response_outcome::completed,
+  };
+  for (auto hook = match.on_response_hooks.rbegin(); hook != match.on_response_hooks.rend(); ++hook) {
+    (**hook)(info);
+  }
 
-  UVP_REQUIRE(order.size() == 6U);
+  UVP_REQUIRE(order.size() == 9U);
   UVP_CHECK_EQ(order[0], "root-request");
   UVP_CHECK_EQ(order[1], "api-request");
   UVP_CHECK_EQ(order[2], "v1-request");
   UVP_CHECK_EQ(order[3], "root-pre");
   UVP_CHECK_EQ(order[4], "api-pre");
   UVP_CHECK_EQ(order[5], "v1-pre");
+  UVP_CHECK_EQ(order[6], "v1-response");
+  UVP_CHECK_EQ(order[7], "api-response");
+  UVP_CHECK_EQ(order[8], "root-response");
 }

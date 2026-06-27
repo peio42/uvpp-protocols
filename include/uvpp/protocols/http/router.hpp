@@ -24,7 +24,31 @@ enum class hook_result {
   stop,
 };
 
+enum class response_outcome {
+  completed,
+  cancelled,
+  error,
+};
+
+struct request_snapshot {
+  http::method method = http::method::unknown;
+  std::string target;
+  std::string path;
+  std::string query;
+  route_params params;
+  http::connection_info connection;
+};
+
+struct response_info {
+  const request_snapshot& request;
+  unsigned int status = static_cast<unsigned int>(http::status::ok);
+  const http::headers& response_headers;
+  std::size_t response_body_size = 0;
+  response_outcome outcome = response_outcome::completed;
+};
+
 using hook_type = std::function<hook_result(request&, response&)>;
+using response_hook_type = std::function<void(const response_info&)>;
 
 namespace detail {
 
@@ -49,6 +73,8 @@ template<class Handler>
 constexpr auto infer_body_policy();
 template<class Handler>
 hook_type wrap_hook(Handler&& handler);
+template<class Handler>
+response_hook_type wrap_response_hook(Handler&& handler);
 } // namespace detail
 
 class route_group;
@@ -64,6 +90,7 @@ public:
     route_params params;
     std::vector<const hook_type*> on_request_hooks;
     std::vector<const hook_type*> pre_handler_hooks;
+    std::vector<const response_hook_type*> on_response_hooks;
 
     [[nodiscard]] bool ok() const noexcept { return handler != nullptr; }
     explicit operator bool() const noexcept { return ok(); }
@@ -125,6 +152,11 @@ public:
   template<class Handler>
   router& pre_handler(Handler&& handler) {
     return add_pre_handler_hook({}, detail::wrap_hook(std::forward<Handler>(handler)));
+  }
+
+  template<class Handler>
+  router& on_response(Handler&& handler) {
+    return add_on_response_hook({}, detail::wrap_response_hook(std::forward<Handler>(handler)));
   }
 
   [[nodiscard]] route_group group(std::string_view prefix);
@@ -226,6 +258,7 @@ private:
     std::array<std::optional<route_target>, method_count_> targets;
     std::vector<hook_type> on_request_hooks;
     std::vector<hook_type> pre_handler_hooks;
+    std::vector<response_hook_type> on_response_hooks;
   };
 
   router& add_route(
@@ -236,6 +269,7 @@ private:
     handler_type handler);
   router& add_on_request_hook(std::string_view prefix, hook_type hook);
   router& add_pre_handler_hook(std::string_view prefix, hook_type hook);
+  router& add_on_response_hook(std::string_view prefix, response_hook_type hook);
   [[nodiscard]] std::size_t ensure_prefix_node(std::string_view prefix);
   [[nodiscard]] const route_target* match_node(
     std::size_t node_index,
@@ -243,7 +277,8 @@ private:
     std::string_view path,
     route_params& params,
     std::vector<const hook_type*>& on_request_hooks,
-    std::vector<const hook_type*>& pre_handler_hooks) const;
+    std::vector<const hook_type*>& pre_handler_hooks,
+    std::vector<const response_hook_type*>& on_response_hooks) const;
 
   std::vector<trie_node> nodes_{{}};
   std::size_t route_count_ = 0;
@@ -262,6 +297,12 @@ public:
   template<class Handler>
   route_group& pre_handler(Handler&& handler) {
     router_->add_pre_handler_hook(prefix_, detail::wrap_hook(std::forward<Handler>(handler)));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& on_response(Handler&& handler) {
+    router_->add_on_response_hook(prefix_, detail::wrap_response_hook(std::forward<Handler>(handler)));
     return *this;
   }
 
@@ -464,6 +505,19 @@ hook_type wrap_hook(Handler&& handler) {
       static_assert(std::is_invocable_r_v<hook_result, stored_handler&, request&, response&>,
         "HTTP hook must accept (request&, response&) and return hook_result or void");
       return hook_result::next;
+    }
+  };
+}
+
+template<class Handler>
+response_hook_type wrap_response_hook(Handler&& handler) {
+  using stored_handler = std::decay_t<Handler>;
+  return [handler = stored_handler(std::forward<Handler>(handler))](const response_info& info) mutable {
+    if constexpr (std::is_invocable_r_v<void, stored_handler&, const response_info&>) {
+      handler(info);
+    } else {
+      static_assert(std::is_invocable_r_v<void, stored_handler&, const response_info&>,
+        "HTTP response hook must accept (const response_info&) and return void");
     }
   };
 }

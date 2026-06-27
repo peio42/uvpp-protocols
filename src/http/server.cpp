@@ -222,6 +222,8 @@ struct server::impl {
 
   struct response_slot {
     response res;
+    request_snapshot request;
+    std::vector<const response_hook_type*> on_response_hooks;
     bool completed = false;
     bool close_after = false;
     bool suppress_body = false;
@@ -229,6 +231,8 @@ struct server::impl {
     bool stream_headers_queued = false;
     bool stream_backpressured = false;
     bool stream_ended = false;
+    bool response_hooks_ran = false;
+    std::size_t stream_body_bytes = 0;
     std::deque<pending_write> stream_writes;
   };
 
@@ -421,6 +425,7 @@ struct server::impl {
         active_request_->rejected = true;
         return;
       }
+      configure_response_observation(*active_request_->slot, active_request_->req, active_request_->route.on_response_hooks);
 
       if (!run_on_request_hooks(*active_request_, !keep_alive, active_request_->req.method() == method::head)) {
         return;
@@ -569,6 +574,7 @@ struct server::impl {
       }
 
       req.params_ = std::move(route_match.params);
+      configure_response_observation(*slot, req, route_match.on_response_hooks);
 
       try {
         if (!run_hooks(route_match.pre_handler_hooks, req, res)) {
@@ -636,6 +642,7 @@ struct server::impl {
           return false;
         }
       }
+      configure_response_observation(*active.slot, active.req, active.route.on_response_hooks);
 
       dispatching_response_ = true;
       struct dispatch_guard {
@@ -675,6 +682,61 @@ struct server::impl {
     void finish_response_if_needed(response& res) {
       if (!res.ended() && !res.deferred() && !res.streaming()) {
         res.end();
+      }
+    }
+
+    request_snapshot snapshot_request(const request& req) const {
+      return request_snapshot{
+        req.method(),
+        std::string(req.target()),
+        std::string(req.path()),
+        std::string(req.query()),
+        req.params(),
+        req.connection(),
+      };
+    }
+
+    void configure_response_observation(
+      response_slot& slot,
+      const request& req,
+      std::vector<const response_hook_type*> hooks) {
+      slot.request = snapshot_request(req);
+      slot.on_response_hooks = std::move(hooks);
+    }
+
+    std::size_t response_body_size(const response_slot& slot) const noexcept {
+      if (slot.streaming) {
+        return slot.stream_body_bytes;
+      }
+      if (slot.res.status_code() == static_cast<unsigned int>(status::no_content)) {
+        return 0;
+      }
+      return slot.res.body().size();
+    }
+
+    void run_response_hooks(response_slot& slot, response_outcome outcome) noexcept {
+      if (slot.response_hooks_ran) {
+        return;
+      }
+      slot.response_hooks_ran = true;
+
+      if (slot.on_response_hooks.empty()) {
+        return;
+      }
+
+      const auto info = response_info{
+        slot.request,
+        slot.res.status_code(),
+        slot.res.headers(),
+        response_body_size(slot),
+        outcome,
+      };
+
+      for (auto hook = slot.on_response_hooks.rbegin(); hook != slot.on_response_hooks.rend(); ++hook) {
+        try {
+          (**hook)(info);
+        } catch (...) {
+        }
       }
     }
 
@@ -784,6 +846,7 @@ struct server::impl {
       }
 
       slot->completed = true;
+      run_response_hooks(*slot, response_outcome::completed);
       if (!dispatching_response_) {
         flush_response_slots();
       }
@@ -827,6 +890,17 @@ struct server::impl {
       for (auto& slot : responses_) {
         if (!slot->completed) {
           slot->res.cancel();
+          run_response_hooks(*slot, response_outcome::cancelled);
+        }
+      }
+      responses_.clear();
+    }
+
+    void cancel_pending_responses(std::error_code) noexcept {
+      for (auto& slot : responses_) {
+        if (!slot->completed) {
+          slot->res.cancel();
+          run_response_hooks(*slot, response_outcome::error);
         }
       }
       responses_.clear();
@@ -874,6 +948,7 @@ struct server::impl {
       }
 
       if (!slot.suppress_body && !payload.empty()) {
+        slot.stream_body_bytes += payload.size();
         queue_stream_write(slot, serialize_chunk(std::move(payload)));
       }
 
@@ -947,6 +1022,7 @@ struct server::impl {
 
       if (error) {
         notify_stream_errors(error.code());
+        cancel_pending_responses(error.code());
         close();
         return;
       }

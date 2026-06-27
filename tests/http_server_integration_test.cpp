@@ -4,6 +4,7 @@
 #include <chrono>
 #include <string>
 #include <variant>
+#include <vector>
 
 #include <uvpp/uv.hpp>
 #include <uvpp/protocols/http.hpp>
@@ -279,4 +280,105 @@ UVP_TEST_CASE("http server route group on_request can short circuit before handl
   UVP_CHECK(received.find("HTTP/1.1 401 Unauthorized\r\n") != std::string::npos);
   UVP_CHECK(received.find("\r\n\r\nblocked\n") != std::string::npos);
   UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server runs response hooks with response snapshots") {
+  std::vector<std::string> events;
+  unsigned int observed_status = 0;
+  std::size_t observed_body_size = 0;
+  std::string observed_path;
+  uvp::http::response_outcome observed_outcome = uvp::http::response_outcome::error;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.on_response([&](const uvp::http::response_info& info) {
+        events.push_back("server");
+        observed_status = info.status;
+        observed_body_size = info.response_body_size;
+        observed_path = info.request.path;
+        observed_outcome = info.outcome;
+      });
+
+      auto api = server.group("/api");
+      api.on_response([&](const uvp::http::response_info&) {
+        events.push_back("api");
+      });
+      api.get("/items/:id", [](uvp::http::request& req, uvp::http::response& res) {
+        res.text(std::string{"item "} + std::string(req.params().get("id")) + "\n");
+      });
+    },
+    "GET /api/items/42 HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "item 42\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_REQUIRE(events.size() == 2U);
+  UVP_CHECK_EQ(events[0], "api");
+  UVP_CHECK_EQ(events[1], "server");
+  UVP_CHECK_EQ(observed_status, 200U);
+  UVP_CHECK_EQ(observed_body_size, 8U);
+  UVP_CHECK_EQ(observed_path, "/api/items/42");
+  UVP_CHECK(observed_outcome == uvp::http::response_outcome::completed);
+}
+
+UVP_TEST_CASE("http server runs response hooks for short circuited requests") {
+  unsigned int observed_status = 0;
+  uvp::http::response_outcome observed_outcome = uvp::http::response_outcome::error;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      auto api = server.group("/api");
+      api.on_request([](uvp::http::request&, uvp::http::response& res) {
+        res.status(uvp::http::status::unauthorized).text("blocked\n");
+        return uvp::http::hook_result::stop;
+      });
+      api.on_response([&](const uvp::http::response_info& info) {
+        observed_status = info.status;
+        observed_outcome = info.outcome;
+      });
+      api.get("/secure", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("handler\n");
+      });
+    },
+    "GET /api/secure HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "blocked\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 401 Unauthorized\r\n") != std::string::npos);
+  UVP_CHECK_EQ(observed_status, 401U);
+  UVP_CHECK(observed_outcome == uvp::http::response_outcome::completed);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server runs response hooks for deferred responses") {
+  unsigned int observed_status = 0;
+  std::size_t observed_body_size = 0;
+  uvp::http::response_outcome observed_outcome = uvp::http::response_outcome::error;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.on_response([&](const uvp::http::response_info& info) {
+        observed_status = info.status;
+        observed_body_size = info.response_body_size;
+        observed_outcome = info.outcome;
+      });
+      server.get("/later", [](uvp::http::request&, uvp::http::response& res) {
+        auto reply = res.defer();
+        reply.status(uvp::http::status::created).text("later\n");
+      });
+    },
+    "GET /later HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "later\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 201 Created\r\n") != std::string::npos);
+  UVP_CHECK_EQ(observed_status, 201U);
+  UVP_CHECK_EQ(observed_body_size, 6U);
+  UVP_CHECK(observed_outcome == uvp::http::response_outcome::completed);
 }

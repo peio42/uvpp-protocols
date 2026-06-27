@@ -21,10 +21,10 @@ This proposal keeps that work aligned with the library's current shape:
 
 - Implemented: route parameters, wildcard tails, method-aware matching,
   `not_found`, `on_error`, route groups, shared prefixes, and inherited
-  `on_request`/`pre_handler` hooks.
-- Not implemented: `on_response`, route-level hooks separate from group hooks,
-  mountable routers, resource route builders, scoped fallbacks, parameter
-  constraints, and matched route pattern accessors.
+  `on_request`/`pre_handler`/`on_response` hooks.
+- Not implemented: route-level hooks separate from group hooks, mountable
+  routers, resource route builders, scoped fallbacks, parameter constraints,
+  and matched route pattern accessors.
 
 ## Draft Scope
 
@@ -107,19 +107,92 @@ admin.on_request([](uvp::http::request& req, uvp::http::response& res) {
 });
 ```
 
-Execution order should be root to leaf:
+Request-side execution order should be root to leaf:
 
 1. server-level `on_request` hooks;
 2. parent group hooks;
 3. child group hooks;
 4. route-level hooks;
-5. final route handler;
-6. observational response hooks, leaf to root or root to leaf only after the
-   order has a documented use case.
+5. final route handler.
 
 The initial implementation should avoid generic Express-style `next()` chains.
 They are flexible, but they blur body policy timing, response ownership, and
 deferred or streaming response behavior.
+
+### `on_response` Behavior
+
+`on_response` is an observational hook. It cannot mutate
+the response status, headers, body, streaming state, or connection behavior.
+Response mutation belongs in `on_request`, `pre_handler`, the final handler, or
+a separately designed `before_response` hook if a real use case appears.
+
+The hook receives a snapshot rather than `request&`. Buffered request
+handlers keep the request alive only while the handler runs, and deferred or
+streaming responses may complete after that stack frame is gone. Holding a
+borrowed `request&` until response completion would make the lifetime model
+surprising.
+
+Implemented shape:
+
+```cpp
+enum class response_outcome {
+  completed,
+  cancelled,
+  error,
+};
+
+struct request_snapshot {
+  method method;
+  std::string target;
+  std::string path;
+  std::string query;
+  route_params params;
+  connection_info connection;
+};
+
+struct response_info {
+  const request_snapshot& request;
+  unsigned int status = 200;
+  const headers& response_headers;
+  std::size_t response_body_size = 0;
+  response_outcome outcome = response_outcome::completed;
+};
+
+using response_hook_type = std::function<void(const response_info&)>;
+```
+
+`request_snapshot` is captured after route matching and before the
+request can be destroyed. It intentionally excludes request body bytes and raw
+request headers at first; those can be added later only if there is a clear
+logging or metrics need and the copying cost remains explicit.
+
+`on_response` runs exactly once for every route handler that starts a
+response lifecycle:
+
+- buffered response: after application code completes the response, before
+  serialization if practical;
+- deferred response: when the deferred response completes;
+- streaming response: when the stream ends, is cancelled, or fails;
+- hook short-circuit response: after the short-circuit response completes;
+- connection close before completion: once with `response_outcome::cancelled`
+  or `response_outcome::error`, depending on whether the close is graceful or
+  caused by an error.
+
+Response hook execution uses leaf-to-root order. This mirrors unwinding:
+the most specific route/group observes first, then parent groups, then global
+server hooks. Request-side hooks keep root-to-leaf order because they prepare
+the request before the handler; response-side hooks observe completion after
+the handler.
+
+Exceptions thrown by `on_response` do not change the already completed
+response. They also should not call application `on_error`, because that would
+invite double responses or hook loops. The first implementation can swallow
+them; a later diagnostics hook may expose hook failures if needed.
+
+`on_response` is different from a possible `on_finish` hook. `on_response`
+observes application completion. `on_finish` would observe transport completion
+after bytes are written or the connection closes. This proposal only defines
+`on_response`; transport-finish metrics can be proposed separately.
 
 ## Borrowed Router Ideas
 

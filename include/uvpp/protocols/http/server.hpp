@@ -146,6 +146,12 @@ public:
   }
 
   template<class Handler>
+  server& on_response(Handler&& handler) {
+    router_.on_response(std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
   server& not_found(Handler&& handler) {
     not_found_handler_ = uvp::http::detail::wrap_none_handler(std::forward<Handler>(handler));
     return *this;

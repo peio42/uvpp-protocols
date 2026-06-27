@@ -230,6 +230,11 @@ router& router::add_pre_handler_hook(std::string_view prefix, hook_type hook) {
   return *this;
 }
 
+router& router::add_on_response_hook(std::string_view prefix, response_hook_type hook) {
+  nodes_[ensure_prefix_node(prefix)].on_response_hooks.push_back(std::move(hook));
+  return *this;
+}
+
 std::size_t router::ensure_prefix_node(std::string_view prefix) {
   std::size_t node_index = 0;
   std::string_view rest = prefix;
@@ -277,13 +282,17 @@ const router::route_target* router::match_node(
   std::string_view path,
   route_params& params,
   std::vector<const hook_type*>& on_request_hooks,
-  std::vector<const hook_type*>& pre_handler_hooks) const {
+  std::vector<const hook_type*>& pre_handler_hooks,
+  std::vector<const response_hook_type*>& on_response_hooks) const {
   const auto& node = nodes_[node_index];
   for (const auto& hook : node.on_request_hooks) {
     on_request_hooks.push_back(&hook);
   }
   for (const auto& hook : node.pre_handler_hooks) {
     pre_handler_hooks.push_back(&hook);
+  }
+  for (const auto& hook : node.on_response_hooks) {
+    on_response_hooks.push_back(&hook);
   }
 
   std::string_view rest = path;
@@ -299,6 +308,7 @@ const router::route_target* router::match_node(
       }
       auto wildcard_on_request_hooks = on_request_hooks;
       auto wildcard_pre_handler_hooks = pre_handler_hooks;
+      auto wildcard_on_response_hooks = on_response_hooks;
       const auto& wildcard_node = nodes_[node.wildcard_child->node];
       for (const auto& hook : wildcard_node.on_request_hooks) {
         wildcard_on_request_hooks.push_back(&hook);
@@ -306,10 +316,14 @@ const router::route_target* router::match_node(
       for (const auto& hook : wildcard_node.pre_handler_hooks) {
         wildcard_pre_handler_hooks.push_back(&hook);
       }
+      for (const auto& hook : wildcard_node.on_response_hooks) {
+        wildcard_on_response_hooks.push_back(&hook);
+      }
       if (const auto& target = nodes_[node.wildcard_child->node].targets[method_index]) {
         params = std::move(wildcard_params);
         on_request_hooks = std::move(wildcard_on_request_hooks);
         pre_handler_hooks = std::move(wildcard_pre_handler_hooks);
+        on_response_hooks = std::move(wildcard_on_response_hooks);
         return &*target;
       }
     }
@@ -320,16 +334,19 @@ const router::route_target* router::match_node(
     auto child_params = params;
     auto child_on_request_hooks = on_request_hooks;
     auto child_pre_handler_hooks = pre_handler_hooks;
+    auto child_on_response_hooks = on_response_hooks;
     if (auto target = match_node(
           child->second,
           method_index,
           rest,
           child_params,
           child_on_request_hooks,
-          child_pre_handler_hooks)) {
+          child_pre_handler_hooks,
+          child_on_response_hooks)) {
       params = std::move(child_params);
       on_request_hooks = std::move(child_on_request_hooks);
       pre_handler_hooks = std::move(child_pre_handler_hooks);
+      on_response_hooks = std::move(child_on_response_hooks);
       return target;
     }
   }
@@ -339,16 +356,19 @@ const router::route_target* router::match_node(
     child_params.set(node.parameter_child->name, segment);
     auto child_on_request_hooks = on_request_hooks;
     auto child_pre_handler_hooks = pre_handler_hooks;
+    auto child_on_response_hooks = on_response_hooks;
     if (auto target = match_node(
           node.parameter_child->node,
           method_index,
           rest,
           child_params,
           child_on_request_hooks,
-          child_pre_handler_hooks)) {
+          child_pre_handler_hooks,
+          child_on_response_hooks)) {
       params = std::move(child_params);
       on_request_hooks = std::move(child_on_request_hooks);
       pre_handler_hooks = std::move(child_pre_handler_hooks);
+      on_response_hooks = std::move(child_on_response_hooks);
       return target;
     }
   }
@@ -360,6 +380,7 @@ const router::route_target* router::match_node(
     }
     auto wildcard_on_request_hooks = on_request_hooks;
     auto wildcard_pre_handler_hooks = pre_handler_hooks;
+    auto wildcard_on_response_hooks = on_response_hooks;
     const auto& wildcard_node = nodes_[node.wildcard_child->node];
     for (const auto& hook : wildcard_node.on_request_hooks) {
       wildcard_on_request_hooks.push_back(&hook);
@@ -367,10 +388,14 @@ const router::route_target* router::match_node(
     for (const auto& hook : wildcard_node.pre_handler_hooks) {
       wildcard_pre_handler_hooks.push_back(&hook);
     }
+    for (const auto& hook : wildcard_node.on_response_hooks) {
+      wildcard_on_response_hooks.push_back(&hook);
+    }
     if (const auto& target = nodes_[node.wildcard_child->node].targets[method_index]) {
       params = std::move(wildcard_params);
       on_request_hooks = std::move(wildcard_on_request_hooks);
       pre_handler_hooks = std::move(wildcard_pre_handler_hooks);
+      on_response_hooks = std::move(wildcard_on_response_hooks);
       return &*target;
     }
   }
@@ -387,7 +412,15 @@ router::match_result router::match(method method_value, std::string_view path) c
   route_params params;
   std::vector<const hook_type*> on_request_hooks;
   std::vector<const hook_type*> pre_handler_hooks;
-  const auto* target = match_node(0, method_index, path, params, on_request_hooks, pre_handler_hooks);
+  std::vector<const response_hook_type*> on_response_hooks;
+  const auto* target = match_node(
+    0,
+    method_index,
+    path,
+    params,
+    on_request_hooks,
+    pre_handler_hooks,
+    on_response_hooks);
   if (!target) {
     return {};
   }
@@ -398,6 +431,7 @@ router::match_result router::match(method method_value, std::string_view path) c
     std::move(params),
     std::move(on_request_hooks),
     std::move(pre_handler_hooks),
+    std::move(on_response_hooks),
   };
 }
 
@@ -411,9 +445,10 @@ std::vector<method> router::allowed_methods(std::string_view path) const {
     auto params = route_params{};
     std::vector<const hook_type*> on_request_hooks;
     std::vector<const hook_type*> pre_handler_hooks;
+    std::vector<const response_hook_type*> on_response_hooks;
     const auto method_index = static_cast<std::size_t>(method_value);
     if (method_index < method_count_ &&
-        match_node(0, method_index, path, params, on_request_hooks, pre_handler_hooks)) {
+        match_node(0, method_index, path, params, on_request_hooks, pre_handler_hooks, on_response_hooks)) {
       methods.push_back(method_value);
     }
   }

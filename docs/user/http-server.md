@@ -125,6 +125,11 @@ api.pre_handler([](uvp::http::request&, uvp::http::response& res) {
   res.header("x-api", "v1");
 });
 
+api.on_response([](const uvp::http::response_info& info) {
+  // Observe status, response size, outcome, and a copied request snapshot.
+  record_request(info.request.path, info.status, info.response_body_size);
+});
+
 api.get("/health", [](uvp::http::request&, uvp::http::response& res) {
   res.text("ok\n");
 });
@@ -151,6 +156,12 @@ it runs before the handler receives `request_body_stream&`.
 Hook execution order is root to leaf: server-level hooks, parent groups, child
 groups, then the final route handler. Hooks that return `void` are treated as
 `hook_result::next`.
+
+`on_response` is observational. It runs once when the response completes or is
+cancelled, and receives `response_info` with a copied request snapshot, status,
+response headers, logical response body size, and a `response_outcome`.
+Response hooks cannot mutate the response. They run leaf to root, so the most
+specific group observes first.
 
 ## No Request Body
 
