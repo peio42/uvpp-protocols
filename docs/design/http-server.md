@@ -173,7 +173,7 @@ The trie also drives method-aware HTTP behavior:
 
 Future route ergonomics should build on the same trie. Route groups and
 middleware are tracked in
-[routing and middleware polish](../proposals/routing-and-middleware-polish.md).
+[route groups and hooks](../proposals/route-groups-and-hooks.md).
 
 Handlers receive request and response references, plus a body argument when the
 body policy produces one:
@@ -582,7 +582,7 @@ uvp::http::server srv(
 
 Future HTTP work is tracked outside stable design:
 
-- [Routing and middleware polish](../proposals/routing-and-middleware-polish.md)
+- [Route groups and hooks](../proposals/route-groups-and-hooks.md)
 - [HTTP timeout enforcement](../proposals/http-timeout-enforcement.md)
 - [Typed JSON body policy](../proposals/typed-json-body-policy.md)
 - [Multipart handling](../proposals/multipart-handling.md)

@@ -5,7 +5,6 @@ references, not stable design truth.
 
 ## Active Drafts
 
-- [Routing and middleware polish](routing-and-middleware-polish.md)
 - [Route path decoding](route-path-decoding.md)
 - [HTTP timeout enforcement](http-timeout-enforcement.md)
 - [Route groups and hooks](route-groups-and-hooks.md)
