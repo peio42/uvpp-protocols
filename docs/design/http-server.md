@@ -171,8 +171,8 @@ The trie also drives method-aware HTTP behavior:
 - `OPTIONS` is answered automatically for known paths when no explicit
   `OPTIONS` route is registered.
 
-Future route ergonomics should build on the same trie. Route groups and
-middleware are tracked in
+Route groups and request hooks build on the same trie. Follow-up middleware
+ergonomics are tracked in
 [route groups and hooks](../proposals/route-groups-and-hooks.md).
 
 Handlers receive request and response references, plus a body argument when the

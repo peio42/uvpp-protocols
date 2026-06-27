@@ -19,6 +19,13 @@
 
 namespace uvp::http {
 
+enum class hook_result {
+  next,
+  stop,
+};
+
+using hook_type = std::function<hook_result(request&, response&)>;
+
 namespace detail {
 
 enum class body_mode {
@@ -40,7 +47,11 @@ template<class Handler>
 route_handler_type wrap_stream_handler(Handler&& handler);
 template<class Handler>
 constexpr auto infer_body_policy();
+template<class Handler>
+hook_type wrap_hook(Handler&& handler);
 } // namespace detail
+
+class route_group;
 
 class router {
 public:
@@ -51,6 +62,8 @@ public:
     detail::body_mode body = detail::body_mode::none;
     std::size_t max_body_bytes = 0;
     route_params params;
+    std::vector<const hook_type*> on_request_hooks;
+    std::vector<const hook_type*> pre_handler_hooks;
 
     [[nodiscard]] bool ok() const noexcept { return handler != nullptr; }
     explicit operator bool() const noexcept { return ok(); }
@@ -103,6 +116,18 @@ public:
   router& route(method method_value, std::string_view pattern, Handler&& handler) {
     return route(method_value, pattern, detail::infer_body_policy<Handler>(), std::forward<Handler>(handler));
   }
+
+  template<class Handler>
+  router& on_request(Handler&& handler) {
+    return add_on_request_hook({}, detail::wrap_hook(std::forward<Handler>(handler)));
+  }
+
+  template<class Handler>
+  router& pre_handler(Handler&& handler) {
+    return add_pre_handler_hook({}, detail::wrap_hook(std::forward<Handler>(handler)));
+  }
+
+  [[nodiscard]] route_group group(std::string_view prefix);
 
   template<class BodyPolicy, class Handler>
   router& get(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
@@ -199,6 +224,8 @@ private:
     std::optional<named_child> parameter_child;
     std::optional<named_child> wildcard_child;
     std::array<std::optional<route_target>, method_count_> targets;
+    std::vector<hook_type> on_request_hooks;
+    std::vector<hook_type> pre_handler_hooks;
   };
 
   router& add_route(
@@ -207,14 +234,144 @@ private:
     detail::body_mode body,
     std::size_t max_body_bytes,
     handler_type handler);
+  router& add_on_request_hook(std::string_view prefix, hook_type hook);
+  router& add_pre_handler_hook(std::string_view prefix, hook_type hook);
+  [[nodiscard]] std::size_t ensure_prefix_node(std::string_view prefix);
   [[nodiscard]] const route_target* match_node(
     std::size_t node_index,
     std::size_t method_index,
     std::string_view path,
-    route_params& params) const;
+    route_params& params,
+    std::vector<const hook_type*>& on_request_hooks,
+    std::vector<const hook_type*>& pre_handler_hooks) const;
 
   std::vector<trie_node> nodes_{{}};
   std::size_t route_count_ = 0;
+
+  friend class route_group;
+};
+
+class route_group {
+public:
+  template<class Handler>
+  route_group& on_request(Handler&& handler) {
+    router_->add_on_request_hook(prefix_, detail::wrap_hook(std::forward<Handler>(handler)));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& pre_handler(Handler&& handler) {
+    router_->add_pre_handler_hook(prefix_, detail::wrap_hook(std::forward<Handler>(handler)));
+    return *this;
+  }
+
+  [[nodiscard]] route_group group(std::string_view prefix) const;
+
+  template<class Handler>
+  route_group& route(method method_value, std::string_view pattern, Handler&& handler) {
+    router_->route(method_value, route_pattern(pattern), std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& route(method method_value, std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_->route(method_value, route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& get(std::string_view pattern, Handler&& handler) {
+    router_->get(route_pattern(pattern), std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& get(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_->get(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& post(std::string_view pattern, Handler&& handler) {
+    router_->post(route_pattern(pattern), std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& post(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_->post(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& put(std::string_view pattern, Handler&& handler) {
+    router_->put(route_pattern(pattern), std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& put(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_->put(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& patch(std::string_view pattern, Handler&& handler) {
+    router_->patch(route_pattern(pattern), std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& patch(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_->patch(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& delete_(std::string_view pattern, Handler&& handler) {
+    router_->delete_(route_pattern(pattern), std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& delete_(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_->delete_(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& head(std::string_view pattern, Handler&& handler) {
+    router_->head(route_pattern(pattern), std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& head(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_->head(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& options(std::string_view pattern, Handler&& handler) {
+    router_->options(route_pattern(pattern), std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& options(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
+    router_->options(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+private:
+  route_group(router& owner, std::string prefix) : router_(&owner), prefix_(std::move(prefix)) {}
+
+  [[nodiscard]] std::string route_pattern(std::string_view pattern) const;
+
+  router* router_ = nullptr;
+  std::string prefix_;
+
+  friend class router;
 };
 
 namespace detail {
@@ -290,6 +447,25 @@ constexpr auto infer_body_policy() {
       "(request&, response&, request_body_stream&)");
     return body::none{};
   }
+}
+
+template<class Handler>
+hook_type wrap_hook(Handler&& handler) {
+  using stored_handler = std::decay_t<Handler>;
+  return [handler = stored_handler(std::forward<Handler>(handler))](request& req, response& res) mutable {
+    if constexpr (std::is_invocable_r_v<hook_result, stored_handler&, request&, response&>) {
+      return handler(req, res);
+    } else if constexpr (
+      std::is_invocable_v<stored_handler&, request&, response&> &&
+      std::is_void_v<std::invoke_result_t<stored_handler&, request&, response&>>) {
+      handler(req, res);
+      return hook_result::next;
+    } else {
+      static_assert(std::is_invocable_r_v<hook_result, stored_handler&, request&, response&>,
+        "HTTP hook must accept (request&, response&) and return hook_result or void");
+      return hook_result::next;
+    }
+  };
 }
 
 } // namespace detail

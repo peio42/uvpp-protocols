@@ -1,6 +1,6 @@
 # Route Groups and Hooks Proposal
 
-Status: Draft
+Status: Partially implemented
 
 ## Context
 
@@ -20,9 +20,11 @@ This proposal keeps that work aligned with the library's current shape:
 ## Current State
 
 - Implemented: route parameters, wildcard tails, method-aware matching,
-  `not_found`, and `on_error`.
-- Not implemented: route groups, shared prefixes, group-level hooks, and
-  subtree-level hooks.
+  `not_found`, `on_error`, route groups, shared prefixes, and inherited
+  `on_request`/`pre_handler` hooks.
+- Not implemented: `on_response`, route-level hooks separate from group hooks,
+  mountable routers, resource route builders, scoped fallbacks, parameter
+  constraints, and matched route pattern accessors.
 
 ## Draft Scope
 

@@ -106,6 +106,52 @@ back to a matching `GET` route and omit the response body. `OPTIONS` requests
 for a known path are answered automatically with `204 No Content` and `Allow`
 unless an explicit `OPTIONS` route is registered.
 
+## Route Groups and Hooks
+
+Use route groups to share a path prefix and hooks across related routes:
+
+```cpp
+auto api = srv.group("/api/v1");
+
+api.on_request([](uvp::http::request& req, uvp::http::response& res) {
+  if (req.header("authorization").empty()) {
+    res.status(uvp::http::status::unauthorized).text("unauthorized\n");
+    return uvp::http::hook_result::stop;
+  }
+  return uvp::http::hook_result::next;
+});
+
+api.pre_handler([](uvp::http::request&, uvp::http::response& res) {
+  res.header("x-api", "v1");
+});
+
+api.get("/health", [](uvp::http::request&, uvp::http::response& res) {
+  res.text("ok\n");
+});
+```
+
+Groups may be nested. Prefixes are normalized, so these declarations register
+`/api/v1/items/:id`:
+
+```cpp
+auto api = srv.group("/api");
+auto v1 = api.group("v1");
+v1.get("items/:id", show_item);
+```
+
+`on_request` runs after the route is matched and before the request body is
+buffered or handed to a streaming route. It can return `hook_result::stop` to
+short-circuit the final handler. A hook that writes, defers, or starts a
+streaming response also stops the chain.
+
+`pre_handler` runs immediately before the final route handler. For buffered
+body policies, the request body is already available. For streaming policies,
+it runs before the handler receives `request_body_stream&`.
+
+Hook execution order is root to leaf: server-level hooks, parent groups, child
+groups, then the final route handler. Hooks that return `void` are treated as
+`hook_result::next`.
+
 ## No Request Body
 
 Use `body::none{}` for routes that do not accept a request body:

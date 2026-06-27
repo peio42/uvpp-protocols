@@ -3,7 +3,9 @@
 #include <cstddef>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include <uvpp/protocols/http.hpp>
 
@@ -127,4 +129,75 @@ UVP_TEST_CASE("http router reports methods allowed for a matched path") {
   UVP_CHECK(allowed[1] == uvp::http::method::post);
   UVP_CHECK(allowed[2] == uvp::http::method::delete_);
   UVP_CHECK(router.allowed_methods("/missing").empty());
+}
+
+UVP_TEST_CASE("http router groups prefix routes") {
+  uvp::http::router router;
+
+  auto api = router.group("/api");
+  api.get("/health", [](uvp::http::request&, uvp::http::response&) {});
+
+  auto v1 = api.group("v1");
+  v1.post("items", [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+
+  UVP_CHECK(router.find(uvp::http::method::get, "/api/health") != nullptr);
+  UVP_CHECK(router.find(uvp::http::method::get, "/health") == nullptr);
+
+  auto match = router.match(uvp::http::method::post, "/api/v1/items");
+  UVP_REQUIRE(match);
+  UVP_CHECK(match.body == uvp::http::detail::body_mode::text);
+}
+
+UVP_TEST_CASE("http router matches inherited group hooks from root to leaf") {
+  uvp::http::router router;
+  std::vector<std::string> order;
+
+  router.on_request([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("root-request");
+  });
+  router.pre_handler([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("root-pre");
+  });
+
+  auto api = router.group("/api");
+  api.on_request([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("api-request");
+    return uvp::http::hook_result::next;
+  });
+  api.pre_handler([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("api-pre");
+    return uvp::http::hook_result::next;
+  });
+
+  auto v1 = api.group("/v1");
+  v1.on_request([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("v1-request");
+  });
+  v1.pre_handler([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("v1-pre");
+  });
+  v1.get("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
+
+  auto match = router.match(uvp::http::method::get, "/api/v1/items/42");
+  UVP_REQUIRE(match);
+  UVP_CHECK_EQ(match.on_request_hooks.size(), 3U);
+  UVP_CHECK_EQ(match.pre_handler_hooks.size(), 3U);
+  UVP_CHECK_EQ(match.params.get("id"), "42");
+
+  uvp::http::request req;
+  uvp::http::response res;
+  for (const auto* hook : match.on_request_hooks) {
+    UVP_CHECK((*hook)(req, res) == uvp::http::hook_result::next);
+  }
+  for (const auto* hook : match.pre_handler_hooks) {
+    UVP_CHECK((*hook)(req, res) == uvp::http::hook_result::next);
+  }
+
+  UVP_REQUIRE(order.size() == 6U);
+  UVP_CHECK_EQ(order[0], "root-request");
+  UVP_CHECK_EQ(order[1], "api-request");
+  UVP_CHECK_EQ(order[2], "v1-request");
+  UVP_CHECK_EQ(order[3], "root-pre");
+  UVP_CHECK_EQ(order[4], "api-pre");
+  UVP_CHECK_EQ(order[5], "v1-pre");
 }

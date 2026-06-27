@@ -406,14 +406,23 @@ struct server::impl {
         if (active_request_->route && active_request_->route.body == detail::body_mode::none && request_has_body(message)) {
           active_request_->rejected = true;
           send_error(status::bad_request, false);
+          return;
+        }
+        if (active_request_->route) {
+          const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive && !request_has_body(message);
+          run_on_request_hooks(*active_request_, !keep_alive, active_request_->req.method() == method::head);
         }
         return;
       }
 
-      const auto keep_alive = owner_.owner.options_.keep_alive();
+      const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive;
       active_request_->slot = create_response_slot(!keep_alive, active_request_->req.method() == method::head);
       if (!active_request_->slot) {
         active_request_->rejected = true;
+        return;
+      }
+
+      if (!run_on_request_hooks(*active_request_, !keep_alive, active_request_->req.method() == method::head)) {
         return;
       }
 
@@ -446,6 +455,11 @@ struct server::impl {
       response& res = active.slot->res;
 
       try {
+        if (!run_hooks(active.route.pre_handler_hooks, active.req, res)) {
+          finish_response_if_needed(res);
+          active.rejected = true;
+          return;
+        }
         (*active.route.handler)(active.req, res, {}, &active.body_stream);
       } catch (...) {
         handle_exception(active.req, res, std::current_exception());
@@ -493,13 +507,19 @@ struct server::impl {
         return;
       }
 
-      handle_buffered_message(message, std::move(active->route));
+      handle_buffered_message(message, std::move(active->route), std::move(active->slot));
     }
 
-    void handle_buffered_message(const detail::http1_message& message, router::match_result route_match) {
+    void handle_buffered_message(
+      const detail::http1_message& message,
+      router::match_result route_match,
+      std::shared_ptr<response_slot> existing_slot = {}) {
       const auto [path, query] = split_path_query(message.target);
       const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive;
-      auto slot = create_response_slot(!keep_alive, message.method == method::head);
+      auto slot = std::move(existing_slot);
+      if (!slot) {
+        slot = create_response_slot(!keep_alive, message.method == method::head);
+      }
       if (!slot) {
         return;
       }
@@ -551,11 +571,13 @@ struct server::impl {
       req.params_ = std::move(route_match.params);
 
       try {
+        if (!run_hooks(route_match.pre_handler_hooks, req, res)) {
+          finish_response_if_needed(res);
+          return;
+        }
         auto body = req.body_bytes();
         (*route_match.handler)(req, res, body, nullptr);
-        if (!res.ended() && !res.deferred() && !res.streaming()) {
-          res.end();
-        }
+        finish_response_if_needed(res);
       } catch (...) {
         handle_exception(req, res, std::current_exception());
         return;
@@ -599,6 +621,60 @@ struct server::impl {
         }
       } else {
         res.status(status::internal_server_error).text("internal server error\n");
+      }
+    }
+
+    bool run_on_request_hooks(active_request_state& active, bool close_after, bool suppress_body) {
+      if (active.route.on_request_hooks.empty()) {
+        return true;
+      }
+
+      if (!active.slot) {
+        active.slot = create_response_slot(close_after, suppress_body);
+        if (!active.slot) {
+          active.rejected = true;
+          return false;
+        }
+      }
+
+      dispatching_response_ = true;
+      struct dispatch_guard {
+        session& self;
+        ~dispatch_guard() {
+          self.dispatching_response_ = false;
+          self.flush_response_slots();
+        }
+      } guard{*this};
+
+      response& res = active.slot->res;
+      try {
+        if (!run_hooks(active.route.on_request_hooks, active.req, res)) {
+          finish_response_if_needed(res);
+          active.rejected = true;
+          return false;
+        }
+      } catch (...) {
+        handle_exception(active.req, res, std::current_exception());
+        active.rejected = true;
+        return false;
+      }
+
+      return true;
+    }
+
+    bool run_hooks(const std::vector<const hook_type*>& hooks, request& req, response& res) {
+      for (const auto* hook : hooks) {
+        const auto result = (*hook)(req, res);
+        if (result == hook_result::stop || res.ended() || res.deferred() || res.streaming()) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    void finish_response_if_needed(response& res) {
+      if (!res.ended() && !res.deferred() && !res.streaming()) {
+        res.end();
       }
     }
 

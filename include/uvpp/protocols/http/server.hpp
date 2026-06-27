@@ -129,6 +129,22 @@ public:
     return *this;
   }
 
+  [[nodiscard]] route_group group(std::string_view prefix) {
+    return router_.group(prefix);
+  }
+
+  template<class Handler>
+  server& on_request(Handler&& handler) {
+    router_.on_request(std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  server& pre_handler(Handler&& handler) {
+    router_.pre_handler(std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   server& not_found(Handler&& handler) {
     not_found_handler_ = uvp::http::detail::wrap_none_handler(std::forward<Handler>(handler));

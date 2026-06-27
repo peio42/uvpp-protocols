@@ -233,3 +233,50 @@ UVP_TEST_CASE("http server answers automatic OPTIONS for a known path") {
   UVP_CHECK(received.find("allow: GET, HEAD, POST, OPTIONS\r\n") != std::string::npos);
   UVP_CHECK(received.find("content-length: 0\r\n") != std::string::npos);
 }
+
+UVP_TEST_CASE("http server applies route group pre handlers") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      auto api = server.group("/api");
+      api.pre_handler([](uvp::http::request&, uvp::http::response& res) {
+        res.header("x-hook", "pre");
+      });
+      api.get("/health", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("ok\n");
+      });
+    },
+    "GET /api/health HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "ok\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("x-hook: pre\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nok\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server route group on_request can short circuit before handler") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      auto api = server.group("/api");
+      api.on_request([](uvp::http::request&, uvp::http::response& res) {
+        res.status(uvp::http::status::unauthorized).text("blocked\n");
+        return uvp::http::hook_result::stop;
+      });
+      api.post("/items", uvp::http::body::text{}, [](uvp::http::request&, uvp::http::response& res, std::string_view) {
+        res.text("handler\n");
+      });
+    },
+    "POST /api/items HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 7\r\n"
+    "\r\n"
+    "payload",
+    "blocked\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 401 Unauthorized\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nblocked\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
