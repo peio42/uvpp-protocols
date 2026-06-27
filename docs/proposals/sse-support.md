@@ -1,4 +1,12 @@
-# Server-Sent Events Design
+# Server-Sent Events Support Proposal
+
+Status: Draft, not implemented
+
+## Current State
+
+- Implemented: HTTP streaming responses with drain, cancel, and error hooks.
+- Not implemented: `response::sse()`, `sse_stream`, SSE formatting, headers,
+  retry frames, comments, and heartbeat support.
 
 ## Scope
 

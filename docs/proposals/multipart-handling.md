@@ -1,4 +1,12 @@
-# Multipart Design
+# Multipart Handling Proposal
+
+Status: Draft, not implemented
+
+## Current State
+
+- Implemented: request body streaming and bounded buffered body policies.
+- Not implemented: multipart parser, `body::multipart_stream`,
+  `body::multipart_form`, part APIs, and multipart limits.
 
 ## Scope
 
@@ -312,10 +320,10 @@ The parser must not own the socket, event loop, timers, or HTTP session. It
 should consume byte spans, emit typed events, and let the HTTP session own
 transport reads, timeout handles, response errors, and keep-alive sequencing.
 
-## Relationship To WebSocket Milestone
+## Relationship To WebSocket
 
-Multipart is not required for Milestone 3 WebSocket support, but deciding the
-body policy shape now prevents the HTTP API from drifting. WebSocket needs HTTP
+Multipart was not required for server-side WebSocket support, but deciding the
+body policy shape prevents the HTTP API from drifting. WebSocket uses HTTP
 upgrade hooks, while multipart needs HTTP body streaming and buffering hooks.
 Both features benefit from keeping protocol-specific state machines behind
 explicit route policies and avoiding hidden request APIs that start asynchronous

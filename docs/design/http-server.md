@@ -166,10 +166,9 @@ The trie also drives method-aware HTTP behavior:
 - `OPTIONS` is answered automatically for known paths when no explicit
   `OPTIONS` route is registered.
 
-Future route ergonomics should build on the same trie:
-
-- route groups with shared prefixes;
-- middleware or hooks attached to route groups or subtrees.
+Future route ergonomics should build on the same trie. Route groups and
+middleware are tracked in
+[routing and middleware polish](../proposals/routing-and-middleware-polish.md).
 
 Handlers receive request and response references, plus a body argument when the
 body policy produces one:
@@ -194,7 +193,6 @@ srv.get("/health", body::none{}, handler);
 srv.post("/echo", body::bytes{.max_size = 64 * 1024}, handler);
 srv.post("/message", body::text{.max_size = 64 * 1024}, handler);
 srv.post("/events", body::stream{}, handler);
-srv.post("/users", body::json<User>{}, handler);
 ```
 
 The body policy is part of the route contract:
@@ -205,11 +203,12 @@ The body policy is part of the route contract:
 - `body::text{}` buffers the body up to a configured limit, then dispatches
   with `std::string_view`;
 - `body::stream{}` dispatches after request headers and provides a
-  `request_body_stream&`;
-- `body::json<T>{}` is the intended typed JSON policy and should parse through
-  `uvp::json` before converting with `from_json`;
-- future policies such as multipart, form data, or protocol-specific decoders
-  should use the same route declaration shape.
+  `request_body_stream&`.
+
+Future typed policies such as JSON and multipart should use the same explicit
+route declaration shape. They are tracked in
+[typed JSON body policy](../proposals/typed-json-body-policy.md) and
+[multipart handling](../proposals/multipart-handling.md).
 
 Convenience overloads infer the body policy from the handler signature when the
 mapping is unambiguous:
@@ -221,9 +220,8 @@ srv.post("/message", text_handler); // equivalent to body::text{}
 srv.post("/events", stream_handler); // equivalent to body::stream{}
 ```
 
-Inference should stop at `body::none{}`, `body::bytes{}`, `body::text{}`, and
-`body::stream{}`. Typed policies such as `body::json<T>` and future multipart
-decoders should be declared explicitly.
+Inference stops at `body::none{}`, `body::bytes{}`, `body::text{}`, and
+`body::stream{}`. Typed policies should be declared explicitly.
 
 ## Request
 
@@ -347,7 +345,7 @@ customization points.
 
 ## Handler Completion
 
-The first version should support synchronous handler completion:
+Handlers may complete responses synchronously:
 
 ```cpp
 srv.get("/health", body::none{}, [](request& req, response& res) {
@@ -355,8 +353,8 @@ srv.get("/health", body::none{}, [](request& req, response& res) {
 });
 ```
 
-For asynchronous application work, add an explicit deferral model rather than
-letting users keep arbitrary references without a signal:
+For asynchronous application work, use the explicit deferral model rather than
+keeping arbitrary references without a signal:
 
 ```cpp
 srv.get("/data", body::none{}, [](request& req, response& res) {
@@ -372,9 +370,8 @@ srv.get("/data", body::none{}, [](request& req, response& res) {
 });
 ```
 
-`deferred_response` should own or reference response state safely until it is
-completed or cancelled by connection close. This can be added after the initial
-synchronous handler path, but the core response design should leave room for it.
+`deferred_response` owns or references response state safely until it is
+completed or cancelled by connection close.
 
 Public shape:
 
@@ -577,15 +574,15 @@ uvp::http::server srv(
     .server_header(false));
 ```
 
-## Future HTTP Features
+## Related Proposals
 
-After the first route-based server works:
+Future HTTP work is tracked outside stable design:
 
-- streaming request bodies;
-- middleware or hooks;
-- static file helper;
-- HTTP upgrade hooks for WebSocket;
-- HTTP client;
-- proxy and CONNECT support;
-- optional TLS listener integration;
-- HTTP/2 only if a suitable backend and scope are chosen.
+- [Routing and middleware polish](../proposals/routing-and-middleware-polish.md)
+- [Typed JSON body policy](../proposals/typed-json-body-policy.md)
+- [Multipart handling](../proposals/multipart-handling.md)
+- [Server-Sent Events support](../proposals/sse-support.md)
+- [Static file helper](../proposals/static-file-helper.md)
+- [HTTP client](../proposals/http-client.md)
+- [HTTP TLS listener integration](../proposals/http-tls-listener-integration.md)
+- [HTTP/2 support](../proposals/http2-support.md)

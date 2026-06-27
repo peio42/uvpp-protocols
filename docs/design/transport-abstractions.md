@@ -1,10 +1,10 @@
 # Transport Abstractions
 
-HTTP, TLS, WebSocket, MQTT, SMTP, and database adapters should compose over
-transport objects rather than inheriting from each other or binding directly to
-TCP.
+HTTP, TLS, WebSocket, MQTT clients, SMTP clients, and database client adapters
+should compose over transport objects rather than inheriting from each other or
+binding directly to TCP.
 
-The first milestone should introduce two transport concepts:
+The shared transport layer exposes two concepts:
 
 - `uvp::io::stream_listener`: accepts incoming byte streams.
 - `uvp::io::byte_stream`: reads, writes, and closes one established byte
@@ -47,16 +47,14 @@ Concrete adapters create type-erased transports:
 ```text
 uvp::io::tcp_listener  -> stream_listener
 uvp::io::pipe_listener -> stream_listener
-uvp::tls::listener            -> stream_listener
 
 uv::tcp  -> byte_stream
 uv::pipe -> byte_stream
-TLS stream adapter -> byte_stream
-WebSocket stream adapter, if needed -> framed/message stream
 ```
 
-The public modules compose by receiving the transport shape they need. HTTP
-does not inherit from TCP, TLS, or Unix sockets.
+Future adapters, including TLS, should convert into the same transport shapes.
+The public modules compose by receiving the transport shape they need. HTTP does
+not inherit from TCP, TLS, or Unix sockets.
 
 ## C++20 Result Shape
 
@@ -284,7 +282,7 @@ typed form avoids ambiguity.
 
 ## Relationship to TLS and WebSocket
 
-TLS should compose as a listener and stream adapter:
+TLS should compose as a listener and stream adapter when implemented:
 
 ```text
 tcp_listener
@@ -292,6 +290,9 @@ tcp_listener
     -> stream_listener
       -> uvp::http::server
 ```
+
+TLS is not implemented yet; the proposed shape is tracked in
+[TLS support](../proposals/tls-support.md).
 
 WebSocket starts as an HTTP upgrade. After upgrade, the HTTP session transfers
 or wraps the underlying `byte_stream` into a WebSocket session.

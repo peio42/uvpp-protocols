@@ -1,4 +1,14 @@
-# TLS Design
+# TLS Support Proposal
+
+Status: Draft, not implemented
+
+## Current State
+
+- Implemented: shared `uvp::io::byte_stream` and `uvp::io::stream_listener`
+  abstractions.
+- Not implemented: `uvp::tls`, TLS contexts, OpenSSL integration, TLS stream
+  adapter, TLS listener, verification policy, ALPN, SNI, and TLS errors.
+- Related proposals: [HTTP TLS listener integration](http-tls-listener-integration.md).
 
 ## Purpose
 

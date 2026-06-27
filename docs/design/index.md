@@ -1,4 +1,4 @@
-# uvpp-protocols Design Notes
+# uvpp-protocols Design
 
 `uvpp-protocols` is a companion project for
 [`uvpp`](https://github.com/peio42/uvpp). It provides higher-level protocol
@@ -46,15 +46,8 @@ loop.run();
 - [Transport abstractions](transport-abstractions.md): stream listeners and
   byte streams for TCP, Unix sockets, TLS, and future protocols.
 - [HTTP server design](http-server.md): first implementation target.
-- [Server-Sent Events design](sse.md): response streaming helper for
-  `text/event-stream` endpoints.
-- [Multipart design](multipart.md): streaming and bounded form-data upload
-  policies for HTTP.
 - [WebSocket design](websocket.md): HTTP upgrade integration, session
   ownership, and protocols over WebSocket.
-- [TLS design](tls.md): reusable TLS stream adaptation over `uvp::io`,
-  OpenSSL backend boundaries, STARTTLS, ALPN, SNI, and shutdown.
-- [Roadmap](roadmap.md): suggested implementation order and milestones.
 
 ## Design Posture
 

@@ -2,8 +2,8 @@
 
 ## Scope
 
-Milestone 3 adds server-side WebSocket support on top of the HTTP/1.1 upgrade
-path. The first implementation covers:
+Server-side WebSocket support is implemented on top of the HTTP/1.1 upgrade
+path. The current implementation covers:
 
 - HTTP upgrade integration;
 - RFC 6455 server handshake;
@@ -19,8 +19,8 @@ default and lets advanced users opt out with `accept_options::auto_pong(false)`.
 The session closes the transport after sending an application-initiated close
 frame.
 
-Client-side WebSocket support can follow the same session and framing model
-later, but it is not required for the first server milestone.
+Client-side WebSocket support is not implemented yet; it is tracked in
+[WebSocket client](../proposals/websocket-client.md).
 
 ## Dependency Direction
 
@@ -35,13 +35,12 @@ uvp::websocket -> uvp::http upgrade API, uvpp
 uvp::http      -> no dependency on uvp::websocket
 ```
 
-`uvp::http::server` should expose an upgrade hook that can be used by
-WebSocket, CONNECT, or future upgrade-style protocols without linking those
-modules into HTTP.
+`uvp::http::server` exposes an upgrade hook that can be used by WebSocket or
+future upgrade-style protocols without linking those modules into HTTP.
 
 ## Public API Shape
 
-The intended server-side API is:
+The server-side API is:
 
 ```cpp
 uvp::http::server srv(loop);

@@ -51,7 +51,7 @@ The log streaming example uses native HTTP/1.1 chunked responses and
 newline-delimited JSON. It demonstrates `response::stream()`,
 `streaming_response::write()`, `on_drain`, and async error handling.
 
-Milestone 3 WebSocket example:
+WebSocket example:
 
 ```sh
 ./build/uvpp_protocols_websocket_echo_example
@@ -99,16 +99,16 @@ uvp::http::server srv(
     .server_header(false));
 ```
 
-## Planned Modules
+## Modules
 
-- `uvp::http`: HTTP/1.1 server first, then client primitives.
-- `uvp::websocket`: WebSocket server/client sessions built on HTTP upgrade.
+- `uvp::http`: HTTP/1.1 server is available; client primitives are planned.
+- `uvp::websocket`: server-side WebSocket sessions are available; client
+  sessions are planned.
 - `uvp::tls`: TLS stream adapter over uvpp streams.
-- `uvp::smtp`: SMTP client and minimal server/session primitives.
+- `uvp::smtp`: SMTP client primitives.
 - `uvp::sse`: Server-Sent Events helper on top of HTTP responses.
 - `uvp::multipart`: multipart/form-data parser and streaming upload helpers.
-- `uvp::mqtt`: MQTT sessions over TCP, TLS, or WebSocket.
-- `uvp::proxy`: CONNECT and reverse-proxy helpers.
+- `uvp::mqtt`: MQTT client sessions over TCP, TLS, or WebSocket.
 
 ## Protocol Composition
 
@@ -142,9 +142,10 @@ The project uses a mixed build strategy:
 The HTTP/1 parser backend is `llhttp`, integrated behind `src/http/detail` as a
 synchronous state machine. When `llhttp` is fetched by CMake, its C sources are
 compiled into `uvpp-protocols` rather than installed as a separate package.
-HTTP/2 remains in the roadmap, but early milestones do not configure or link
-`libnghttp2`. External HTTP dependencies are allowed only under `detail/`. They
-never own the socket, the loop, timers, output buffers, or the public model.
+HTTP/2 remains a future design topic, but early milestones do not configure or
+link `libnghttp2`. External HTTP dependencies are allowed only under `detail/`.
+They never own the socket, the loop, timers, output buffers, or the public
+model.
 
 Current CMake dependency options:
 
@@ -157,12 +158,14 @@ cmake -S . -B build -DUVPP_PROTOCOLS_LLHTTP_SOURCE_DIR=/path/to/llhttp
 `llhttp` is not a replaceable backend. It is the HTTP/1 parser used by the
 library. The source-directory option exists for offline or vendored builds.
 
-## Design Documents
+## Documentation
 
-User documentation starts in [`docs`](docs):
+Documentation starts in [`docs/README.md`](docs/README.md).
 
-- [HTTP server](docs/http-server.md)
-- [WebSocket](docs/websocket.md)
+User documentation:
+
+- [HTTP server](docs/user/http-server.md)
+- [WebSocket](docs/user/websocket.md)
 
 The design notes live in [`docs/design`](docs/design):
 
@@ -173,17 +176,20 @@ The design notes live in [`docs/design`](docs/design):
 - [Protocol composition](docs/design/protocol-composition.md)
 - [Transport abstractions](docs/design/transport-abstractions.md)
 - [HTTP server design](docs/design/http-server.md)
-- [Server-Sent Events design](docs/design/sse.md)
-- [Multipart design](docs/design/multipart.md)
-- [TLS design](docs/design/tls.md)
-- [Roadmap](docs/design/roadmap.md)
+
+Planning and review material:
+
+- [Roadmap](docs/roadmap.md)
+- [Proposals](docs/proposals/README.md)
+- [API audit](docs/audits/api.md)
+- [Code quality audit](docs/audits/code-quality.md)
 
 ## Status
 
-Milestone 3 groundwork is available: HTTP route ergonomics, chunked responses,
+The current implementation includes HTTP route ergonomics, chunked responses,
 request body policies, request body streaming, the generic HTTP upgrade hook,
 server-side WebSocket handshake/framing, WebSocket sessions, byte-stream
-adaptation, runnable examples, and one structure test.
+adaptation, runnable examples, and focused tests.
 
 ## License
 

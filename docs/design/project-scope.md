@@ -32,9 +32,10 @@ blocks into application protocols.
 - It is not an opinionated application container, dependency injection system,
   ORM, template engine, or logging framework.
 - It should not hide the libuv loop behind global state.
-- It should not replace dedicated mature implementations for large domains such
-  as full HTTP/2, QUIC, or complete email server suites unless the project
-  explicitly chooses those investments later.
+- It should not become an application server suite, a proxy product, a broker,
+  or a database framework. Larger protocol domains should stay limited to
+  reusable client/session building blocks unless the project explicitly chooses
+  otherwise later.
 - It should not make synchronous-looking APIs that secretly block the event
   loop.
 
@@ -46,13 +47,14 @@ The initial family of modules can grow in this order:
 - `uvp::websocket`: WebSocket server/client sessions built on HTTP upgrade.
 - `uvp::tls`: TLS stream adapter over uvpp streams, with backend-specific
   providers such as OpenSSL or mbedTLS.
-- `uvp::smtp`: SMTP client and minimal server/session primitives.
+- `uvp::smtp`: SMTP client primitives.
 - `uvp::sse`: Server-Sent Events response helper on top of HTTP.
 - `uvp::multipart`: multipart/form-data parser and streaming upload helpers for
   HTTP.
 - `uvp::redis`: RESP client/session protocol for simple service integration.
-- `uvp::mqtt`: MQTT client/server session primitives for event-based messaging.
-- `uvp::proxy`: CONNECT and simple reverse-proxy building blocks.
+- `uvp::mqtt`: MQTT client session primitives for event-based messaging.
+- database client adapters, if they remain in this package after dependency and
+  scope review.
 
 Some modules should be thin protocol helpers, while others may be full session
 owners. The deciding factor is whether the module must coordinate parsing,
@@ -86,4 +88,3 @@ include/uvpp/protocols/
 
 Each public module should expose one aggregate header for common use and
 focused headers for users who want smaller includes.
-

@@ -79,32 +79,12 @@ srv.listen("127.0.0.1", 8080);
 
 That is shorthand for a plain TCP listener feeding HTTP sessions.
 
-TLS should be presented as an explicit listener or acceptor layer:
+TLS should be presented as an explicit listener or acceptor layer. In that
+model, HTTP does not know OpenSSL or mbedTLS. It only receives accepted byte
+streams from the TLS listener.
 
-```cpp
-auto tls = uvp::tls::server_context{}
-  .certificate_file("server.crt")
-  .private_key_file("server.key")
-  .alpn({"http/1.1"});
-
-uvp::http::server srv(loop);
-srv.listen(
-  uvp::tls::listener{loop}
-    .bind("0.0.0.0", 443)
-    .context(tls));
-```
-
-In that model, HTTP does not know OpenSSL or mbedTLS. It only receives accepted
-byte streams from the TLS listener.
-
-An alternative convenience API may be added later:
-
-```cpp
-srv.listen_tls("0.0.0.0", 443, tls);
-```
-
-The convenience API should delegate to the same composition path and must not
-make TLS a required HTTP dependency.
+The proposed TLS API is tracked in [TLS support](../proposals/tls-support.md)
+and [HTTP TLS listener integration](../proposals/http-tls-listener-integration.md).
 
 ## Upgrade Stacks
 
@@ -112,7 +92,7 @@ Some stacks are created dynamically by protocol negotiation. WebSocket is the
 main example: it starts as HTTP, then an accepted request upgrades the
 connection.
 
-The HTTP module should expose upgrade hooks without depending on the WebSocket
+The HTTP module exposes upgrade hooks without depending on the WebSocket
 module:
 
 ```cpp
@@ -124,7 +104,7 @@ srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
 });
 ```
 
-The exact callback shape may change, but the dependency direction should stay:
+The dependency direction is:
 
 ```text
 uvp::websocket -> uvp::http upgrade API
@@ -195,70 +175,22 @@ delivers inbound binary message payloads as ordered bytes. Text frames are not
 part of that byte-stream contract; protocols that need text frames or message
 metadata should consume `uvp::websocket::session` directly.
 
-MQTT is a useful example of a byte-oriented protocol over WebSocket:
+MQTT client support is a useful future example of a byte-oriented protocol over
+WebSocket. The important design point is that MQTT client code owns MQTT state,
+WebSocket owns WebSocket framing, TLS owns encryption, and TCP owns the socket.
+No layer should pretend to be the other.
 
-```cpp
-srv.upgrade("/mqtt", [](uvp::http::upgrade_request& req) {
-  auto stream = uvp::websocket::accept_byte_stream(req,
-    uvp::websocket::accept_options{}
-      .subprotocol("mqtt"));
-
-  uvp::mqtt::client_session::accept(std::move(stream),
-    uvp::mqtt::client_options{}
-      .client_id("agent-1")
-      .keep_alive(30s));
-});
-```
-
-MQTT over raw TCP or TLS should use the same MQTT session type with a different
-transport:
-
-```cpp
-auto mqtt = uvp::mqtt::client_session::connect(
-  loop,
-  uvp::io::tcp_endpoint{"broker.local", 1883},
-  uvp::mqtt::client_options{}
-    .client_id("agent-1"));
-```
-
-```cpp
-auto mqtt = uvp::mqtt::client_session::connect(
-  loop,
-  uvp::tls::endpoint{"broker.local", 8883, tls_context},
-  uvp::mqtt::client_options{}
-    .client_id("agent-1"));
-```
-
-The important design point is that MQTT owns MQTT state, WebSocket owns
-WebSocket framing, TLS owns encryption, and TCP owns the socket. No layer should
-pretend to be the other.
+MQTT client work is tracked in [MQTT client](../proposals/mqtt-client.md).
 
 ## Client Stacks
 
-Client APIs should follow the same pattern:
+Client APIs should follow the same composition pattern when added. High-level
+URL helpers are acceptable, but they should expand into explicit transport
+choices internally.
 
-```cpp
-auto http = uvp::http::client::connect(
-  loop,
-  uvp::io::tcp_endpoint{"127.0.0.1", 8080});
-```
-
-```cpp
-auto http = uvp::http::client::connect(
-  loop,
-  uvp::tls::endpoint{"api.example.com", 443, tls_context});
-```
-
-```cpp
-auto ws = uvp::websocket::client::connect(
-  loop,
-  uvp::url{"wss://api.example.com/events"},
-  uvp::websocket::client_options{}
-    .subprotocol("mqtt"));
-```
-
-High-level URL helpers are acceptable, but they should expand into explicit
-transport choices internally.
+Client-side work is tracked in [HTTP client](../proposals/http-client.md),
+[WebSocket client](../proposals/websocket-client.md), and
+[shared URL module](../proposals/shared-url-module.md).
 
 ## Ownership Across Layers
 
@@ -268,7 +200,7 @@ Layer ownership should be strict:
 - TLS owns handshake/encryption state and wraps the lower byte stream;
 - HTTP owns HTTP parser state, routing, and request/response lifecycle;
 - WebSocket owns frame parsing, masking, ping/pong, and message boundaries;
-- MQTT owns MQTT packets, subscriptions, QoS state, and keep-alive.
+- MQTT client code owns MQTT packets, subscriptions, QoS state, and keep-alive.
 
 Closing an upper layer should close or release the layers below according to a
 documented policy. A close initiated by a lower layer must notify every upper

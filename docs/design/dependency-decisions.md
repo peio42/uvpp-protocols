@@ -26,12 +26,12 @@ an adapter module.
 | HTTP/3 | [`nghttp3`](https://github.com/ngtcp2/nghttp3) plus a QUIC transport such as [`ngtcp2`](https://github.com/ngtcp2/ngtcp2) | Recommended for future HTTP/3 | `nghttp3` implements HTTP/3 mapping over QUIC and QPACK, but does not provide QUIC transport. |
 | URL parsing | [`ada-url`](https://github.com/ada-url/ada) | Accepted for shared URL module | Good fit for a general `uvp::url` wrapper. Use it beyond HTTP where WHATWG URL semantics are appropriate. |
 | HTTP client | [`libcurl`](https://curl.se/libcurl/) | Candidate with constraints | Useful for broad client protocol coverage. Its multi-socket API can integrate with event loops, but libcurl owns substantial client state and socket orchestration. |
-| TLS | OpenSSL-family backend | Deferred | Initial candidate is OpenSSL 3.x for broad platform support. Need a separate TLS design note before adoption. |
-| PostgreSQL | [`libpq`](https://www.postgresql.org/docs/current/libpq.html) | Candidate | Official PostgreSQL C client. Nonblocking APIs and socket readiness can integrate with uvpp. |
-| MariaDB/MySQL | [MariaDB Connector/C](https://mariadb.com/docs/connectors/mariadb-connector-c) | Candidate | Official C connector for MariaDB/MySQL with nonblocking API support. License and event integration need review. |
-| SMTP | No dependency selected | Open | Need to decide whether to implement a small SMTP state machine or adopt a library. |
-| WebSocket | No dependency selected | Open | Likely implemented directly on top of HTTP upgrade unless a small framing library is clearly better. |
-| MQTT | No dependency selected | Open | Need to evaluate MQTT C libraries versus a small packet/session implementation. |
+| TLS | OpenSSL-family backend | Draft proposal | Initial candidate is OpenSSL 3.x for broad platform support. Proposal exists; implementation is pending. |
+| PostgreSQL client | [`libpq`](https://www.postgresql.org/docs/current/libpq.html) | Candidate | Official PostgreSQL C client. Nonblocking APIs and socket readiness can integrate with uvpp. Scope still needs package review. |
+| MariaDB/MySQL client | [MariaDB Connector/C](https://mariadb.com/docs/connectors/mariadb-connector-c) | Candidate | Official C connector for MariaDB/MySQL with nonblocking API support. License and event integration need review. |
+| SMTP client | No dependency selected | Open | Need to decide whether to implement a small client state machine or adopt a library. |
+| WebSocket | Direct implementation on HTTP upgrade | Accepted | Server-side WebSocket is implemented without a framing dependency. Client-side support remains future work. |
+| MQTT client | No dependency selected | Open | Need to evaluate MQTT C libraries versus a small packet/session implementation. Broker/server work belongs in a separate project. |
 
 ## HTTP Family
 
@@ -55,10 +55,14 @@ request/response objects.
 
 ### HTTP/2
 
-`libnghttp2` is the preferred future HTTP/2 engine. It is mature, C-based, and
-focused on HTTP/2 framing plus HPACK. This matches the project rule: use a
-proven state machine for complex protocol framing, then keep uvpp-protocols in
-charge of sockets, timers, and public API.
+`libnghttp2` is the preferred future HTTP/2 engine if HTTP/2 remains in this
+package. It is mature, C-based, and focused on HTTP/2 framing plus HPACK. This
+matches the project rule: use a proven state machine for complex protocol
+framing, then keep uvpp-protocols in charge of sockets, timers, and public API.
+
+HTTP/2 should first get a design pass for a version-neutral HTTP layer between
+transport/session mechanics and the public HTTP model. The current HTTP/1.1
+server should not be stretched into HTTP/2 by accident.
 
 HTTP/2 should not be introduced during the HTTP/1 milestones, but HTTP/1
 abstractions should avoid assumptions that block it:
@@ -71,10 +75,10 @@ abstractions should avoid assumptions that block it:
 
 ### HTTP/3
 
-`nghttp3` is appropriate for the HTTP/3 layer, with an important caveat: it is
-not a QUIC transport implementation. It implements the HTTP/3 mapping over QUIC
-and QPACK. A future HTTP/3 module would need a QUIC layer as well, most likely
-`ngtcp2` or another explicitly selected QUIC implementation.
+`nghttp3` may be appropriate for a future HTTP/3 layer, with an important
+caveat: it is not a QUIC transport implementation. It implements the HTTP/3
+mapping over QUIC and QPACK. A future HTTP/3 module would need a QUIC layer as
+well, most likely `ngtcp2` or another explicitly selected QUIC implementation.
 
 The likely future stack is:
 
@@ -85,15 +89,16 @@ UDP socket
       -> uvp::http public request/response model
 ```
 
-Do not add HTTP/3 APIs until the QUIC ownership model is designed. QUIC changes
-the transport assumptions more deeply than HTTP/2 does.
+Do not add HTTP/3 APIs until both the QUIC ownership model and the
+version-neutral HTTP layer are designed. QUIC changes the transport assumptions
+more deeply than HTTP/2 does.
 
 ## URL Parsing
 
 `ada-url` is the accepted URL parsing dependency for a shared URL module. It is
 a modern C++ WHATWG-compatible parser, which makes it suitable for HTTP client
-URLs, request target helpers, proxy targets, and configuration strings that use
-web-style URL semantics.
+URLs, request target helpers, and configuration strings that use web-style URL
+semantics.
 
 The public type should be general:
 
@@ -112,7 +117,7 @@ Adoption questions:
 
 - Where is WHATWG URL behavior desired, and where do protocols need stricter
   RFC-specific parsing?
-- Do we need RFC-oriented parsing for SMTP, database URLs, or lower-level
+- Do we need RFC-oriented parsing for SMTP client, database client URLs, or lower-level
   socket endpoints?
 - Should endpoint convenience parsing accept URL strings, and if so which
   Unix-socket URL convention should be supported?
@@ -136,9 +141,9 @@ Do not adopt libcurl for the first HTTP server milestones.
 
 ## TLS
 
-TLS has a dedicated [design note](tls.md). The initial backend should be
-OpenSSL 3.x, kept private to the TLS module behind `uvp::tls` context and stream
-types.
+TLS has a dedicated [proposal](../proposals/tls-support.md). The initial backend
+should be OpenSSL 3.x, kept private to the TLS module behind `uvp::tls` context
+and stream types.
 
 TLS must remain a module boundary:
 
@@ -183,9 +188,9 @@ uvpp::protocols             -> convenience aggregate
 
 ## Database Protocols
 
-Database adapters are candidates for later milestones. They are not core
-protocol modules for the initial HTTP/WebSocket/TLS roadmap, but they fit the
-larger project goal of reusable event-based protocol integrations.
+Database client adapters are candidates for later milestones. They are not core
+protocol modules for the initial HTTP/WebSocket/TLS roadmap, and they may belong
+in a companion package rather than `uvpp-protocols`.
 
 ### PostgreSQL
 
@@ -219,6 +224,7 @@ adoption, review:
 - Whether URL parsing becomes a shared module.
 - Whether HTTP client is implemented with libcurl, direct `llhttp`/`nghttp2`,
   or a smaller custom client stack.
-- Whether database protocols belong in `uvpp-protocols` or a separate package.
-- SMTP dependency strategy.
-- MQTT dependency strategy.
+- Whether database client adapters belong in `uvpp-protocols` or a separate
+  package.
+- SMTP client dependency strategy.
+- MQTT client dependency strategy.

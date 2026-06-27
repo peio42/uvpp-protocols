@@ -30,8 +30,7 @@ Modules must not use a hidden default loop. If a module adapts an existing
 stream, that stream dependency should be visible:
 
 ```cpp
-uvp::tls::stream tls(client_tcp, context);
-uvp::websocket::session ws(http_request, http_response);
+uvp::some_protocol::session session(stream, options);
 ```
 
 ## Callbacks
