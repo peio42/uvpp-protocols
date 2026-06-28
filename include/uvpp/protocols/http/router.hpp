@@ -50,6 +50,23 @@ struct response_info {
 using hook_type = std::function<hook_result(request&, response&)>;
 using response_hook_type = std::function<void(const response_info&)>;
 
+struct route_options {
+  route_options& max_body_bytes(std::size_t value) & noexcept {
+    max_body_bytes_ = value;
+    return *this;
+  }
+
+  route_options&& max_body_bytes(std::size_t value) && noexcept {
+    max_body_bytes(value);
+    return std::move(*this);
+  }
+
+  [[nodiscard]] std::size_t max_body_bytes() const noexcept { return max_body_bytes_; }
+
+private:
+  std::size_t max_body_bytes_ = 0;
+};
+
 namespace detail {
 
 enum class body_mode {
@@ -60,6 +77,10 @@ enum class body_mode {
 };
 
 using route_handler_type = std::function<void(request&, response&, std::span<const std::byte>, request_body_stream*)>;
+
+inline std::size_t effective_max_body_bytes(route_options options, std::size_t body_policy_max) noexcept {
+  return options.max_body_bytes() == 0 ? body_policy_max : options.max_body_bytes();
+}
 
 template<class Handler>
 route_handler_type wrap_none_handler(Handler&& handler);
@@ -100,7 +121,8 @@ public:
   router() = default;
 
   template<class Handler>
-  router& route(method method_value, std::string_view pattern, body::none policy, Handler&& handler) {
+  router& route(method method_value, std::string_view pattern, route_options options, body::none policy, Handler&& handler) {
+    (void)options;
     (void)policy;
     return add_route(
       method_value,
@@ -111,33 +133,63 @@ public:
   }
 
   template<class Handler>
-  router& route(method method_value, std::string_view pattern, body::bytes policy, Handler&& handler) {
+  router& route(method method_value, std::string_view pattern, body::none policy, Handler&& handler) {
+    return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, route_options options, body::bytes policy, Handler&& handler) {
     return add_route(
       method_value,
       pattern,
       detail::body_mode::bytes,
-      policy.max_size,
+      detail::effective_max_body_bytes(options, policy.max_size),
       detail::wrap_bytes_handler(std::forward<Handler>(handler)));
   }
 
   template<class Handler>
-  router& route(method method_value, std::string_view pattern, body::text policy, Handler&& handler) {
+  router& route(method method_value, std::string_view pattern, body::bytes policy, Handler&& handler) {
+    return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, route_options options, body::text policy, Handler&& handler) {
     return add_route(
       method_value,
       pattern,
       detail::body_mode::text,
-      policy.max_size,
+      detail::effective_max_body_bytes(options, policy.max_size),
       detail::wrap_text_handler(std::forward<Handler>(handler)));
   }
 
   template<class Handler>
-  router& route(method method_value, std::string_view pattern, body::stream policy, Handler&& handler) {
+  router& route(method method_value, std::string_view pattern, body::text policy, Handler&& handler) {
+    return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, route_options options, body::stream policy, Handler&& handler) {
     return add_route(
       method_value,
       pattern,
       detail::body_mode::stream,
-      policy.max_size,
+      detail::effective_max_body_bytes(options, policy.max_size),
       detail::wrap_stream_handler(std::forward<Handler>(handler)));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, body::stream policy, Handler&& handler) {
+    return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, route_options options, Handler&& handler) {
+    return route(
+      method_value,
+      pattern,
+      options,
+      detail::infer_body_policy<Handler>(),
+      std::forward<Handler>(handler));
   }
 
   template<class Handler>
@@ -169,6 +221,11 @@ public:
     return route(method::get, pattern, policy, std::forward<Handler>(handler));
   }
 
+  template<class BodyPolicy, class Handler>
+  router& get(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    return route(method::get, pattern, options, policy, std::forward<Handler>(handler));
+  }
+
   template<class Handler>
   router& get(std::string_view pattern, Handler&& handler) {
     return route(method::get, pattern, std::forward<Handler>(handler));
@@ -177,6 +234,11 @@ public:
   template<class BodyPolicy, class Handler>
   router& post(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
     return route(method::post, pattern, policy, std::forward<Handler>(handler));
+  }
+
+  template<class BodyPolicy, class Handler>
+  router& post(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    return route(method::post, pattern, options, policy, std::forward<Handler>(handler));
   }
 
   template<class Handler>
@@ -189,6 +251,11 @@ public:
     return route(method::put, pattern, policy, std::forward<Handler>(handler));
   }
 
+  template<class BodyPolicy, class Handler>
+  router& put(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    return route(method::put, pattern, options, policy, std::forward<Handler>(handler));
+  }
+
   template<class Handler>
   router& put(std::string_view pattern, Handler&& handler) {
     return route(method::put, pattern, std::forward<Handler>(handler));
@@ -197,6 +264,11 @@ public:
   template<class BodyPolicy, class Handler>
   router& patch(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
     return route(method::patch, pattern, policy, std::forward<Handler>(handler));
+  }
+
+  template<class BodyPolicy, class Handler>
+  router& patch(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    return route(method::patch, pattern, options, policy, std::forward<Handler>(handler));
   }
 
   template<class Handler>
@@ -209,6 +281,11 @@ public:
     return route(method::delete_, pattern, policy, std::forward<Handler>(handler));
   }
 
+  template<class BodyPolicy, class Handler>
+  router& delete_(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    return route(method::delete_, pattern, options, policy, std::forward<Handler>(handler));
+  }
+
   template<class Handler>
   router& delete_(std::string_view pattern, Handler&& handler) {
     return route(method::delete_, pattern, std::forward<Handler>(handler));
@@ -219,6 +296,11 @@ public:
     return route(method::head, pattern, policy, std::forward<Handler>(handler));
   }
 
+  template<class BodyPolicy, class Handler>
+  router& head(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    return route(method::head, pattern, options, policy, std::forward<Handler>(handler));
+  }
+
   template<class Handler>
   router& head(std::string_view pattern, Handler&& handler) {
     return route(method::head, pattern, std::forward<Handler>(handler));
@@ -227,6 +309,11 @@ public:
   template<class BodyPolicy, class Handler>
   router& options(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
     return route(method::options, pattern, policy, std::forward<Handler>(handler));
+  }
+
+  template<class BodyPolicy, class Handler>
+  router& options(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    return route(method::options, pattern, options, policy, std::forward<Handler>(handler));
   }
 
   template<class Handler>
@@ -307,6 +394,12 @@ public:
     return *this;
   }
 
+  template<class BodyPolicy, class Handler>
+  route_resource& route(method method_value, route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->route(method_value, pattern_, options, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   route_resource& get(Handler&& handler) {
     router_->get(pattern_, std::forward<Handler>(handler));
@@ -316,6 +409,12 @@ public:
   template<class BodyPolicy, class Handler>
   route_resource& get(BodyPolicy policy, Handler&& handler) {
     router_->get(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& get(route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->get(pattern_, options, policy, std::forward<Handler>(handler));
     return *this;
   }
 
@@ -331,6 +430,12 @@ public:
     return *this;
   }
 
+  template<class BodyPolicy, class Handler>
+  route_resource& post(route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->post(pattern_, options, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   route_resource& put(Handler&& handler) {
     router_->put(pattern_, std::forward<Handler>(handler));
@@ -340,6 +445,12 @@ public:
   template<class BodyPolicy, class Handler>
   route_resource& put(BodyPolicy policy, Handler&& handler) {
     router_->put(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& put(route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->put(pattern_, options, policy, std::forward<Handler>(handler));
     return *this;
   }
 
@@ -355,6 +466,12 @@ public:
     return *this;
   }
 
+  template<class BodyPolicy, class Handler>
+  route_resource& patch(route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->patch(pattern_, options, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   route_resource& delete_(Handler&& handler) {
     router_->delete_(pattern_, std::forward<Handler>(handler));
@@ -364,6 +481,12 @@ public:
   template<class BodyPolicy, class Handler>
   route_resource& delete_(BodyPolicy policy, Handler&& handler) {
     router_->delete_(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& delete_(route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->delete_(pattern_, options, policy, std::forward<Handler>(handler));
     return *this;
   }
 
@@ -379,6 +502,12 @@ public:
     return *this;
   }
 
+  template<class BodyPolicy, class Handler>
+  route_resource& head(route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->head(pattern_, options, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   route_resource& options(Handler&& handler) {
     router_->options(pattern_, std::forward<Handler>(handler));
@@ -388,6 +517,12 @@ public:
   template<class BodyPolicy, class Handler>
   route_resource& options(BodyPolicy policy, Handler&& handler) {
     router_->options(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& options(route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->options(pattern_, options, policy, std::forward<Handler>(handler));
     return *this;
   }
 
@@ -441,6 +576,17 @@ public:
     return *this;
   }
 
+  template<class BodyPolicy, class Handler>
+  route_group& route(
+    method method_value,
+    std::string_view pattern,
+    route_options options,
+    BodyPolicy policy,
+    Handler&& handler) {
+    router_->route(method_value, route_pattern(pattern), options, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   route_group& get(std::string_view pattern, Handler&& handler) {
     router_->get(route_pattern(pattern), std::forward<Handler>(handler));
@@ -450,6 +596,12 @@ public:
   template<class BodyPolicy, class Handler>
   route_group& get(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
     router_->get(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& get(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->get(route_pattern(pattern), options, policy, std::forward<Handler>(handler));
     return *this;
   }
 
@@ -465,6 +617,12 @@ public:
     return *this;
   }
 
+  template<class BodyPolicy, class Handler>
+  route_group& post(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->post(route_pattern(pattern), options, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   route_group& put(std::string_view pattern, Handler&& handler) {
     router_->put(route_pattern(pattern), std::forward<Handler>(handler));
@@ -474,6 +632,12 @@ public:
   template<class BodyPolicy, class Handler>
   route_group& put(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
     router_->put(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& put(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->put(route_pattern(pattern), options, policy, std::forward<Handler>(handler));
     return *this;
   }
 
@@ -489,6 +653,12 @@ public:
     return *this;
   }
 
+  template<class BodyPolicy, class Handler>
+  route_group& patch(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->patch(route_pattern(pattern), options, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   route_group& delete_(std::string_view pattern, Handler&& handler) {
     router_->delete_(route_pattern(pattern), std::forward<Handler>(handler));
@@ -498,6 +668,12 @@ public:
   template<class BodyPolicy, class Handler>
   route_group& delete_(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
     router_->delete_(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& delete_(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->delete_(route_pattern(pattern), options, policy, std::forward<Handler>(handler));
     return *this;
   }
 
@@ -513,6 +689,12 @@ public:
     return *this;
   }
 
+  template<class BodyPolicy, class Handler>
+  route_group& head(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->head(route_pattern(pattern), options, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
   template<class Handler>
   route_group& options(std::string_view pattern, Handler&& handler) {
     router_->options(route_pattern(pattern), std::forward<Handler>(handler));
@@ -522,6 +704,12 @@ public:
   template<class BodyPolicy, class Handler>
   route_group& options(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
     router_->options(route_pattern(pattern), policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_group& options(std::string_view pattern, route_options options, BodyPolicy policy, Handler&& handler) {
+    router_->options(route_pattern(pattern), options, policy, std::forward<Handler>(handler));
     return *this;
   }
 

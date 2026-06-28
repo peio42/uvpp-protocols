@@ -215,6 +215,20 @@ route declaration shape. They are tracked in
 [typed JSON body policy](../proposals/typed-json-body-policy.md) and
 [multipart handling](../proposals/multipart-handling.md).
 
+Route-level options extend the body contract with operational metadata:
+
+```cpp
+srv.post(
+  "/upload",
+  route_options{}.max_body_bytes(20 * 1024 * 1024),
+  body::stream{},
+  handler);
+```
+
+`route_options::max_body_bytes(...)` overrides the body policy `max_size` for
+that route. If neither is set, the server falls back to
+`server_options::max_body_bytes()`.
+
 Convenience overloads infer the body policy from the handler signature when the
 mapping is unambiguous:
 
@@ -547,7 +561,7 @@ Currently enforced options:
 
 - `max_header_bytes`: maximum accepted request header bytes;
 - `max_body_bytes`: default request body limit when a route does not override
-  it with a body policy limit;
+  it with `route_options::max_body_bytes(...)` or a body policy limit;
 - `max_pending_write_bytes`: maximum queued serialized response bytes per
   connection before write backpressure is reported;
 - `max_pending_responses_per_connection`: maximum open, deferred, streaming, or

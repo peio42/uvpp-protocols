@@ -98,6 +98,21 @@ Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
 Use the explicit policy form when route limits or future typed policies such as
 JSON or multipart matter at the declaration site.
 
+Route-level options can carry operational body settings next to the route
+declaration:
+
+```cpp
+srv.post(
+  "/upload",
+  uvp::http::route_options{}.max_body_bytes(20 * 1024 * 1024),
+  uvp::http::body::stream{},
+  upload_file);
+```
+
+`route_options::max_body_bytes(...)` overrides the body policy `max_size` for
+that route. If neither is set, the server falls back to
+`server_options::max_body_bytes()`.
+
 ## Method Handling
 
 Routes are method-specific. If a path exists for another method, the server

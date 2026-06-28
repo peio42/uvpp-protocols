@@ -306,6 +306,30 @@ UVP_TEST_CASE("http server resources register multiple methods on one endpoint")
   UVP_CHECK(received.find("\r\n\r\nupdate 42 new\n") != std::string::npos);
 }
 
+UVP_TEST_CASE("http server applies route options body limits") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::route_options{}.max_body_bytes(3),
+        uvp::http::body::text{},
+        [](uvp::http::request&, uvp::http::response& res, std::string_view) {
+          res.text("accepted\n");
+        });
+    },
+    "POST /upload HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 4\r\n"
+    "\r\n"
+    "tool",
+    "Payload Too Large\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nPayload Too Large\n") != std::string::npos);
+  UVP_CHECK(received.find("accepted\n") == std::string::npos);
+}
+
 UVP_TEST_CASE("http server mounts an independently declared router") {
   const auto received = perform_http_request(
     [](uvp::http::server& server) {

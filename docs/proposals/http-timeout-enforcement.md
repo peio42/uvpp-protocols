@@ -83,7 +83,9 @@ Add focused integration or session-level tests for:
 ## Out Of Scope
 
 - Public timeout hooks.
-- Per-route timeout policies.
+- Per-route timeout policies in the first enforcement pass. Route-level
+  overrides should be added later through `uvp::http::route_options`, matching
+  the route-level `max_body_bytes` extension point.
 - Adaptive timeout logic.
 - Request deadline propagation to user handlers.
 - TLS handshake timeouts.

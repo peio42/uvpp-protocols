@@ -287,8 +287,7 @@ Route-level options should extend the existing body limit metadata:
 srv.post(
   "/upload",
   uvp::http::route_options{}
-    .max_body_bytes(20 * 1024 * 1024)
-    .request_timeout(std::chrono::seconds{30}),
+    .max_body_bytes(20 * 1024 * 1024),
   uvp::http::body::stream{},
   upload_handler);
 ```
@@ -296,6 +295,18 @@ srv.post(
 This keeps operational concerns near the route declaration and avoids
 server-wide limits that are either too strict for uploads or too loose for
 small endpoints.
+
+Status: implemented for `max_body_bytes`. `route_options` can be passed before
+an explicit body policy on `router`, `server`, `route_group`, and
+`route_resource`. When both `route_options::max_body_bytes(...)` and a body
+policy `max_size` are provided, the route option is the effective route limit.
+When no route-level body limit is set, the existing body policy `max_size` and
+then `server_options::max_body_bytes()` fallback behavior remain unchanged.
+
+Per-route timeout options are intentionally deferred until
+[HTTP timeout enforcement](http-timeout-enforcement.md) implements the global
+timeout lifecycle. That proposal should use `route_options` as the route-level
+extension point when body/request timeout overrides are added.
 
 ### 5. Lightweight Validation
 

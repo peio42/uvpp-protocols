@@ -101,6 +101,33 @@ UVP_TEST_CASE("http router infers body policies from handler signatures") {
   UVP_CHECK(none_match.body == uvp::http::detail::body_mode::none);
 }
 
+UVP_TEST_CASE("http router stores route options body limits") {
+  uvp::http::router router;
+
+  router.post(
+    "/upload",
+    uvp::http::route_options{}.max_body_bytes(32),
+    uvp::http::body::stream{.max_size = 16},
+    [](uvp::http::request&, uvp::http::response&, uvp::http::request_body_stream&) {});
+
+  auto upload_match = router.match(uvp::http::method::post, "/upload");
+  UVP_REQUIRE(upload_match);
+  UVP_CHECK(upload_match.body == uvp::http::detail::body_mode::stream);
+  UVP_CHECK_EQ(upload_match.max_body_bytes, 32U);
+
+  router.group("/api")
+    .resource("/items")
+    .post(
+      uvp::http::route_options{}.max_body_bytes(24),
+      uvp::http::body::text{},
+      [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+
+  auto resource_match = router.match(uvp::http::method::post, "/api/items");
+  UVP_REQUIRE(resource_match);
+  UVP_CHECK(resource_match.body == uvp::http::detail::body_mode::text);
+  UVP_CHECK_EQ(resource_match.max_body_bytes, 24U);
+}
+
 UVP_TEST_CASE("http router exposes explicit convenience methods for every common verb") {
   uvp::http::router router;
 
