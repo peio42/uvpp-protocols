@@ -267,6 +267,18 @@ black box. `on_request`, `pre_handler`, and `on_response` cover the common
 cases of authentication, request logging, and response metrics while keeping
 body policy timing explicit.
 
+Status: implemented / design settled. The public API intentionally exposes
+phase-specific hooks rather than a generic `middleware(...)` pipeline:
+
+- `on_request` runs after route matching and before body buffering or streaming;
+- `pre_handler` runs immediately before the final route handler;
+- `on_response` observes completed, cancelled, or errored responses after the
+  response lifecycle has a stable outcome.
+
+This naming and positioning are part of the design contract. Future hook work
+should extend concrete lifecycle phases only when a missing phase is clearly
+identified, rather than introducing an overlapping middleware abstraction.
+
 ### 4. Per-route Options
 
 Route-level options should extend the existing body limit metadata:
