@@ -78,6 +78,7 @@ response_hook_type wrap_response_hook(Handler&& handler);
 } // namespace detail
 
 class route_group;
+class route_resource;
 
 class router {
 public:
@@ -160,6 +161,7 @@ public:
   }
 
   [[nodiscard]] route_group group(std::string_view prefix);
+  [[nodiscard]] route_resource resource(std::string_view pattern);
 
   template<class BodyPolicy, class Handler>
   router& get(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
@@ -284,6 +286,115 @@ private:
   std::size_t route_count_ = 0;
 
   friend class route_group;
+  friend class route_resource;
+};
+
+class route_resource {
+public:
+  template<class Handler>
+  route_resource& route(method method_value, Handler&& handler) {
+    router_->route(method_value, pattern_, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& route(method method_value, BodyPolicy policy, Handler&& handler) {
+    router_->route(method_value, pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_resource& get(Handler&& handler) {
+    router_->get(pattern_, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& get(BodyPolicy policy, Handler&& handler) {
+    router_->get(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_resource& post(Handler&& handler) {
+    router_->post(pattern_, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& post(BodyPolicy policy, Handler&& handler) {
+    router_->post(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_resource& put(Handler&& handler) {
+    router_->put(pattern_, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& put(BodyPolicy policy, Handler&& handler) {
+    router_->put(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_resource& patch(Handler&& handler) {
+    router_->patch(pattern_, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& patch(BodyPolicy policy, Handler&& handler) {
+    router_->patch(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_resource& delete_(Handler&& handler) {
+    router_->delete_(pattern_, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& delete_(BodyPolicy policy, Handler&& handler) {
+    router_->delete_(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_resource& head(Handler&& handler) {
+    router_->head(pattern_, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& head(BodyPolicy policy, Handler&& handler) {
+    router_->head(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class Handler>
+  route_resource& options(Handler&& handler) {
+    router_->options(pattern_, std::forward<Handler>(handler));
+    return *this;
+  }
+
+  template<class BodyPolicy, class Handler>
+  route_resource& options(BodyPolicy policy, Handler&& handler) {
+    router_->options(pattern_, policy, std::forward<Handler>(handler));
+    return *this;
+  }
+
+private:
+  route_resource(router& owner, std::string pattern) : router_(&owner), pattern_(std::move(pattern)) {}
+
+  router* router_ = nullptr;
+  std::string pattern_;
+
+  friend class router;
+  friend class route_group;
 };
 
 class route_group {
@@ -307,6 +418,7 @@ public:
   }
 
   [[nodiscard]] route_group group(std::string_view prefix) const;
+  [[nodiscard]] route_resource resource(std::string_view pattern) const;
 
   template<class Handler>
   route_group& route(method method_value, std::string_view pattern, Handler&& handler) {

@@ -133,6 +133,10 @@ public:
     return router_.group(prefix);
   }
 
+  [[nodiscard]] route_resource resource(std::string_view pattern) {
+    return router_.resource(pattern);
+  }
+
   template<class Handler>
   server& on_request(Handler&& handler) {
     router_.on_request(std::forward<Handler>(handler));

@@ -459,8 +459,16 @@ route_group router::group(std::string_view prefix) {
   return route_group{*this, detail::normalize_group_prefix(prefix)};
 }
 
+route_resource router::resource(std::string_view pattern) {
+  return route_resource{*this, detail::join_route_pattern({}, pattern)};
+}
+
 route_group route_group::group(std::string_view prefix) const {
   return route_group{*router_, route_pattern(prefix)};
+}
+
+route_resource route_group::resource(std::string_view pattern) const {
+  return route_resource{*router_, route_pattern(pattern)};
 }
 
 std::string route_group::route_pattern(std::string_view pattern) const {

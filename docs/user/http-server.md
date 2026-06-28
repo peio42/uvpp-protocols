@@ -163,6 +163,47 @@ response headers, logical response body size, and a `response_outcome`.
 Response hooks cannot mutate the response. They run leaf to root, so the most
 specific group observes first.
 
+Route groups are lightweight value handles. You can chain route declarations
+directly:
+
+```cpp
+srv.group("/api/v1")
+  .get("/items", list_items)
+  .get("/items/:id", show_item);
+```
+
+When you want to keep using a group later, prefer naming it before chaining:
+
+```cpp
+auto api = srv.group("/api/v1");
+api
+  .get("/items", list_items)
+  .get("/items/:id", show_item);
+```
+
+## Resources
+
+Use `resource()` when several methods apply to the same exact endpoint:
+
+```cpp
+srv.resource("/items/:id")
+  .get(show_item)
+  .put(uvp::http::body::text{}, update_item)
+  .delete_(delete_item);
+```
+
+Resources are declaration helpers. They do not create a subtree and do not own
+hooks. Combine them with groups when a resource lives under a shared prefix or
+shared hooks:
+
+```cpp
+auto api = srv.group("/api/v1");
+
+api.resource("/items/:id")
+  .get(show_item)
+  .patch(uvp::http::body::text{}, patch_item);
+```
+
 ## No Request Body
 
 Use `body::none{}` for routes that do not accept a request body:

@@ -21,7 +21,8 @@ This proposal keeps that work aligned with the library's current shape:
 
 - Implemented: route parameters, wildcard tails, method-aware matching,
   `not_found`, `on_error`, route groups, shared prefixes, and inherited
-  `on_request`/`pre_handler`/`on_response` hooks.
+  `on_request`/`pre_handler`/`on_response` hooks, plus `resource()` route
+  builders for exact multi-method endpoints.
 - Not implemented: route-level hooks separate from group hooks, mountable
   routers, resource route builders, scoped fallbacks, parameter constraints,
   and matched route pattern accessors.
@@ -213,6 +214,37 @@ srv.resource("/items/:id")
 
 This is registration sugar over existing method-specific routes. It should not
 change matching behavior.
+
+Status: implemented as `router::resource(...)`, `server::resource(...)`, and
+`route_group::resource(...)`.
+
+`resource()` is intentionally distinct from `group()`: a group describes a
+subtree and can own hooks or nested paths, while a resource describes one exact
+endpoint with several methods. For example:
+
+```cpp
+srv.group("/api/v1")
+  .resource("/items/:id")
+  .get(show_item)
+  .put(uvp::http::body::text{}, update_item);
+```
+
+### Optional: Fluent Temporary Overloads
+
+`server` already returns `server&` from route registration helpers, and
+`route_group`/`route_resource` are lightweight value handles, so common fluent
+chains are already supported:
+
+```cpp
+srv.group("/api/v1")
+  .get("/items", list_items)
+  .get("/items/:id", show_item);
+```
+
+If future users routinely assign from chained temporary groups, the API can add
+ref-qualified overloads returning `route_group&&` or `route_resource&&` for
+rvalue receivers. That would make fluent temporary assignment more explicit,
+but it is optional polish rather than required for the current implementation.
 
 ### 2. Mountable Routers
 

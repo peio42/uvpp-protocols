@@ -148,6 +148,38 @@ UVP_TEST_CASE("http router groups prefix routes") {
   UVP_CHECK(match.body == uvp::http::detail::body_mode::text);
 }
 
+UVP_TEST_CASE("http router resources register multiple methods on the same path") {
+  uvp::http::router router;
+
+  router.resource("/items/:id")
+    .get([](uvp::http::request&, uvp::http::response&) {})
+    .put(uvp::http::body::text{}, [](uvp::http::request&, uvp::http::response&, std::string_view) {})
+    .delete_([](uvp::http::request&, uvp::http::response&) {});
+
+  UVP_CHECK(router.find(uvp::http::method::get, "/items/42") != nullptr);
+  auto put_match = router.match(uvp::http::method::put, "/items/42");
+  UVP_REQUIRE(put_match);
+  UVP_CHECK(put_match.body == uvp::http::detail::body_mode::text);
+  UVP_CHECK_EQ(put_match.params.get("id"), "42");
+  UVP_CHECK(router.find(uvp::http::method::delete_, "/items/42") != nullptr);
+}
+
+UVP_TEST_CASE("http router group resources use the group prefix") {
+  uvp::http::router router;
+
+  router.group("/api/v1")
+    .resource("/items/:id")
+    .get([](uvp::http::request&, uvp::http::response&) {})
+    .patch(uvp::http::body::text{}, [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+
+  UVP_CHECK(router.find(uvp::http::method::get, "/api/v1/items/42") != nullptr);
+  auto patch_match = router.match(uvp::http::method::patch, "/api/v1/items/42");
+  UVP_REQUIRE(patch_match);
+  UVP_CHECK(patch_match.body == uvp::http::detail::body_mode::text);
+  UVP_CHECK_EQ(patch_match.params.get("id"), "42");
+  UVP_CHECK(router.find(uvp::http::method::get, "/items/42") == nullptr);
+}
+
 UVP_TEST_CASE("http router matches inherited group hooks from root to leaf") {
   uvp::http::router router;
   std::vector<std::string> order;

@@ -282,6 +282,30 @@ UVP_TEST_CASE("http server route group on_request can short circuit before handl
   UVP_CHECK(received.find("handler\n") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server resources register multiple methods on one endpoint") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.group("/api")
+        .resource("/items/:id")
+        .get([](uvp::http::request& req, uvp::http::response& res) {
+          res.text(std::string{"show "} + std::string(req.params().get("id")) + "\n");
+        })
+        .put(uvp::http::body::text{}, [](uvp::http::request& req, uvp::http::response& res, std::string_view body) {
+          res.text(std::string{"update "} + std::string(req.params().get("id")) + " " + std::string(body) + "\n");
+        });
+    },
+    "PUT /api/items/42 HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 3\r\n"
+    "\r\n"
+    "new",
+    "update 42 new\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nupdate 42 new\n") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server runs response hooks with response snapshots") {
   std::vector<std::string> events;
   unsigned int observed_status = 0;
