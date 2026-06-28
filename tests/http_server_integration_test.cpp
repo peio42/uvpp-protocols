@@ -405,10 +405,13 @@ UVP_TEST_CASE("http server applies route options body limits") {
 }
 
 UVP_TEST_CASE("http server mounts an independently declared router") {
+  std::string observed_pattern;
+
   const auto received = perform_http_request(
-    [](uvp::http::server& server) {
+    [&](uvp::http::server& server) {
       uvp::http::router api;
-      api.get("/items/:id", [](uvp::http::request& req, uvp::http::response& res) {
+      api.get("/items/:id", [&](uvp::http::request& req, uvp::http::response& res) {
+        observed_pattern = req.matched_pattern();
         res.text(std::string{"item "} + std::string(req.params().get("id")) + "\n");
       });
 
@@ -422,6 +425,7 @@ UVP_TEST_CASE("http server mounts an independently declared router") {
 
   UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
   UVP_CHECK(received.find("\r\n\r\nitem 42\n") != std::string::npos);
+  UVP_CHECK_EQ(observed_pattern, "/api/v1/items/:id");
 }
 
 UVP_TEST_CASE("http server runs response hooks with response snapshots") {
@@ -429,6 +433,8 @@ UVP_TEST_CASE("http server runs response hooks with response snapshots") {
   unsigned int observed_status = 0;
   std::size_t observed_body_size = 0;
   std::string observed_path;
+  std::string observed_pattern;
+  std::string observed_request_pattern;
   uvp::http::response_outcome observed_outcome = uvp::http::response_outcome::error;
 
   const auto received = perform_http_request(
@@ -438,10 +444,14 @@ UVP_TEST_CASE("http server runs response hooks with response snapshots") {
         observed_status = info.status;
         observed_body_size = info.response_body_size;
         observed_path = info.request.path;
+        observed_pattern = info.request.matched_pattern;
         observed_outcome = info.outcome;
       });
 
       auto api = server.group("/api");
+      api.on_request([&](uvp::http::request& req, uvp::http::response&) {
+        observed_request_pattern = req.matched_pattern();
+      });
       api.on_response([&](const uvp::http::response_info&) {
         events.push_back("api");
       });
@@ -462,6 +472,8 @@ UVP_TEST_CASE("http server runs response hooks with response snapshots") {
   UVP_CHECK_EQ(observed_status, 200U);
   UVP_CHECK_EQ(observed_body_size, 8U);
   UVP_CHECK_EQ(observed_path, "/api/items/42");
+  UVP_CHECK_EQ(observed_pattern, "/api/items/:id");
+  UVP_CHECK_EQ(observed_request_pattern, "/api/items/:id");
   UVP_CHECK(observed_outcome == uvp::http::response_outcome::completed);
 }
 

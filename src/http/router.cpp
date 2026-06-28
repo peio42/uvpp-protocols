@@ -156,8 +156,9 @@ router& router::add_route(
     throw std::invalid_argument("HTTP route method is out of range");
   }
 
+  auto normalized_pattern = detail::join_route_pattern({}, pattern);
   std::size_t node_index = 0;
-  std::string_view rest = pattern;
+  std::string_view rest = normalized_pattern;
   std::string_view segment;
   while (detail::next_route_segment(rest, segment)) {
     if (!segment.empty() && segment.front() == '*') {
@@ -216,7 +217,7 @@ router& router::add_route(
     throw std::invalid_argument("HTTP route already registered for this method and pattern");
   }
 
-  target = route_target{body, max_body_bytes, std::move(handler)};
+  target = route_target{body, max_body_bytes, std::move(handler), std::move(normalized_pattern)};
   ++route_count_;
   return *this;
 }
@@ -294,6 +295,7 @@ router& router::mount(std::string_view prefix, router&& mounted) {
 
   const auto destination_index = ensure_prefix_node(prefix);
   validate_mount_node(mounted, destination_index, 0);
+  mounted.prefix_route_patterns(detail::normalize_group_prefix(prefix));
   merge_mount_node(mounted, destination_index, 0);
   route_count_ += mounted.route_count_;
 
@@ -301,6 +303,20 @@ router& router::mount(std::string_view prefix, router&& mounted) {
   mounted.nodes_.push_back(trie_node{});
   mounted.route_count_ = 0;
   return *this;
+}
+
+void router::prefix_route_patterns(std::string_view prefix) {
+  if (prefix.empty()) {
+    return;
+  }
+
+  for (auto& node : nodes_) {
+    for (auto& target : node.targets) {
+      if (target) {
+        target->pattern = detail::join_route_pattern(prefix, target->pattern);
+      }
+    }
+  }
 }
 
 void router::validate_mount_node(
@@ -587,6 +603,7 @@ router::match_result router::match(method method_value, std::string_view path) c
     &target->handler,
     target->body,
     target->max_body_bytes,
+    target->pattern,
     std::move(params),
     std::move(on_request_hooks),
     std::move(pre_handler_hooks),

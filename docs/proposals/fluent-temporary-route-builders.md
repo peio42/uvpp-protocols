@@ -135,5 +135,5 @@ api.get("/items", list_items);
 
 ## Source Documents
 
-- [Route groups and hooks](route-groups-and-hooks.md)
+- [Route groups and hooks](../archive/route-groups-and-hooks.md)
 - [HTTP server user documentation](../user/http-server.md)

@@ -172,9 +172,8 @@ The trie also drives method-aware HTTP behavior:
 - `OPTIONS` is answered automatically for known paths when no explicit
   `OPTIONS` route is registered.
 
-Route groups and request hooks build on the same trie. Follow-up middleware
-ergonomics are tracked in
-[route groups and hooks](../proposals/route-groups-and-hooks.md).
+Route groups, request hooks, response observers, scoped fallbacks, and
+mountable routers build on the same trie.
 
 Handlers receive request and response references, plus a body argument when the
 body policy produces one:
@@ -258,6 +257,7 @@ public:
   std::string_view target() const noexcept;
   std::string_view path() const noexcept;
   std::string_view query() const noexcept;
+  std::string_view matched_pattern() const noexcept;
   std::optional<std::string_view> query(std::string_view name) const noexcept;
   std::string_view query_or(std::string_view name, std::string_view fallback = {}) const noexcept;
   std::span<const std::string> query_all(std::string_view name) const noexcept;
@@ -279,6 +279,10 @@ Applications should copy values they need after the handler returns.
 Connection metadata is a snapshot of local and remote endpoints. Handlers that
 need to take over the transport should use the explicit upgrade path rather
 than `request`.
+
+`matched_pattern()` returns the canonical route pattern that matched the
+request, such as `/items/:id`. It is empty for fallback responses and other
+requests that did not match an application route.
 
 `query()` without arguments returns the raw query string exactly as received in
 the request target. Structured query access is provided by an immutable
@@ -596,7 +600,6 @@ uvp::http::server srv(
 
 Future HTTP work is tracked outside stable design:
 
-- [Route groups and hooks](../proposals/route-groups-and-hooks.md)
 - [HTTP timeout enforcement](../proposals/http-timeout-enforcement.md)
 - [Typed JSON body policy](../proposals/typed-json-body-policy.md)
 - [Multipart handling](../proposals/multipart-handling.md)

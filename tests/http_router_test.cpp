@@ -29,10 +29,12 @@ UVP_TEST_CASE("http router captures parameters and wildcards") {
 
   auto user_match = router.match(uvp::http::method::get, "/users/alice");
   UVP_REQUIRE(user_match);
+  UVP_CHECK_EQ(user_match.pattern, "/users/:id");
   UVP_CHECK_EQ(user_match.params.get("id"), "alice");
 
   auto static_match = router.match(uvp::http::method::get, "/static/css/app.css");
   UVP_REQUIRE(static_match);
+  UVP_CHECK_EQ(static_match.pattern, "/static/*path");
   UVP_CHECK_EQ(static_match.params.get("path"), "css/app.css");
 
   auto empty_wildcard_match = router.match(uvp::http::method::get, "/static");
@@ -173,6 +175,7 @@ UVP_TEST_CASE("http router groups prefix routes") {
   auto match = router.match(uvp::http::method::post, "/api/v1/items");
   UVP_REQUIRE(match);
   UVP_CHECK(match.body == uvp::http::detail::body_mode::text);
+  UVP_CHECK_EQ(match.pattern, "/api/v1/items");
 }
 
 UVP_TEST_CASE("http router resources register multiple methods on the same path") {
@@ -187,6 +190,7 @@ UVP_TEST_CASE("http router resources register multiple methods on the same path"
   auto put_match = router.match(uvp::http::method::put, "/items/42");
   UVP_REQUIRE(put_match);
   UVP_CHECK(put_match.body == uvp::http::detail::body_mode::text);
+  UVP_CHECK_EQ(put_match.pattern, "/items/:id");
   UVP_CHECK_EQ(put_match.params.get("id"), "42");
   UVP_CHECK(router.find(uvp::http::method::delete_, "/items/42") != nullptr);
 }
@@ -203,6 +207,7 @@ UVP_TEST_CASE("http router group resources use the group prefix") {
   auto patch_match = router.match(uvp::http::method::patch, "/api/v1/items/42");
   UVP_REQUIRE(patch_match);
   UVP_CHECK(patch_match.body == uvp::http::detail::body_mode::text);
+  UVP_CHECK_EQ(patch_match.pattern, "/api/v1/items/:id");
   UVP_CHECK_EQ(patch_match.params.get("id"), "42");
   UVP_CHECK(router.find(uvp::http::method::get, "/items/42") == nullptr);
 }
@@ -220,11 +225,13 @@ UVP_TEST_CASE("http router mounts another router under a prefix") {
 
   auto get_match = router.match(uvp::http::method::get, "/api/v1/items/42");
   UVP_REQUIRE(get_match);
+  UVP_CHECK_EQ(get_match.pattern, "/api/v1/items/:id");
   UVP_CHECK_EQ(get_match.params.get("id"), "42");
 
   auto post_match = router.match(uvp::http::method::post, "/api/v1/items/42");
   UVP_REQUIRE(post_match);
   UVP_CHECK(post_match.body == uvp::http::detail::body_mode::text);
+  UVP_CHECK_EQ(post_match.pattern, "/api/v1/items/:id");
   UVP_CHECK(router.find(uvp::http::method::get, "/items/42") == nullptr);
 }
 

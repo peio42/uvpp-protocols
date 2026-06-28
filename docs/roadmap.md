@@ -8,7 +8,6 @@
 ## Current focus
 
 - Milestone 3: HTTP routing and application polish
-  - [Route groups and subtree hooks](proposals/route-groups-and-hooks.md)
   - [Route path decoding](proposals/route-path-decoding.md)
   - [HTTP timeout enforcement](proposals/http-timeout-enforcement.md)
 
@@ -34,6 +33,7 @@
 
 - HTTP API polish
   - [Fluent temporary route builder overloads](proposals/fluent-temporary-route-builders.md)
+  - [Route-level hooks](proposals/route-level-hooks.md)
   - [Route options body mode](proposals/route-options-body-mode.md)
   - [Route options parameter constraints](proposals/route-options-parameter-constraints.md)
 

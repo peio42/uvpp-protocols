@@ -1,6 +1,6 @@
 # Route Groups and Hooks Proposal
 
-Status: Partially implemented
+Status: Archived, implemented
 
 ## Context
 
@@ -21,12 +21,18 @@ This proposal keeps that work aligned with the library's current shape:
 
 - Implemented: route parameters, wildcard tails, method-aware matching,
   global and scoped `not_found`, global and scoped `on_exception`, route
-  groups, shared prefixes, and inherited `on_request`/`pre_handler`/
-  `on_response` hooks, plus `resource()` route builders for exact multi-method
-  endpoints and `mount()` for composing independently declared routers under a
-  prefix.
-- Not implemented: route-level hooks separate from group hooks, parameter
-  constraints, and matched route pattern accessors.
+  groups, shared prefixes, inherited `on_request`/`pre_handler`/
+  `on_response` hooks, `resource()` route builders for exact multi-method
+  endpoints, `mount()` for composing independently declared routers under a
+  prefix, route-level `max_body_bytes`, and matched route pattern accessors.
+- Moved out of scope: parameter constraints are tracked in
+  [Route options parameter constraints](../proposals/route-options-parameter-constraints.md).
+  Route-level hooks are tracked in
+  [Route-level hooks](../proposals/route-level-hooks.md).
+  Route body-mode consolidation is tracked in
+  [Route options body mode](../proposals/route-options-body-mode.md).
+  Fluent temporary builder overloads are tracked in
+  [Fluent temporary route builders](../proposals/fluent-temporary-route-builders.md).
 
 ## Draft Scope
 
@@ -148,6 +154,7 @@ struct request_snapshot {
   std::string target;
   std::string path;
   std::string query;
+  std::string matched_pattern;
   route_params params;
   connection_info connection;
 };
@@ -305,7 +312,7 @@ route-level body limit is set, `server_options::max_body_bytes()` remains the
 fallback.
 
 Per-route timeout options are intentionally deferred until
-[HTTP timeout enforcement](http-timeout-enforcement.md) implements the global
+[HTTP timeout enforcement](../proposals/http-timeout-enforcement.md) implements the global
 timeout lifecycle. That proposal should use `route_options` as the route-level
 extension point when body/request timeout overrides are added.
 
@@ -319,7 +326,7 @@ policies such as `body::json<T>`.
 Status: optional reflection. If common route parameter constraints become
 worth adding, they should be expressed through `route_options` rather than a
 new positional argument. See
-[Route options parameter constraints](route-options-parameter-constraints.md).
+[Route options parameter constraints](../proposals/route-options-parameter-constraints.md).
 
 ### 6. Parameter Constraints
 
@@ -330,7 +337,7 @@ They should remain optional API polish for now.
 If implemented later, constraint failures should reject the matched request
 with a documented client error rather than causing the router to continue
 matching other candidates. That keeps the trie and route priority rules simple.
-See [Route options parameter constraints](route-options-parameter-constraints.md).
+See [Route options parameter constraints](../proposals/route-options-parameter-constraints.md).
 
 ### 7. Scoped Fallbacks
 
@@ -368,6 +375,11 @@ std::string_view pattern = req.matched_pattern(); // "/items/:id"
 This avoids emitting high-cardinality metrics for concrete paths such as
 `/items/1`, `/items/2`, and `/items/3`.
 
+Status: implemented as `request::matched_pattern()` and
+`request_snapshot::matched_pattern`. The stored value is the canonical full
+route pattern after group prefixes and mounted-router prefixes are applied. It
+is empty for fallback responses and other unmatched requests.
+
 ## Implementation Notes
 
 Route groups with prefixes can be implemented without changing request
@@ -385,7 +397,6 @@ Future route metadata can live beside those fields:
 struct route_target {
   detail::body_mode body;
   std::size_t max_body_bytes;
-  route_options options;
   handler_type handler;
   std::string pattern;
 };

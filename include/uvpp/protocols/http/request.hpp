@@ -112,6 +112,7 @@ public:
   [[nodiscard]] std::string_view target() const noexcept { return target_; }
   [[nodiscard]] std::string_view path() const noexcept { return path_; }
   [[nodiscard]] std::string_view query() const noexcept { return query_; }
+  [[nodiscard]] std::string_view matched_pattern() const noexcept { return matched_pattern_; }
   [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const noexcept {
     return query_params_.first(name);
   }
@@ -140,6 +141,7 @@ private:
   std::string target_;
   std::string path_;
   std::string query_;
+  std::string_view matched_pattern_;
   http::query_params query_params_;
   http::headers headers_;
   std::vector<std::byte> body_;

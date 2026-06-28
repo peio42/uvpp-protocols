@@ -7,7 +7,6 @@ references, not stable design truth.
 
 - [Route path decoding](route-path-decoding.md)
 - [HTTP timeout enforcement](http-timeout-enforcement.md)
-- [Route groups and hooks](route-groups-and-hooks.md)
 - [Static file helper](static-file-helper.md)
 - [Typed JSON body policy](typed-json-body-policy.md)
 - [Multipart handling](multipart-handling.md)
@@ -17,6 +16,7 @@ references, not stable design truth.
 - [HTTP client](http-client.md)
 - [WebSocket client](websocket-client.md)
 - [Fluent temporary route builders](fluent-temporary-route-builders.md)
+- [Route-level hooks](route-level-hooks.md)
 - [Route options body mode](route-options-body-mode.md)
 - [Route options parameter constraints](route-options-parameter-constraints.md)
 - [HTTP/2 support](http2-support.md)

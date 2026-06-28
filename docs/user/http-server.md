@@ -565,6 +565,23 @@ HTTP route registration rejects duplicate method/pattern pairs, unnamed
 parameters, wildcards that are not the final segment, and conflicting parameter
 names at the same tree position.
 
+## Matched Route Pattern
+
+Use `req.matched_pattern()` when logging or exporting metrics for matched
+routes:
+
+```cpp
+srv.get("/items/:id", [](uvp::http::request& req, uvp::http::response& res) {
+  auto pattern = req.matched_pattern(); // "/items/:id"
+  res.text(std::string{"route "} + std::string(pattern) + "\n");
+});
+```
+
+The value is the canonical full pattern after group prefixes and mounted
+router prefixes have been applied. For `not_found`, automatic 404/405
+responses, and other unmatched requests, the value is empty. `on_response`
+receives the same value through `info.request.matched_pattern`.
+
 ## Upgrade Routes
 
 `server::upgrade(...)` registers upgrade routes separately from normal HTTP

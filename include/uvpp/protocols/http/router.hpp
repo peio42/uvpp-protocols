@@ -36,6 +36,7 @@ struct request_snapshot {
   std::string target;
   std::string path;
   std::string query;
+  std::string matched_pattern;
   route_params params;
   http::connection_info connection;
 };
@@ -107,6 +108,7 @@ public:
     const handler_type* handler = nullptr;
     detail::body_mode body = detail::body_mode::none;
     std::size_t max_body_bytes = 0;
+    std::string_view pattern;
     route_params params;
     std::vector<const hook_type*> on_request_hooks;
     std::vector<const hook_type*> pre_handler_hooks;
@@ -340,6 +342,7 @@ private:
     detail::body_mode body;
     std::size_t max_body_bytes;
     handler_type handler;
+    std::string pattern;
   };
 
   static constexpr std::size_t method_count_ = static_cast<std::size_t>(method::unknown) + 1U;
@@ -374,6 +377,7 @@ private:
   router& add_exception_handler(std::string_view prefix, exception_handler_type handler);
   [[nodiscard]] std::size_t ensure_prefix_node(std::string_view prefix);
   void validate_mount_node(const router& mounted, std::size_t destination_index, std::size_t source_index) const;
+  void prefix_route_patterns(std::string_view prefix);
   void merge_mount_node(router& mounted, std::size_t destination_index, std::size_t source_index);
   [[nodiscard]] std::size_t move_mount_subtree(router& mounted, std::size_t source_index);
   [[nodiscard]] const route_target* match_node(

@@ -399,6 +399,7 @@ struct server::impl {
       auto route_match = match_request_route(req.method(), req.path());
       if (route_match) {
         req.params_ = route_match.params;
+        req.matched_pattern_ = route_match.pattern;
       }
 
       active_request_ = std::make_unique<active_request_state>();
@@ -581,6 +582,7 @@ struct server::impl {
       }
 
       req.params_ = std::move(route_match.params);
+      req.matched_pattern_ = route_match.pattern;
       const auto* exception_handler = route_match.exception_handler;
       configure_response_observation(*slot, req, route_match.on_response_hooks);
 
@@ -704,6 +706,7 @@ struct server::impl {
         std::string(req.target()),
         std::string(req.path()),
         std::string(req.query()),
+        std::string(req.matched_pattern()),
         req.params(),
         req.connection(),
       };
