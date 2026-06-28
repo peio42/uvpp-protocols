@@ -310,33 +310,26 @@ extension point when body/request timeout overrides are added.
 
 ### 5. Lightweight Validation
 
-Validation should start as explicit route metadata or body policy behavior, not
-as a hidden application validation framework:
+Validation should not become a hidden application framework concern.
+Applications can already validate route parameters in `on_request`,
+`pre_handler`, or handlers. Typed body validation belongs with future body
+policies such as `body::json<T>`.
 
-```cpp
-srv.get(
-  "/items/:id",
-  uvp::http::param_constraints{}.uint_("id"),
-  show_item);
-```
-
-Typed JSON validation belongs with the future `body::json<T>` policy, where the
-body contract is already explicit.
+Status: optional reflection. If common route parameter constraints become
+worth adding, they should be expressed through `route_options` rather than a
+new positional argument. See
+[Route options parameter constraints](route-options-parameter-constraints.md).
 
 ### 6. Parameter Constraints
 
-Common parameter constraints should be supported without introducing a regex
-route language:
+Common parameter constraints could improve small-route ergonomics, but their
+current value is modest compared with the extra API and implementation surface.
+They should remain optional API polish for now.
 
-```cpp
-srv.get("/items/:id", uvp::http::param_constraints{}.uint_("id"), show_item);
-srv.get("/files/*path", uvp::http::param_constraints{}.non_empty("path"), serve_file);
-```
-
-Constraint failures should produce a predictable client error or fall through
-according to a documented policy. Falling through can surprise users when two
-routes differ only by constraints, so a direct `400` or `404` policy should be
-chosen explicitly.
+If implemented later, constraint failures should reject the matched request
+with a documented client error rather than causing the router to continue
+matching other candidates. That keeps the trie and route priority rules simple.
+See [Route options parameter constraints](route-options-parameter-constraints.md).
 
 ### 7. Scoped Fallbacks
 

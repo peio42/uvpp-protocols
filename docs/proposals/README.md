@@ -18,6 +18,7 @@ references, not stable design truth.
 - [WebSocket client](websocket-client.md)
 - [Fluent temporary route builders](fluent-temporary-route-builders.md)
 - [Route options body mode](route-options-body-mode.md)
+- [Route options parameter constraints](route-options-parameter-constraints.md)
 - [HTTP/2 support](http2-support.md)
 - [HTTP/3 and QUIC support](http3-quic-support.md)
 - [Shared URL module](shared-url-module.md)

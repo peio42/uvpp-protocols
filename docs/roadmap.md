@@ -35,6 +35,7 @@
 - HTTP API polish
   - [Fluent temporary route builder overloads](proposals/fluent-temporary-route-builders.md)
   - [Route options body mode](proposals/route-options-body-mode.md)
+  - [Route options parameter constraints](proposals/route-options-parameter-constraints.md)
 
 - Protocol client modules
   - [SMTP client](proposals/smtp-support.md)
