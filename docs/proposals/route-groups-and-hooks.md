@@ -229,23 +229,6 @@ srv.group("/api/v1")
   .put(uvp::http::body::text{}, update_item);
 ```
 
-### Optional: Fluent Temporary Overloads
-
-`server` already returns `server&` from route registration helpers, and
-`route_group`/`route_resource` are lightweight value handles, so common fluent
-chains are already supported:
-
-```cpp
-srv.group("/api/v1")
-  .get("/items", list_items)
-  .get("/items/:id", show_item);
-```
-
-If future users routinely assign from chained temporary groups, the API can add
-ref-qualified overloads returning `route_group&&` or `route_resource&&` for
-rvalue receivers. That would make fluent temporary assignment more explicit,
-but it is optional polish rather than required for the current implementation.
-
 ### 2. Mountable Routers
 
 Applications should be able to compose independently declared routers:

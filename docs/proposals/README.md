@@ -16,6 +16,7 @@ references, not stable design truth.
 - [HTTP TLS listener integration](http-tls-listener-integration.md)
 - [HTTP client](http-client.md)
 - [WebSocket client](websocket-client.md)
+- [Fluent temporary route builders](fluent-temporary-route-builders.md)
 - [HTTP/2 support](http2-support.md)
 - [HTTP/3 and QUIC support](http3-quic-support.md)
 - [Shared URL module](shared-url-module.md)

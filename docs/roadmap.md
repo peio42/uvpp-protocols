@@ -8,55 +8,40 @@
 ## Current focus
 
 - Milestone 3: HTTP routing and application polish
-  - Middleware chain
-  - Route groups and subtree hooks
-  - Existing routing/error handling polish
-  - See: [route groups and hooks](proposals/route-groups-and-hooks.md),
-    [route path decoding](proposals/route-path-decoding.md),
-    [HTTP timeout enforcement](proposals/http-timeout-enforcement.md)
+  - [Route groups and subtree hooks](proposals/route-groups-and-hooks.md)
+  - [Route path decoding](proposals/route-path-decoding.md)
+  - [HTTP timeout enforcement](proposals/http-timeout-enforcement.md)
 
 ## Next
 
 - Milestone 4: HTTP payload and streaming helpers
-  - Typed JSON request bodies
-  - Multipart handling
-  - Server-Sent Events helper
-  - Static file helper
-  - See: [typed JSON body policy](proposals/typed-json-body-policy.md),
-    [multipart handling](proposals/multipart-handling.md),
-    [SSE support](proposals/sse-support.md),
-    [static file helper](proposals/static-file-helper.md)
+  - [Typed JSON request bodies](proposals/typed-json-body-policy.md)
+  - [Multipart handling](proposals/multipart-handling.md)
+  - [Server-Sent Events helper](proposals/sse-support.md)
+  - [Static file helper](proposals/static-file-helper.md)
 
 - Milestone 5: TLS transport support
-  - TLS stream adapter
-  - TLS listener adapter
-  - HTTP over TLS through listener composition
-  - See: [TLS support](proposals/tls-support.md),
-    [HTTP TLS listener integration](proposals/http-tls-listener-integration.md)
+  - [TLS stream adapter](proposals/tls-support.md)
+  - [TLS listener adapter](proposals/tls-support.md)
+  - [HTTP over TLS through listener composition](proposals/http-tls-listener-integration.md)
 
 ## Later
 
-- Milestone 6: Client-side foundations
-  - Shared URL module
-  - HTTP client
-  - WebSocket client
-  - See: [shared URL module](proposals/shared-url-module.md),
-    [HTTP client](proposals/http-client.md),
-    [WebSocket client](proposals/websocket-client.md)
+- Client-side foundations
+  - [Shared URL module](proposals/shared-url-module.md)
+  - [HTTP client](proposals/http-client.md)
+  - [WebSocket client](proposals/websocket-client.md)
 
-- Milestone 7: Protocol client modules
-  - SMTP client
-  - Redis client
-  - MQTT client over TCP, TLS, or WebSocket
-  - See: [SMTP client](proposals/smtp-support.md),
-    [Redis support](proposals/redis-support.md),
-    [MQTT client](proposals/mqtt-client.md)
+- HTTP API polish
+  - [Fluent temporary route builder overloads](proposals/fluent-temporary-route-builders.md)
+
+- Protocol client modules
+  - [SMTP client](proposals/smtp-support.md)
+  - [Redis client](proposals/redis-support.md)
+  - [MQTT client over TCP, TLS, or WebSocket](proposals/mqtt-client.md)
 
 ## Separate Design Needed
 
-- HTTP/2 design spike
-- HTTP/3 and QUIC
-- Database client adapters
-- See: [HTTP/2 support](proposals/http2-support.md),
-  [HTTP/3 and QUIC support](proposals/http3-quic-support.md),
-  [database client adapters](proposals/database-adapters.md)
+- [HTTP/2 design spike](proposals/http2-support.md)
+- [HTTP/3 and QUIC](proposals/http3-quic-support.md)
+- [Database client adapters](proposals/database-adapters.md)
