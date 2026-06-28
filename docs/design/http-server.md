@@ -102,7 +102,7 @@ public:
   server& not_found(Handler&& handler);
 
   template<class Handler>
-  server& on_error(Handler&& handler);
+  server& on_exception(Handler&& handler);
 
   void listen(std::string_view host, unsigned int port);
   void listen(uvp::io::stream_listener listener);
@@ -136,7 +136,8 @@ The route model supports:
 - named parameters: `/users/:id`;
 - wildcard tail segments: `/static/*path`;
 - method-specific handlers;
-- fallback `not_found` handler.
+- global and scoped fallback `not_found` handlers;
+- global and scoped application exception handlers.
 
 Route matching should operate on the decoded path component, not the raw target.
 The raw target remains available on `request`.
@@ -183,7 +184,7 @@ using handler = std::function<void(request&, response&)>;
 using bytes_handler = std::function<void(request&, response&, std::span<const std::byte>)>;
 using text_handler = std::function<void(request&, response&, std::string_view)>;
 using stream_handler = std::function<void(request&, response&, request_body_stream&)>;
-using error_handler = std::function<void(request&, response&, std::exception_ptr)>;
+using exception_handler = std::function<void(request&, response&, std::exception_ptr)>;
 ```
 
 The implementation may use templates at registration time, but stored handlers

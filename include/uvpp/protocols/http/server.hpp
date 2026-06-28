@@ -21,7 +21,7 @@ namespace uvp::http {
 
 class server {
 public:
-  using error_handler_type = std::function<void(request&, response&, std::exception_ptr)>;
+  using exception_handler_type = uvp::http::exception_handler_type;
   using upgrade_handler_type = std::function<void(upgrade_request&)>;
 
   explicit server(uv::loop& loop);
@@ -220,8 +220,8 @@ public:
   }
 
   template<class Handler>
-  server& on_error(Handler&& handler) {
-    error_handler_ = error_handler_type(std::forward<Handler>(handler));
+  server& on_exception(Handler&& handler) {
+    exception_handler_ = exception_handler_type(std::forward<Handler>(handler));
     return *this;
   }
 
@@ -249,7 +249,7 @@ private:
   server_options options_;
   router router_;
   router::handler_type not_found_handler_;
-  error_handler_type error_handler_;
+  exception_handler_type exception_handler_;
   struct upgrade_route {
     std::string pattern;
     upgrade_handler_type handler;

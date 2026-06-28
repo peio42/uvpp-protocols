@@ -5,9 +5,9 @@ Status: Partially implemented
 ## Context
 
 The HTTP router uses a segment trie and already supports route parameters,
-wildcards, method-aware matching, `not_found`, and `on_error`. The design notes
-reserve future route ergonomics for route groups and hooks attached to groups or
-subtrees.
+wildcards, method-aware matching, `not_found`, and `on_exception`. The design
+notes reserve future route ergonomics for route groups and hooks attached to
+groups or subtrees.
 
 This proposal keeps that work aligned with the library's current shape:
 
@@ -20,12 +20,13 @@ This proposal keeps that work aligned with the library's current shape:
 ## Current State
 
 - Implemented: route parameters, wildcard tails, method-aware matching,
-  `not_found`, `on_error`, route groups, shared prefixes, and inherited
-  `on_request`/`pre_handler`/`on_response` hooks, plus `resource()` route
-  builders for exact multi-method endpoints and `mount()` for composing
-  independently declared routers under a prefix.
-- Not implemented: route-level hooks separate from group hooks, scoped
-  fallbacks, parameter constraints, and matched route pattern accessors.
+  global and scoped `not_found`, global and scoped `on_exception`, route
+  groups, shared prefixes, and inherited `on_request`/`pre_handler`/
+  `on_response` hooks, plus `resource()` route builders for exact multi-method
+  endpoints and `mount()` for composing independently declared routers under a
+  prefix.
+- Not implemented: route-level hooks separate from group hooks, parameter
+  constraints, and matched route pattern accessors.
 
 ## Draft Scope
 
@@ -186,9 +187,9 @@ the request before the handler; response-side hooks observe completion after
 the handler.
 
 Exceptions thrown by `on_response` do not change the already completed
-response. They also should not call application `on_error`, because that would
-invite double responses or hook loops. The first implementation can swallow
-them; a later diagnostics hook may expose hook failures if needed.
+response. They also should not call application `on_exception`, because that
+would invite double responses or hook loops. The first implementation can
+swallow them; a later diagnostics hook may expose hook failures if needed.
 
 `on_response` is different from a possible `on_finish` hook. `on_response`
 observes application completion. `on_finish` would observe transport completion
@@ -339,11 +340,22 @@ subtree:
 ```cpp
 srv.group("/api")
   .not_found(api_not_found)
-  .on_error(api_error);
+  .on_exception(api_exception);
 ```
 
-The global `not_found` and `on_error` handlers remain the default fallback.
+Status: implemented as `route_group::not_found(...)` and
+`route_group::on_exception(...)`. The global `server::not_found(...)` and
+`server::on_exception(...)` handlers remain the default fallback.
+
+`on_exception` intentionally replaces the former HTTP server `on_error` name.
+It handles uncaught C++ exceptions from route handlers and request-side hooks;
+transport, parser, request-body stream, and streaming-response errors keep
+their own explicit error callbacks.
+
 Scoped handlers apply only when the matched path is inside the group prefix.
+For a matched route, the most specific inherited `on_exception` handler wins.
+For a missing route, the most specific inherited `not_found` handler wins.
+If no scoped fallback exists, the server-level fallback is used.
 
 ### 8. Matched Route Pattern
 

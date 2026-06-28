@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -280,6 +281,79 @@ UVP_TEST_CASE("http server route group on_request can short circuit before handl
   UVP_CHECK(received.find("HTTP/1.1 401 Unauthorized\r\n") != std::string::npos);
   UVP_CHECK(received.find("\r\n\r\nblocked\n") != std::string::npos);
   UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server uses scoped not_found fallback") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.not_found([](uvp::http::request&, uvp::http::response& res) {
+        res.status(uvp::http::status::not_found).text("global missing\n");
+      });
+
+      auto api = server.group("/api");
+      api.not_found([](uvp::http::request& req, uvp::http::response& res) {
+        res.status(uvp::http::status::not_found).text(std::string{"api missing "} + std::string(req.path()) + "\n");
+      });
+    },
+    "GET /api/missing HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "api missing /api/missing\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 404 Not Found\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\napi missing /api/missing\n") != std::string::npos);
+  UVP_CHECK(received.find("global missing\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server on_exception handles application exceptions") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr error) {
+        try {
+          std::rethrow_exception(error);
+        } catch (const std::runtime_error& ex) {
+          res.status(uvp::http::status::internal_server_error).text(std::string{"caught "} + ex.what() + "\n");
+        }
+      });
+      server.get("/boom", [](uvp::http::request&, uvp::http::response&) {
+        throw std::runtime_error{"boom"};
+      });
+    },
+    "GET /boom HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "caught boom\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 500 Internal Server Error\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\ncaught boom\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server uses scoped on_exception for matched routes") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+        res.status(uvp::http::status::internal_server_error).text("global exception\n");
+      });
+
+      auto api = server.group("/api");
+      api.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+        res.status(uvp::http::status::internal_server_error).text("api exception\n");
+      });
+      api.get("/boom", [](uvp::http::request&, uvp::http::response&) {
+        throw std::runtime_error{"api boom"};
+      });
+    },
+    "GET /api/boom HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "api exception\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 500 Internal Server Error\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\napi exception\n") != std::string::npos);
+  UVP_CHECK(received.find("global exception\n") == std::string::npos);
 }
 
 UVP_TEST_CASE("http server resources register multiple methods on one endpoint") {

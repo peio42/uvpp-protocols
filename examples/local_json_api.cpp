@@ -114,7 +114,7 @@ int main() {
       .json(uvp::json{{"error", "route not found"}, {"path", std::string(req.path())}});
   });
 
-  srv.on_error([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+  srv.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
     res.status(uvp::http::status::internal_server_error).json(uvp::json{{"error", "internal server error"}});
   });
 

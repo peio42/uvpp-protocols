@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <exception>
 #include <functional>
 #include <optional>
 #include <span>
@@ -49,6 +50,7 @@ struct response_info {
 
 using hook_type = std::function<hook_result(request&, response&)>;
 using response_hook_type = std::function<void(const response_info&)>;
+using exception_handler_type = std::function<void(request&, response&, std::exception_ptr)>;
 
 struct route_options {
   route_options& max_body_bytes(std::size_t value) & noexcept {
@@ -109,9 +111,18 @@ public:
     std::vector<const hook_type*> on_request_hooks;
     std::vector<const hook_type*> pre_handler_hooks;
     std::vector<const response_hook_type*> on_response_hooks;
+    const exception_handler_type* exception_handler = nullptr;
 
     [[nodiscard]] bool ok() const noexcept { return handler != nullptr; }
     explicit operator bool() const noexcept { return ok(); }
+  };
+
+  struct fallback_result {
+    const handler_type* not_found_handler = nullptr;
+    const exception_handler_type* exception_handler = nullptr;
+    route_params params;
+
+    [[nodiscard]] bool has_not_found() const noexcept { return not_found_handler != nullptr; }
   };
 
   router() = default;
@@ -318,6 +329,7 @@ public:
   }
 
   [[nodiscard]] match_result match(method method_value, std::string_view path) const;
+  [[nodiscard]] fallback_result fallback(std::string_view path) const;
   [[nodiscard]] const handler_type* find(method method_value, std::string_view path) const;
   [[nodiscard]] std::vector<method> allowed_methods(std::string_view path) const;
   [[nodiscard]] bool empty() const noexcept { return route_count_ == 0; }
@@ -345,6 +357,8 @@ private:
     std::vector<hook_type> on_request_hooks;
     std::vector<hook_type> pre_handler_hooks;
     std::vector<response_hook_type> on_response_hooks;
+    std::optional<handler_type> not_found_handler;
+    std::optional<exception_handler_type> exception_handler;
   };
 
   router& add_route(
@@ -356,6 +370,8 @@ private:
   router& add_on_request_hook(std::string_view prefix, hook_type hook);
   router& add_pre_handler_hook(std::string_view prefix, hook_type hook);
   router& add_on_response_hook(std::string_view prefix, response_hook_type hook);
+  router& add_not_found_handler(std::string_view prefix, handler_type handler);
+  router& add_exception_handler(std::string_view prefix, exception_handler_type handler);
   [[nodiscard]] std::size_t ensure_prefix_node(std::string_view prefix);
   void validate_mount_node(const router& mounted, std::size_t destination_index, std::size_t source_index) const;
   void merge_mount_node(router& mounted, std::size_t destination_index, std::size_t source_index);
@@ -367,7 +383,8 @@ private:
     route_params& params,
     std::vector<const hook_type*>& on_request_hooks,
     std::vector<const hook_type*>& pre_handler_hooks,
-    std::vector<const response_hook_type*>& on_response_hooks) const;
+    std::vector<const response_hook_type*>& on_response_hooks,
+    const exception_handler_type*& exception_handler) const;
 
   std::vector<trie_node> nodes_{{}};
   std::size_t route_count_ = 0;
@@ -549,6 +566,18 @@ public:
   template<class Handler>
   route_group& on_response(Handler&& handler) {
     router_->add_on_response_hook(prefix_, detail::wrap_response_hook(std::forward<Handler>(handler)));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& not_found(Handler&& handler) {
+    router_->add_not_found_handler(prefix_, detail::wrap_none_handler(std::forward<Handler>(handler)));
+    return *this;
+  }
+
+  template<class Handler>
+  route_group& on_exception(Handler&& handler) {
+    router_->add_exception_handler(prefix_, exception_handler_type(std::forward<Handler>(handler)));
     return *this;
   }
 

@@ -187,6 +187,23 @@ response headers, logical response body size, and a `response_outcome`.
 Response hooks cannot mutate the response. They run leaf to root, so the most
 specific group observes first.
 
+Groups can also define scoped fallbacks:
+
+```cpp
+auto api = srv.group("/api");
+
+api.not_found([](uvp::http::request&, uvp::http::response& res) {
+  res.status(uvp::http::status::not_found).json(uvp::json{{"error", "api route not found"}});
+});
+
+api.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+  res.status(uvp::http::status::internal_server_error).json(uvp::json{{"error", "api failure"}});
+});
+```
+
+Scoped fallbacks use the most specific matching group. If no group fallback is
+available, the server-level `not_found()` or `on_exception()` handler is used.
+
 Route groups are lightweight value handles. You can chain route declarations
 directly:
 
@@ -595,11 +612,11 @@ upgrade protocol.
 
 ## Errors
 
-Route handlers may throw. Uncaught exceptions are handled by the route error
-policy:
+Route handlers may throw. Uncaught application exceptions are handled by the
+route exception policy:
 
 ```cpp
-srv.on_error([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+srv.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
   res.status(500).json(uvp::json{{"error", "internal server error"}});
 });
 ```
@@ -611,3 +628,8 @@ srv.not_found([](uvp::http::request&, uvp::http::response& res) {
   res.status(404).json(uvp::json{{"error", "not found"}});
 });
 ```
+
+`on_exception()` handles uncaught C++ exceptions from route handlers and
+request-side hooks. It does not handle malformed HTTP, socket failures,
+request-body stream errors, streaming response errors, or exceptions thrown by
+`on_response` observers.

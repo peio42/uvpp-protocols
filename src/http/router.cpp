@@ -236,6 +236,16 @@ router& router::add_on_response_hook(std::string_view prefix, response_hook_type
   return *this;
 }
 
+router& router::add_not_found_handler(std::string_view prefix, handler_type handler) {
+  nodes_[ensure_prefix_node(prefix)].not_found_handler = std::move(handler);
+  return *this;
+}
+
+router& router::add_exception_handler(std::string_view prefix, exception_handler_type handler) {
+  nodes_[ensure_prefix_node(prefix)].exception_handler = std::move(handler);
+  return *this;
+}
+
 std::size_t router::ensure_prefix_node(std::string_view prefix) {
   std::size_t node_index = 0;
   std::string_view rest = prefix;
@@ -305,6 +315,12 @@ void router::validate_mount_node(
       throw std::invalid_argument("HTTP mounted router conflicts with an existing route");
     }
   }
+  if (destination.not_found_handler && source.not_found_handler) {
+    throw std::invalid_argument("HTTP mounted router not_found fallback conflicts with an existing fallback");
+  }
+  if (destination.exception_handler && source.exception_handler) {
+    throw std::invalid_argument("HTTP mounted router exception fallback conflicts with an existing fallback");
+  }
 
   for (const auto& [segment, source_child_index] : source.static_children) {
     if (const auto destination_child = destination.static_children.find(segment);
@@ -354,6 +370,12 @@ void router::merge_mount_node(router& mounted, std::size_t destination_index, st
       destination.targets[method_index] = std::move(source.targets[method_index]);
     }
   }
+  if (source.not_found_handler) {
+    destination.not_found_handler = std::move(source.not_found_handler);
+  }
+  if (source.exception_handler) {
+    destination.exception_handler = std::move(source.exception_handler);
+  }
 
   for (const auto& [segment, source_child_index] : source.static_children) {
     if (const auto destination_child = nodes_[destination_index].static_children.find(segment);
@@ -398,7 +420,8 @@ const router::route_target* router::match_node(
   route_params& params,
   std::vector<const hook_type*>& on_request_hooks,
   std::vector<const hook_type*>& pre_handler_hooks,
-  std::vector<const response_hook_type*>& on_response_hooks) const {
+  std::vector<const response_hook_type*>& on_response_hooks,
+  const exception_handler_type*& exception_handler) const {
   const auto& node = nodes_[node_index];
   for (const auto& hook : node.on_request_hooks) {
     on_request_hooks.push_back(&hook);
@@ -408,6 +431,9 @@ const router::route_target* router::match_node(
   }
   for (const auto& hook : node.on_response_hooks) {
     on_response_hooks.push_back(&hook);
+  }
+  if (node.exception_handler) {
+    exception_handler = &*node.exception_handler;
   }
 
   std::string_view rest = path;
@@ -424,6 +450,7 @@ const router::route_target* router::match_node(
       auto wildcard_on_request_hooks = on_request_hooks;
       auto wildcard_pre_handler_hooks = pre_handler_hooks;
       auto wildcard_on_response_hooks = on_response_hooks;
+      auto* wildcard_exception_handler = exception_handler;
       const auto& wildcard_node = nodes_[node.wildcard_child->node];
       for (const auto& hook : wildcard_node.on_request_hooks) {
         wildcard_on_request_hooks.push_back(&hook);
@@ -434,11 +461,15 @@ const router::route_target* router::match_node(
       for (const auto& hook : wildcard_node.on_response_hooks) {
         wildcard_on_response_hooks.push_back(&hook);
       }
+      if (wildcard_node.exception_handler) {
+        wildcard_exception_handler = &*wildcard_node.exception_handler;
+      }
       if (const auto& target = nodes_[node.wildcard_child->node].targets[method_index]) {
         params = std::move(wildcard_params);
         on_request_hooks = std::move(wildcard_on_request_hooks);
         pre_handler_hooks = std::move(wildcard_pre_handler_hooks);
         on_response_hooks = std::move(wildcard_on_response_hooks);
+        exception_handler = wildcard_exception_handler;
         return &*target;
       }
     }
@@ -450,6 +481,7 @@ const router::route_target* router::match_node(
     auto child_on_request_hooks = on_request_hooks;
     auto child_pre_handler_hooks = pre_handler_hooks;
     auto child_on_response_hooks = on_response_hooks;
+    auto* child_exception_handler = exception_handler;
     if (auto target = match_node(
           child->second,
           method_index,
@@ -457,11 +489,13 @@ const router::route_target* router::match_node(
           child_params,
           child_on_request_hooks,
           child_pre_handler_hooks,
-          child_on_response_hooks)) {
+          child_on_response_hooks,
+          child_exception_handler)) {
       params = std::move(child_params);
       on_request_hooks = std::move(child_on_request_hooks);
       pre_handler_hooks = std::move(child_pre_handler_hooks);
       on_response_hooks = std::move(child_on_response_hooks);
+      exception_handler = child_exception_handler;
       return target;
     }
   }
@@ -472,6 +506,7 @@ const router::route_target* router::match_node(
     auto child_on_request_hooks = on_request_hooks;
     auto child_pre_handler_hooks = pre_handler_hooks;
     auto child_on_response_hooks = on_response_hooks;
+    auto* child_exception_handler = exception_handler;
     if (auto target = match_node(
           node.parameter_child->node,
           method_index,
@@ -479,11 +514,13 @@ const router::route_target* router::match_node(
           child_params,
           child_on_request_hooks,
           child_pre_handler_hooks,
-          child_on_response_hooks)) {
+          child_on_response_hooks,
+          child_exception_handler)) {
       params = std::move(child_params);
       on_request_hooks = std::move(child_on_request_hooks);
       pre_handler_hooks = std::move(child_pre_handler_hooks);
       on_response_hooks = std::move(child_on_response_hooks);
+      exception_handler = child_exception_handler;
       return target;
     }
   }
@@ -496,6 +533,7 @@ const router::route_target* router::match_node(
     auto wildcard_on_request_hooks = on_request_hooks;
     auto wildcard_pre_handler_hooks = pre_handler_hooks;
     auto wildcard_on_response_hooks = on_response_hooks;
+    auto* wildcard_exception_handler = exception_handler;
     const auto& wildcard_node = nodes_[node.wildcard_child->node];
     for (const auto& hook : wildcard_node.on_request_hooks) {
       wildcard_on_request_hooks.push_back(&hook);
@@ -506,11 +544,15 @@ const router::route_target* router::match_node(
     for (const auto& hook : wildcard_node.on_response_hooks) {
       wildcard_on_response_hooks.push_back(&hook);
     }
+    if (wildcard_node.exception_handler) {
+      wildcard_exception_handler = &*wildcard_node.exception_handler;
+    }
     if (const auto& target = nodes_[node.wildcard_child->node].targets[method_index]) {
       params = std::move(wildcard_params);
       on_request_hooks = std::move(wildcard_on_request_hooks);
       pre_handler_hooks = std::move(wildcard_pre_handler_hooks);
       on_response_hooks = std::move(wildcard_on_response_hooks);
+      exception_handler = wildcard_exception_handler;
       return &*target;
     }
   }
@@ -528,6 +570,7 @@ router::match_result router::match(method method_value, std::string_view path) c
   std::vector<const hook_type*> on_request_hooks;
   std::vector<const hook_type*> pre_handler_hooks;
   std::vector<const response_hook_type*> on_response_hooks;
+  const exception_handler_type* exception_handler = nullptr;
   const auto* target = match_node(
     0,
     method_index,
@@ -535,7 +578,8 @@ router::match_result router::match(method method_value, std::string_view path) c
     params,
     on_request_hooks,
     pre_handler_hooks,
-    on_response_hooks);
+    on_response_hooks,
+    exception_handler);
   if (!target) {
     return {};
   }
@@ -547,7 +591,55 @@ router::match_result router::match(method method_value, std::string_view path) c
     std::move(on_request_hooks),
     std::move(pre_handler_hooks),
     std::move(on_response_hooks),
+    exception_handler,
   };
+}
+
+router::fallback_result router::fallback(std::string_view path) const {
+  fallback_result result;
+  route_params params;
+
+  std::size_t node_index = 0;
+  const auto remember_fallback = [&](const trie_node& node) {
+    if (node.not_found_handler) {
+      result.not_found_handler = &*node.not_found_handler;
+      result.params = params;
+    }
+    if (node.exception_handler) {
+      result.exception_handler = &*node.exception_handler;
+    }
+  };
+
+  remember_fallback(nodes_[node_index]);
+
+  std::string_view rest = path;
+  std::string_view segment;
+  while (detail::next_route_segment(rest, segment)) {
+    const auto& node = nodes_[node_index];
+    if (auto child = node.static_children.find(std::string(segment)); child != node.static_children.end()) {
+      node_index = child->second;
+      remember_fallback(nodes_[node_index]);
+      continue;
+    }
+
+    if (node.parameter_child) {
+      params.set(node.parameter_child->name, segment);
+      node_index = node.parameter_child->node;
+      remember_fallback(nodes_[node_index]);
+      continue;
+    }
+
+    if (node.wildcard_child) {
+      if (!node.wildcard_child->name.empty()) {
+        params.set(node.wildcard_child->name, detail::capture_wildcard(segment.empty() ? rest : path));
+      }
+      node_index = node.wildcard_child->node;
+      remember_fallback(nodes_[node_index]);
+    }
+    break;
+  }
+
+  return result;
 }
 
 const router::handler_type* router::find(method method_value, std::string_view path) const {
@@ -561,9 +653,18 @@ std::vector<method> router::allowed_methods(std::string_view path) const {
     std::vector<const hook_type*> on_request_hooks;
     std::vector<const hook_type*> pre_handler_hooks;
     std::vector<const response_hook_type*> on_response_hooks;
+    const exception_handler_type* exception_handler = nullptr;
     const auto method_index = static_cast<std::size_t>(method_value);
     if (method_index < method_count_ &&
-        match_node(0, method_index, path, params, on_request_hooks, pre_handler_hooks, on_response_hooks)) {
+        match_node(
+          0,
+          method_index,
+          path,
+          params,
+          on_request_hooks,
+          pre_handler_hooks,
+          on_response_hooks,
+          exception_handler)) {
       methods.push_back(method_value);
     }
   }

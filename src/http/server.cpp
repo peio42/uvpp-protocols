@@ -467,7 +467,7 @@ struct server::impl {
         }
         (*active.route.handler)(active.req, res, {}, &active.body_stream);
       } catch (...) {
-        handle_exception(active.req, res, std::current_exception());
+        handle_exception(active.req, res, std::current_exception(), active.route.exception_handler);
         active.rejected = true;
       }
     }
@@ -551,10 +551,17 @@ struct server::impl {
       response& res = slot->res;
 
       if (!route_match) {
+        auto fallback = owner_.owner.router_.fallback(path);
+        req.params_ = std::move(fallback.params);
         try {
           auto allowed_methods = owner_.owner.router_.allowed_methods(path);
           if (!allowed_methods.empty()) {
             dispatch_automatic_method_response(req, res, std::move(allowed_methods));
+          } else if (fallback.not_found_handler) {
+            (*fallback.not_found_handler)(req, res, {}, nullptr);
+            if (!res.ended() && !res.deferred() && !res.streaming()) {
+              res.end();
+            }
           } else if (owner_.owner.not_found_handler_) {
             owner_.owner.not_found_handler_(req, res, {}, nullptr);
             if (!res.ended() && !res.deferred() && !res.streaming()) {
@@ -564,7 +571,7 @@ struct server::impl {
             res.status(status::not_found).text("not found\n");
           }
         } catch (...) {
-          handle_exception(req, res, std::current_exception());
+          handle_exception(req, res, std::current_exception(), fallback.exception_handler);
           return;
         }
         if (!res.ended() && !res.deferred() && !res.streaming()) {
@@ -574,6 +581,7 @@ struct server::impl {
       }
 
       req.params_ = std::move(route_match.params);
+      const auto* exception_handler = route_match.exception_handler;
       configure_response_observation(*slot, req, route_match.on_response_hooks);
 
       try {
@@ -585,7 +593,7 @@ struct server::impl {
         (*route_match.handler)(req, res, body, nullptr);
         finish_response_if_needed(res);
       } catch (...) {
-        handle_exception(req, res, std::current_exception());
+        handle_exception(req, res, std::current_exception(), exception_handler);
         return;
       }
     }
@@ -613,11 +621,16 @@ struct server::impl {
       }
     }
 
-    void handle_exception(request& req, response& res, std::exception_ptr error) {
+    void handle_exception(
+      request& req,
+      response& res,
+      std::exception_ptr error,
+      const exception_handler_type* scoped_handler = nullptr) {
       res.reset();
-      if (owner_.owner.error_handler_) {
+      const auto* handler = scoped_handler ? scoped_handler : &owner_.owner.exception_handler_;
+      if (*handler) {
         try {
-          owner_.owner.error_handler_(req, res, std::move(error));
+          (*handler)(req, res, std::move(error));
           if (!res.ended() && !res.deferred() && !res.streaming()) {
             res.end();
           }
@@ -661,7 +674,7 @@ struct server::impl {
           return false;
         }
       } catch (...) {
-        handle_exception(active.req, res, std::current_exception());
+        handle_exception(active.req, res, std::current_exception(), active.route.exception_handler);
         active.rejected = true;
         return false;
       }
