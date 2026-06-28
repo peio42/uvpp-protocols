@@ -137,6 +137,11 @@ public:
     return router_.resource(pattern);
   }
 
+  server& mount(std::string_view prefix, router&& mounted) {
+    router_.mount(prefix, std::move(mounted));
+    return *this;
+  }
+
   template<class Handler>
   server& on_request(Handler&& handler) {
     router_.on_request(std::forward<Handler>(handler));

@@ -162,6 +162,7 @@ public:
 
   [[nodiscard]] route_group group(std::string_view prefix);
   [[nodiscard]] route_resource resource(std::string_view pattern);
+  router& mount(std::string_view prefix, router&& mounted);
 
   template<class BodyPolicy, class Handler>
   router& get(std::string_view pattern, BodyPolicy policy, Handler&& handler) {
@@ -273,6 +274,9 @@ private:
   router& add_pre_handler_hook(std::string_view prefix, hook_type hook);
   router& add_on_response_hook(std::string_view prefix, response_hook_type hook);
   [[nodiscard]] std::size_t ensure_prefix_node(std::string_view prefix);
+  void validate_mount_node(const router& mounted, std::size_t destination_index, std::size_t source_index) const;
+  void merge_mount_node(router& mounted, std::size_t destination_index, std::size_t source_index);
+  [[nodiscard]] std::size_t move_mount_subtree(router& mounted, std::size_t source_index);
   [[nodiscard]] const route_target* match_node(
     std::size_t node_index,
     std::size_t method_index,
@@ -419,6 +423,11 @@ public:
 
   [[nodiscard]] route_group group(std::string_view prefix) const;
   [[nodiscard]] route_resource resource(std::string_view pattern) const;
+
+  route_group& mount(std::string_view prefix, router&& mounted) {
+    router_->mount(route_pattern(prefix), std::move(mounted));
+    return *this;
+  }
 
   template<class Handler>
   route_group& route(method method_value, std::string_view pattern, Handler&& handler) {

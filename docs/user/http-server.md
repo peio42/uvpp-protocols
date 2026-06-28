@@ -204,6 +204,43 @@ api.resource("/items/:id")
   .patch(uvp::http::body::text{}, patch_item);
 ```
 
+## Mountable Routers
+
+Use `mount()` to compose an independently declared router under a path prefix:
+
+```cpp
+uvp::http::router api;
+
+api.on_request(authenticate_api_request);
+api.get("/items", list_items);
+api.resource("/items/:id")
+  .get(show_item)
+  .put(uvp::http::body::text{}, update_item);
+
+srv.mount("/api/v1", std::move(api));
+```
+
+Mounted routers are moved into the destination router. This keeps route
+handlers and hooks owned by one router after composition and avoids copying
+application callables.
+
+Mounting preserves the mounted router's internal routes, body policies, route
+parameters, wildcard routes, and hooks. Hooks already registered on the
+destination prefix run before hooks from the mounted router for
+`on_request` and `pre_handler`; `on_response` keeps the usual leaf-to-root
+order.
+
+Groups can mount routers relative to their prefix:
+
+```cpp
+auto api = srv.group("/api");
+api.mount("/v1", std::move(v1_router));
+```
+
+If a mounted route conflicts with an existing route for the same effective
+method and path, or if parameter/wildcard names conflict at the same trie
+position, `mount()` throws `std::invalid_argument`.
+
 ## No Request Body
 
 Use `body::none{}` for routes that do not accept a request body:

@@ -306,6 +306,26 @@ UVP_TEST_CASE("http server resources register multiple methods on one endpoint")
   UVP_CHECK(received.find("\r\n\r\nupdate 42 new\n") != std::string::npos);
 }
 
+UVP_TEST_CASE("http server mounts an independently declared router") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      uvp::http::router api;
+      api.get("/items/:id", [](uvp::http::request& req, uvp::http::response& res) {
+        res.text(std::string{"item "} + std::string(req.params().get("id")) + "\n");
+      });
+
+      server.mount("/api/v1", std::move(api));
+    },
+    "GET /api/v1/items/42 HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "item 42\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nitem 42\n") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server runs response hooks with response snapshots") {
   std::vector<std::string> events;
   unsigned int observed_status = 0;

@@ -22,10 +22,10 @@ This proposal keeps that work aligned with the library's current shape:
 - Implemented: route parameters, wildcard tails, method-aware matching,
   `not_found`, `on_error`, route groups, shared prefixes, and inherited
   `on_request`/`pre_handler`/`on_response` hooks, plus `resource()` route
-  builders for exact multi-method endpoints.
-- Not implemented: route-level hooks separate from group hooks, mountable
-  routers, resource route builders, scoped fallbacks, parameter constraints,
-  and matched route pattern accessors.
+  builders for exact multi-method endpoints and `mount()` for composing
+  independently declared routers under a prefix.
+- Not implemented: route-level hooks separate from group hooks, scoped
+  fallbacks, parameter constraints, and matched route pattern accessors.
 
 ## Draft Scope
 
@@ -243,6 +243,22 @@ srv.mount("/api/v1", std::move(api));
 Mounting can either merge tries or replay route registrations with a prefix.
 The first implementation should prefer the simpler approach unless route
 metadata makes replay too lossy.
+
+Status: implemented with internal trie merging rather than route replay.
+`router::mount(...)`, `server::mount(...)`, and `route_group::mount(...)`
+consume a `router&&` and move its route targets and hooks into the destination.
+This preserves body policies, parameters, wildcard children, and hook placement
+without introducing a second registration log.
+
+The destination prefix is resolved with the same prefix rules as route groups.
+Destination hooks already present at the mount prefix run before the mounted
+router's root hooks for `on_request` and `pre_handler`; `on_response` keeps the
+existing leaf-to-root unwind order.
+
+Conflicts use the router's existing validation model: a route for the same
+effective method and path is rejected, and parameter or wildcard names at the
+same trie position must agree. `mount()` throws `std::invalid_argument` for
+these conflicts.
 
 ### 3. Lifecycle Hooks
 

@@ -180,6 +180,153 @@ UVP_TEST_CASE("http router group resources use the group prefix") {
   UVP_CHECK(router.find(uvp::http::method::get, "/items/42") == nullptr);
 }
 
+UVP_TEST_CASE("http router mounts another router under a prefix") {
+  uvp::http::router api;
+  api.get("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
+  api.post("/items/:id", uvp::http::body::text{}, [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+
+  uvp::http::router router;
+  router.mount("/api/v1", std::move(api));
+
+  UVP_CHECK_EQ(router.size(), 2U);
+  UVP_CHECK(api.empty());
+
+  auto get_match = router.match(uvp::http::method::get, "/api/v1/items/42");
+  UVP_REQUIRE(get_match);
+  UVP_CHECK_EQ(get_match.params.get("id"), "42");
+
+  auto post_match = router.match(uvp::http::method::post, "/api/v1/items/42");
+  UVP_REQUIRE(post_match);
+  UVP_CHECK(post_match.body == uvp::http::detail::body_mode::text);
+  UVP_CHECK(router.find(uvp::http::method::get, "/items/42") == nullptr);
+}
+
+UVP_TEST_CASE("http router groups mount routers relative to their prefix") {
+  uvp::http::router api;
+  api.get("/items", [](uvp::http::request&, uvp::http::response&) {});
+
+  uvp::http::router router;
+  router.group("/api").mount("v1", std::move(api));
+
+  UVP_CHECK(router.find(uvp::http::method::get, "/api/v1/items") != nullptr);
+  UVP_CHECK(router.find(uvp::http::method::get, "/v1/items") == nullptr);
+}
+
+UVP_TEST_CASE("http router mounted hooks compose with destination hooks") {
+  uvp::http::router mounted;
+  std::vector<std::string> order;
+
+  mounted.on_request([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("mounted-request");
+  });
+  mounted.pre_handler([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("mounted-pre");
+  });
+  mounted.on_response([&](const uvp::http::response_info&) {
+    order.push_back("mounted-response");
+  });
+
+  auto mounted_v1 = mounted.group("/v1");
+  mounted_v1.on_request([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("mounted-v1-request");
+  });
+  mounted_v1.pre_handler([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("mounted-v1-pre");
+  });
+  mounted_v1.on_response([&](const uvp::http::response_info&) {
+    order.push_back("mounted-v1-response");
+  });
+  mounted_v1.get("/items", [](uvp::http::request&, uvp::http::response&) {});
+
+  uvp::http::router router;
+  router.on_request([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("root-request");
+  });
+  router.pre_handler([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("root-pre");
+  });
+  router.on_response([&](const uvp::http::response_info&) {
+    order.push_back("root-response");
+  });
+
+  auto api = router.group("/api");
+  api.on_request([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("api-request");
+  });
+  api.pre_handler([&](uvp::http::request&, uvp::http::response&) {
+    order.push_back("api-pre");
+  });
+  api.on_response([&](const uvp::http::response_info&) {
+    order.push_back("api-response");
+  });
+
+  router.mount("/api", std::move(mounted));
+
+  auto match = router.match(uvp::http::method::get, "/api/v1/items");
+  UVP_REQUIRE(match);
+  UVP_CHECK_EQ(match.on_request_hooks.size(), 4U);
+  UVP_CHECK_EQ(match.pre_handler_hooks.size(), 4U);
+  UVP_CHECK_EQ(match.on_response_hooks.size(), 4U);
+
+  uvp::http::request req;
+  uvp::http::response res;
+  for (const auto* hook : match.on_request_hooks) {
+    UVP_CHECK((*hook)(req, res) == uvp::http::hook_result::next);
+  }
+  for (const auto* hook : match.pre_handler_hooks) {
+    UVP_CHECK((*hook)(req, res) == uvp::http::hook_result::next);
+  }
+  uvp::http::request_snapshot snapshot;
+  uvp::http::headers headers;
+  const auto info = uvp::http::response_info{
+    snapshot,
+    200,
+    headers,
+    0,
+    uvp::http::response_outcome::completed,
+  };
+  for (auto hook = match.on_response_hooks.rbegin(); hook != match.on_response_hooks.rend(); ++hook) {
+    (**hook)(info);
+  }
+
+  UVP_REQUIRE(order.size() == 12U);
+  UVP_CHECK_EQ(order[0], "root-request");
+  UVP_CHECK_EQ(order[1], "api-request");
+  UVP_CHECK_EQ(order[2], "mounted-request");
+  UVP_CHECK_EQ(order[3], "mounted-v1-request");
+  UVP_CHECK_EQ(order[4], "root-pre");
+  UVP_CHECK_EQ(order[5], "api-pre");
+  UVP_CHECK_EQ(order[6], "mounted-pre");
+  UVP_CHECK_EQ(order[7], "mounted-v1-pre");
+  UVP_CHECK_EQ(order[8], "mounted-v1-response");
+  UVP_CHECK_EQ(order[9], "mounted-response");
+  UVP_CHECK_EQ(order[10], "api-response");
+  UVP_CHECK_EQ(order[11], "root-response");
+}
+
+UVP_TEST_CASE("http router rejects conflicting mounted routes") {
+  uvp::http::router router;
+  router.get("/api/items", [](uvp::http::request&, uvp::http::response&) {});
+
+  uvp::http::router conflicting;
+  conflicting.get("/items", [](uvp::http::request&, uvp::http::response&) {});
+
+  UVP_CHECK_THROWS(router.mount("/api", std::move(conflicting)), std::invalid_argument);
+  UVP_CHECK_EQ(router.size(), 1U);
+  UVP_CHECK(router.find(uvp::http::method::get, "/api/items") != nullptr);
+}
+
+UVP_TEST_CASE("http router rejects conflicting mounted parameter names") {
+  uvp::http::router router;
+  router.get("/api/users/:id", [](uvp::http::request&, uvp::http::response&) {});
+
+  uvp::http::router conflicting;
+  conflicting.get("/users/:name", [](uvp::http::request&, uvp::http::response&) {});
+
+  UVP_CHECK_THROWS(router.mount("/api", std::move(conflicting)), std::invalid_argument);
+  UVP_CHECK_EQ(router.size(), 1U);
+}
+
 UVP_TEST_CASE("http router matches inherited group hooks from root to leaf") {
   uvp::http::router router;
   std::vector<std::string> order;

@@ -1,5 +1,6 @@
 #include <uvpp/protocols/http/router.hpp>
 
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -274,6 +275,120 @@ std::size_t router::ensure_prefix_node(std::string_view prefix) {
   }
 
   return node_index;
+}
+
+router& router::mount(std::string_view prefix, router&& mounted) {
+  if (&mounted == this) {
+    throw std::invalid_argument("HTTP router cannot mount itself");
+  }
+
+  const auto destination_index = ensure_prefix_node(prefix);
+  validate_mount_node(mounted, destination_index, 0);
+  merge_mount_node(mounted, destination_index, 0);
+  route_count_ += mounted.route_count_;
+
+  mounted.nodes_.clear();
+  mounted.nodes_.push_back(trie_node{});
+  mounted.route_count_ = 0;
+  return *this;
+}
+
+void router::validate_mount_node(
+  const router& mounted,
+  std::size_t destination_index,
+  std::size_t source_index) const {
+  const auto& destination = nodes_[destination_index];
+  const auto& source = mounted.nodes_[source_index];
+
+  for (std::size_t method_index = 0; method_index < method_count_; ++method_index) {
+    if (destination.targets[method_index] && source.targets[method_index]) {
+      throw std::invalid_argument("HTTP mounted router conflicts with an existing route");
+    }
+  }
+
+  for (const auto& [segment, source_child_index] : source.static_children) {
+    if (const auto destination_child = destination.static_children.find(segment);
+        destination_child != destination.static_children.end()) {
+      validate_mount_node(mounted, destination_child->second, source_child_index);
+    }
+  }
+
+  if (source.parameter_child) {
+    if (destination.parameter_child) {
+      if (destination.parameter_child->name != source.parameter_child->name) {
+        throw std::invalid_argument("HTTP mounted router parameter conflicts with an existing parameter route");
+      }
+      validate_mount_node(mounted, destination.parameter_child->node, source.parameter_child->node);
+    }
+  }
+
+  if (source.wildcard_child) {
+    if (destination.wildcard_child) {
+      if (destination.wildcard_child->name != source.wildcard_child->name) {
+        throw std::invalid_argument("HTTP mounted router wildcard conflicts with an existing wildcard route");
+      }
+      validate_mount_node(mounted, destination.wildcard_child->node, source.wildcard_child->node);
+    }
+  }
+}
+
+void router::merge_mount_node(router& mounted, std::size_t destination_index, std::size_t source_index) {
+  auto& destination = nodes_[destination_index];
+  auto& source = mounted.nodes_[source_index];
+
+  destination.on_request_hooks.insert(
+    destination.on_request_hooks.end(),
+    std::make_move_iterator(source.on_request_hooks.begin()),
+    std::make_move_iterator(source.on_request_hooks.end()));
+  destination.pre_handler_hooks.insert(
+    destination.pre_handler_hooks.end(),
+    std::make_move_iterator(source.pre_handler_hooks.begin()),
+    std::make_move_iterator(source.pre_handler_hooks.end()));
+  destination.on_response_hooks.insert(
+    destination.on_response_hooks.end(),
+    std::make_move_iterator(source.on_response_hooks.begin()),
+    std::make_move_iterator(source.on_response_hooks.end()));
+
+  for (std::size_t method_index = 0; method_index < method_count_; ++method_index) {
+    if (source.targets[method_index]) {
+      destination.targets[method_index] = std::move(source.targets[method_index]);
+    }
+  }
+
+  for (const auto& [segment, source_child_index] : source.static_children) {
+    if (const auto destination_child = nodes_[destination_index].static_children.find(segment);
+        destination_child != nodes_[destination_index].static_children.end()) {
+      merge_mount_node(mounted, destination_child->second, source_child_index);
+    } else {
+      const auto destination_child_index = move_mount_subtree(mounted, source_child_index);
+      nodes_[destination_index].static_children.emplace(segment, destination_child_index);
+    }
+  }
+
+  if (source.parameter_child) {
+    if (nodes_[destination_index].parameter_child) {
+      merge_mount_node(mounted, nodes_[destination_index].parameter_child->node, source.parameter_child->node);
+    } else {
+      const auto destination_child_index = move_mount_subtree(mounted, source.parameter_child->node);
+      nodes_[destination_index].parameter_child = named_child{source.parameter_child->name, destination_child_index};
+    }
+  }
+
+  if (source.wildcard_child) {
+    if (nodes_[destination_index].wildcard_child) {
+      merge_mount_node(mounted, nodes_[destination_index].wildcard_child->node, source.wildcard_child->node);
+    } else {
+      const auto destination_child_index = move_mount_subtree(mounted, source.wildcard_child->node);
+      nodes_[destination_index].wildcard_child = named_child{source.wildcard_child->name, destination_child_index};
+    }
+  }
+}
+
+std::size_t router::move_mount_subtree(router& mounted, std::size_t source_index) {
+  const auto destination_index = nodes_.size();
+  nodes_.push_back(trie_node{});
+  merge_mount_node(mounted, destination_index, source_index);
+  return destination_index;
 }
 
 const router::route_target* router::match_node(
