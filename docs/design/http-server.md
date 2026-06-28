@@ -195,18 +195,17 @@ Routes declare a body policy explicitly:
 
 ```cpp
 srv.get("/health", body::none{}, handler);
-srv.post("/echo", body::bytes{.max_size = 64 * 1024}, handler);
-srv.post("/message", body::text{.max_size = 64 * 1024}, handler);
+srv.post("/echo", route_options{}.max_body_bytes(64 * 1024), body::bytes{}, handler);
+srv.post("/message", route_options{}.max_body_bytes(64 * 1024), body::text{}, handler);
 srv.post("/events", body::stream{}, handler);
 ```
 
 The body policy is part of the route contract:
 
 - `body::none{}` dispatches after request headers and rejects request bodies;
-- `body::bytes{}` buffers the body up to a configured limit, then dispatches
-  with `std::span<const std::byte>`;
-- `body::text{}` buffers the body up to a configured limit, then dispatches
-  with `std::string_view`;
+- `body::bytes{}` buffers the body, then dispatches with
+  `std::span<const std::byte>`;
+- `body::text{}` buffers the body, then dispatches with `std::string_view`;
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`.
 
@@ -225,8 +224,8 @@ srv.post(
   handler);
 ```
 
-`route_options::max_body_bytes(...)` overrides the body policy `max_size` for
-that route. If neither is set, the server falls back to
+Use `route_options::max_body_bytes(...)` when a route needs its own request
+body limit. Otherwise the server falls back to
 `server_options::max_body_bytes()`.
 
 Convenience overloads infer the body policy from the handler signature when the
@@ -561,7 +560,7 @@ Currently enforced options:
 
 - `max_header_bytes`: maximum accepted request header bytes;
 - `max_body_bytes`: default request body limit when a route does not override
-  it with `route_options::max_body_bytes(...)` or a body policy limit;
+  it with `route_options::max_body_bytes(...)`;
 - `max_pending_write_bytes`: maximum queued serialized response bytes per
   connection before write backpressure is reported;
 - `max_pending_responses_per_connection`: maximum open, deferred, streaming, or

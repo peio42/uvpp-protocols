@@ -78,10 +78,6 @@ enum class body_mode {
 
 using route_handler_type = std::function<void(request&, response&, std::span<const std::byte>, request_body_stream*)>;
 
-inline std::size_t effective_max_body_bytes(route_options options, std::size_t body_policy_max) noexcept {
-  return options.max_body_bytes() == 0 ? body_policy_max : options.max_body_bytes();
-}
-
 template<class Handler>
 route_handler_type wrap_none_handler(Handler&& handler);
 template<class Handler>
@@ -143,7 +139,7 @@ public:
       method_value,
       pattern,
       detail::body_mode::bytes,
-      detail::effective_max_body_bytes(options, policy.max_size),
+      options.max_body_bytes(),
       detail::wrap_bytes_handler(std::forward<Handler>(handler)));
   }
 
@@ -158,7 +154,7 @@ public:
       method_value,
       pattern,
       detail::body_mode::text,
-      detail::effective_max_body_bytes(options, policy.max_size),
+      options.max_body_bytes(),
       detail::wrap_text_handler(std::forward<Handler>(handler)));
   }
 
@@ -173,7 +169,7 @@ public:
       method_value,
       pattern,
       detail::body_mode::stream,
-      detail::effective_max_body_bytes(options, policy.max_size),
+      options.max_body_bytes(),
       detail::wrap_stream_handler(std::forward<Handler>(handler)));
   }
 

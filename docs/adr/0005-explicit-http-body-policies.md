@@ -21,13 +21,22 @@ HTTP routes declare their request body policy explicitly:
 
 ```cpp
 srv.get("/health", uvp::http::body::none{}, handler);
-srv.post("/echo", uvp::http::body::bytes{.max_size = 64 * 1024}, handler);
-srv.post("/message", uvp::http::body::text{.max_size = 64 * 1024}, handler);
+srv.post(
+  "/echo",
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::bytes{},
+  handler);
+srv.post(
+  "/message",
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::text{},
+  handler);
 srv.post("/upload", uvp::http::body::stream{}, handler);
 ```
 
 The body policy is part of the route contract. It controls dispatch timing,
-buffering, streaming, rejection, and the handler body argument.
+buffering, streaming, rejection, and the handler body argument. Operational
+route limits belong to `route_options`.
 
 Short overloads may infer simple policies from unambiguous handler signatures,
 but typed or expensive policies such as JSON and multipart must be declared
@@ -35,7 +44,7 @@ explicitly.
 
 ## Consequences
 
-- Body ownership and resource limits are visible before the handler runs.
+- Body ownership and route limits are visible before the handler runs.
 - The server can reject unsupported content types or oversized bodies before
   application code accidentally starts consuming them.
 - Multipart and future typed decoders fit the same route model instead of

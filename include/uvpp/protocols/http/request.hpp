@@ -26,17 +26,11 @@ namespace body {
 
 struct none {};
 
-struct bytes {
-  std::size_t max_size = 0;
-};
+struct bytes {};
 
-struct text {
-  std::size_t max_size = 0;
-};
+struct text {};
 
-struct stream {
-  std::size_t max_size = 0;
-};
+struct stream {};
 
 } // namespace body
 

@@ -107,7 +107,7 @@ UVP_TEST_CASE("http router stores route options body limits") {
   router.post(
     "/upload",
     uvp::http::route_options{}.max_body_bytes(32),
-    uvp::http::body::stream{.max_size = 16},
+    uvp::http::body::stream{},
     [](uvp::http::request&, uvp::http::response&, uvp::http::request_body_stream&) {});
 
   auto upload_match = router.match(uvp::http::method::post, "/upload");

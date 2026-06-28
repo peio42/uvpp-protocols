@@ -298,10 +298,10 @@ small endpoints.
 
 Status: implemented for `max_body_bytes`. `route_options` can be passed before
 an explicit body policy on `router`, `server`, `route_group`, and
-`route_resource`. When both `route_options::max_body_bytes(...)` and a body
-policy `max_size` are provided, the route option is the effective route limit.
-When no route-level body limit is set, the existing body policy `max_size` and
-then `server_options::max_body_bytes()` fallback behavior remain unchanged.
+`route_resource`. Body policies describe how a request body is consumed;
+`route_options::max_body_bytes(...)` is the route-level body limit. When no
+route-level body limit is set, `server_options::max_body_bytes()` remains the
+fallback.
 
 Per-route timeout options are intentionally deferred until
 [HTTP timeout enforcement](http-timeout-enforcement.md) implements the global

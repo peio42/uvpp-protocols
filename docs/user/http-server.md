@@ -69,8 +69,16 @@ Routes declare how the request body should be handled:
 
 ```cpp
 srv.get("/health", uvp::http::body::none{}, handler);
-srv.post("/echo", uvp::http::body::bytes{.max_size = 64 * 1024}, handler);
-srv.post("/message", uvp::http::body::text{.max_size = 64 * 1024}, handler);
+srv.post(
+  "/echo",
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::bytes{},
+  handler);
+srv.post(
+  "/message",
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::text{},
+  handler);
 srv.post("/events", uvp::http::body::stream{}, handler);
 ```
 
@@ -95,8 +103,9 @@ srv.post("/upload", [](uvp::http::request&, uvp::http::response&, uvp::http::req
 
 Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
 `body::stream{}` respectively.
-Use the explicit policy form when route limits or future typed policies such as
-JSON or multipart matter at the declaration site.
+Use `route_options` for route-level limits, and use the explicit policy form
+when future typed policies such as JSON or multipart matter at the declaration
+site.
 
 Route-level options can carry operational body settings next to the route
 declaration:
@@ -109,8 +118,8 @@ srv.post(
   upload_file);
 ```
 
-`route_options::max_body_bytes(...)` overrides the body policy `max_size` for
-that route. If neither is set, the server falls back to
+Use `route_options::max_body_bytes(...)` when a route needs its own request
+body limit. Otherwise the server falls back to
 `server_options::max_body_bytes()`.
 
 ## Method Handling
@@ -277,7 +286,8 @@ Use `body::bytes{}` when the handler needs the complete request body:
 
 ```cpp
 srv.post("/echo",
-  uvp::http::body::bytes{.max_size = 64 * 1024},
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::bytes{},
   [](uvp::http::request&, uvp::http::response& res, std::span<const std::byte> body) {
     res.bytes(body);
   });
@@ -293,7 +303,8 @@ data:
 
 ```cpp
 srv.post("/message",
-  uvp::http::body::text{.max_size = 64 * 1024},
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::text{},
   [](uvp::http::request&, uvp::http::response& res, std::string_view body) {
     res.text(body);
   });
