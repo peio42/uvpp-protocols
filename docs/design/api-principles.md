@@ -17,6 +17,56 @@ Keep protocol terminology when it is already familiar: `request`, `response`,
 `header`, `route`, `upgrade`, `frame`, `handshake`, `status`, `method`,
 `listen`, and `close`.
 
+## Member Storage and Accessors
+
+Use a trailing underscore for non-static data members of public types and for
+private implementation types that own behavior or invariants:
+
+```cpp
+class response {
+public:
+  [[nodiscard]] unsigned int status_code() const noexcept;
+
+private:
+  std::shared_ptr<detail::response_state> state_;
+};
+```
+
+The underscore marks storage, not protocol vocabulary. Public APIs should keep
+the canonical protocol name without a prefix or suffix:
+
+```cpp
+request.path();
+response.status(201);
+options.max_body_bytes(1024 * 1024);
+```
+
+Use setters/getters at public API boundaries and where a type protects an
+invariant. For options, fluent setters keep the canonical name and the storage
+field remains private with a trailing underscore. If public reads are useful,
+expose a const accessor with the same canonical name rather than a `get_`
+prefix:
+
+```cpp
+struct server_options {
+  server_options& max_header_bytes(std::size_t value) &;
+  [[nodiscard]] std::size_t max_header_bytes() const noexcept;
+
+private:
+  std::size_t max_header_bytes_ = 16 * 1024;
+};
+```
+
+Do not add getters and setters merely to route private implementation code
+through accessors. Inside a private implementation type, direct field access is
+fine when the caller is part of the same invariant boundary.
+
+Plain aggregate-style helper structs may use unsuffixed fields only when they
+are simple records with no meaningful behavior, such as parser events,
+snapshots, or small return objects. Once a private struct grows lifecycle
+methods, callbacks, queues, timers, or protocol state, prefer member suffixes
+there as well.
+
 ## Construction
 
 Protocol owners should be constructed from an explicit uvpp loop or stream:

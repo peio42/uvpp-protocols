@@ -146,6 +146,7 @@ private:
       {},
     });
     if (!self.current_.headers.get("upgrade").empty() || self.current_.method == http::method::connect) {
+      // llhttp uses callback return value 2 to pause with HPE_PAUSED_UPGRADE.
       return 2;
     }
     return HPE_OK;

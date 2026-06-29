@@ -17,6 +17,7 @@ references, not stable design truth.
 - [Route-level hooks](route-level-hooks.md)
 - [Route options body mode](route-options-body-mode.md)
 - [Route options parameter constraints](route-options-parameter-constraints.md)
+- [Member naming normalization](member-naming-normalization.md)
 - [HTTP/2 support](http2-support.md)
 - [HTTP/3 and QUIC support](http3-quic-support.md)
 - [Shared URL module](shared-url-module.md)

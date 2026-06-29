@@ -152,6 +152,14 @@ Les deux structs jouent un rôle symétrique (état interne d'une session) et
 appliquent des conventions opposées. La cohérence devrait s'appliquer à
 l'ensemble du projet.
 
+**Décision : règle documentée, migration planifiée.** Les règles de stockage,
+suffixe `_` et accès public sont maintenant décrites dans
+[`api-principles.md`](../design/api-principles.md). La remise à plat du code
+est suivie dans
+[`member-naming-normalization.md`](../proposals/member-naming-normalization.md)
+afin de traiter ce changement comme une passe mécanique dédiée plutôt qu'un
+refactoring opportuniste.
+
 ---
 
 ## 8. Variable locale `on_write` qui occulte la méthode `on_write`
@@ -279,6 +287,10 @@ signale upgrade ». Elle n'est pas définie comme constante nommée dans les
 headers publics de llhttp. Un commentaire explicatif s'impose au minimum :
 `return 2; // HPE_PAUSED_UPGRADE: signal llhttp to pause for upgrade`.
 
+**Statut : résolu.** Le `return 2` porte maintenant un commentaire local qui
+explique le contrat llhttp : cette valeur met le parser en pause avec
+`HPE_PAUSED_UPGRADE`.
+
 ---
 
 ## 13. Pattern de file d'écriture dupliqué
@@ -384,8 +396,8 @@ lisibilité.
 | 🟢 Décision | `server.cpp`, `websocket/session.cpp` | Files d'écriture séparées, abstraction différée |
 | ✅ Résolu | `server.cpp`, `headers.hpp` | `header_name_equals` compare sans allocation |
 | ✅ Résolu | `server.cpp` | `reason_phrase_for` délègue à `reason_phrase` |
-| 🟡 Lisibilité | `http1_state_machine.cpp` | Nombre magique `return 2` sans commentaire |
-| 🟡 Cohérence | multiple | Convention d'underscore member incohérente |
+| ✅ Résolu | `http1_state_machine.cpp` | `return 2` documente le signal `HPE_PAUSED_UPGRADE` |
+| 🟢 Cadré | multiple | Convention d'underscore member documentée, migration proposée |
 | 🟡 Cohérence | `websocket/session.cpp` | Variable locale `on_write` occulte la méthode |
 | 🟡 Cohérence | `server_options.cpp` | `max_body_bytes` sans validation contrairement aux autres |
 | 🟡 Mémoire | `http1_state_machine.hpp` | `http1_event` porte toujours deux champs dont un vide |
