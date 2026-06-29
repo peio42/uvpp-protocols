@@ -1,5 +1,5 @@
 # Audit API — uvpp-protocols
-_(Temporary working file - sorry for the French)_
+_(Archived completed audit - sorry for the French)_
 
 Cet audit examine l'API publique du projet telle qu'elle existe au milestone 3.
 Il se place dans la perspective d'une reconstruction sans contrainte de
@@ -269,10 +269,10 @@ invalides sous forme littérale.
 
 ---
 
-## 12. Pas de middleware ni de groupes de routes
+## 12. Middleware et groupes de routes
 
-L'API ne propose pas de concept de middleware (`srv.use(handler)`) ni de
-groupes de routes préfixées (`srv.group("/api/v1", ...)`). Chaque route doit
+L'API ne proposait pas de concept de middleware (`srv.use(handler)`) ni de
+groupes de routes préfixées (`srv.group("/api/v1", ...)`). Chaque route devait
 répliquer indépendamment la logique transversale (authentification, CORS,
 logging, validation de contenu).
 
@@ -280,9 +280,22 @@ Ce point est moins critique pour une lib bas-niveau axée sur la composition
 explicite, mais constitue un point d'attention si l'objectif inclut
 l'ergonomie applicative.
 
-**Statut : partiellement traité.** Les groupes de routes préfixées et les
-middlewares restent une étape d'API à concevoir séparément. En revanche, les
-ajouts peu coûteux rendus naturels par le trie sont implémentés :
+**Statut : résolu.** Les groupes de routes préfixées sont implémentés via
+`server::group(...)`, `router::group(...)` et `route_group`, avec groupes
+imbriqués, `resource(...)`, `mount(...)`, fallbacks scopés et handlers
+d'exception scopés.
+
+Le middleware générique `srv.use(...)` n'a pas été ajouté tel quel. Le design
+retenu expose plutôt des hooks de phase explicites :
+
+- `on_request` pour agir après le matching et avant la gestion du body ;
+- `pre_handler` pour agir juste avant le handler final ;
+- `on_response` pour observer la réponse complétée, annulée ou en erreur.
+
+Ces hooks couvrent les usages transversaux ciblés sans introduire un pipeline
+middleware ambigu.
+
+Les ajouts rendus naturels par le trie sont également implémentés :
 
 - `405 Method Not Allowed` avec header `Allow` quand le chemin existe pour une
   autre méthode ;
@@ -340,4 +353,4 @@ un vrai `uvp::http::server`.
 | ✅ Résolu | `status` enum enrichi avec les codes courants |
 | ✅ Résolu | Méthodes HTTP explicites, sans macros de génération |
 | ✅ Résolu | Callbacks et config séparés côté WebSocket |
-| 🟡 Ergonomie | Route groups et middleware à concevoir |
+| ✅ Résolu | Route groups et hooks HTTP implémentés |

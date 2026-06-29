@@ -2,8 +2,8 @@
 _(Temporary working file - sorry for the French)_
 
 Cet audit couvre l'écriture, la cohérence, la lisibilité et la correction du
-code. Il est distinct de l'audit API (`api.md`) ; les deux se
-complètent.
+code. Il est distinct de l'audit API archivé (`../archive/api-audit.md`) ; les
+deux se complètent.
 
 ---
 
