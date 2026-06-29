@@ -273,6 +273,23 @@ UVP_TEST_CASE("http server falls back from HEAD to GET without sending a body") 
   UVP_CHECK(received.find("\r\n\r\nhello ada") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server serializes custom numeric status without a reason phrase") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.get("/custom-status", [](uvp::http::request&, uvp::http::response& res) {
+        res.status(299).text("custom\n");
+      });
+    },
+    "GET /custom-status HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "custom\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 299 \r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\ncustom\n") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server routes on decoded path segments") {
   std::vector<std::string> observed_segments;
 

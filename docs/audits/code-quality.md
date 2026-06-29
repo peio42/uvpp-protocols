@@ -223,6 +223,19 @@ La version de `server.cpp` enveloppe celle de `status.cpp` mais duplique
 tout le `switch`. Le code devrait juste caster l'entier en `status` et appeler
 `reason_phrase`, ou étendre `reason_phrase` pour accepter un entier.
 
+**Statut : résolu.** Le helper local ne duplique plus le `switch` et délègue
+directement à `reason_phrase(status)` :
+
+```cpp
+std::string_view reason_phrase_for(unsigned int status_code) noexcept {
+    return reason_phrase(static_cast<status>(status_code));
+}
+```
+
+Les codes numériques valides qui ne correspondent à aucun énumérateur nommé
+restent acceptés par `response::status(unsigned int)` et sérialisés avec une
+reason phrase vide.
+
 ---
 
 ## 11. `http1_event` transporte toujours les deux champs
@@ -370,7 +383,7 @@ lisibilité.
 | ✅ Résolu | `websocket/session.cpp` | `read_buffer` utilise un offset et un compactage amorti |
 | 🟢 Décision | `server.cpp`, `websocket/session.cpp` | Files d'écriture séparées, abstraction différée |
 | ✅ Résolu | `server.cpp`, `headers.hpp` | `header_name_equals` compare sans allocation |
-| 🟡 Lisibilité | `server.cpp` | `reason_phrase_for` duplique `reason_phrase` |
+| ✅ Résolu | `server.cpp` | `reason_phrase_for` délègue à `reason_phrase` |
 | 🟡 Lisibilité | `http1_state_machine.cpp` | Nombre magique `return 2` sans commentaire |
 | 🟡 Cohérence | multiple | Convention d'underscore member incohérente |
 | 🟡 Cohérence | `websocket/session.cpp` | Variable locale `on_write` occulte la méthode |
