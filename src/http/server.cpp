@@ -121,7 +121,7 @@ std::string reason_phrase_for(unsigned int status_code) {
 }
 
 bool header_name_equals(std::string_view name, std::string_view expected) noexcept {
-  return headers{}.set(name, "").contains(expected);
+  return headers::names_equal(name, expected);
 }
 
 std::string serialize_response_head(

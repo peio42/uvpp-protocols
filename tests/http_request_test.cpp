@@ -35,6 +35,8 @@ UVP_TEST_CASE("http headers are case insensitive") {
 
   UVP_CHECK(headers.contains("content-type"));
   UVP_CHECK_EQ(headers.get("CONTENT-TYPE"), "text/plain");
+  UVP_CHECK(uvp::http::headers::names_equal("Content-Length", "content-length"));
+  UVP_CHECK(!uvp::http::headers::names_equal("Content-Length", "content-type"));
 }
 
 UVP_TEST_CASE("http connection info preserves endpoint variants") {

@@ -191,6 +191,15 @@ une entrée, puis vérifie la présence. La raison est que `headers::names_equal
 est privé. Le correctif serait de rendre `names_equal` accessible (méthode
 statique publique ou fonction libre) pour éviter cette allocation.
 
+**Statut : résolu.** `headers::names_equal` est maintenant une méthode statique
+publique et `server.cpp` l'utilise directement :
+
+```cpp
+bool header_name_equals(std::string_view name, std::string_view expected) noexcept {
+    return headers::names_equal(name, expected);
+}
+```
+
 ---
 
 ## 10. `reason_phrase_for` duplique la logique de `reason_phrase`
@@ -360,7 +369,7 @@ lisibilité.
 | ✅ Résolu | `websocket/detail/handshake.cpp` | SHA-1 WebSocket délégué à OpenSSL EVP et testé |
 | ✅ Résolu | `websocket/session.cpp` | `read_buffer` utilise un offset et un compactage amorti |
 | 🟢 Décision | `server.cpp`, `websocket/session.cpp` | Files d'écriture séparées, abstraction différée |
-| 🟡 Lisibilité | `server.cpp` | `header_name_equals` alloue inutilement |
+| ✅ Résolu | `server.cpp`, `headers.hpp` | `header_name_equals` compare sans allocation |
 | 🟡 Lisibilité | `server.cpp` | `reason_phrase_for` duplique `reason_phrase` |
 | 🟡 Lisibilité | `http1_state_machine.cpp` | Nombre magique `return 2` sans commentaire |
 | 🟡 Cohérence | multiple | Convention d'underscore member incohérente |
