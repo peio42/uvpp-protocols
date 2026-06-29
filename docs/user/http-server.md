@@ -127,6 +127,9 @@ body limit. Otherwise the server falls back to
 body, such as an upload. Routes without an override use
 `server_options::body_timeout()`.
 
+Body limits must be greater than zero. Use `body::none{}` for routes that should
+not receive a request body; do not use `max_body_bytes(0)` for that case.
+
 `server_options::header_timeout(...)` applies while waiting for complete
 request headers. `server_options::idle_timeout(...)` applies while a
 keep-alive connection is open without an active request. Those two settings

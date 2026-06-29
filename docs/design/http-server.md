@@ -244,6 +244,12 @@ body limit. Otherwise the server falls back to
 `route_options::body_timeout(...)` when a route needs a body receive timeout
 different from `server_options::body_timeout()`.
 
+Configured body limits must be greater than zero. A route that does not accept a
+request body should use `body::none{}` instead of a zero byte limit. The current
+route-level implementation still uses an internal `0` value to mean "inherit the
+server default"; replacing that sentinel with an explicit unset state is tracked
+in [route body limit inheritance](../proposals/route-body-limit-inheritance.md).
+
 Convenience overloads infer the body policy from the handler signature when the
 mapping is unambiguous:
 
@@ -582,7 +588,8 @@ Currently enforced options:
 
 - `max_header_bytes`: maximum accepted request header bytes;
 - `max_body_bytes`: default request body limit when a route does not override
-  it with `route_options::max_body_bytes(...)`;
+  it with `route_options::max_body_bytes(...)`; values must be greater than
+  zero;
 - `header_timeout`: maximum time spent waiting for complete request headers;
 - `body_timeout`: default request body receive timeout when a route does not
   override it with `route_options::body_timeout(...)`;
@@ -621,4 +628,5 @@ Future HTTP work is tracked outside stable design:
 - [Static file helper](../proposals/static-file-helper.md)
 - [HTTP client](../proposals/http-client.md)
 - [HTTP TLS listener integration](../proposals/http-tls-listener-integration.md)
+- [Route body limit inheritance](../proposals/route-body-limit-inheritance.md)
 - [HTTP/2 support](../proposals/http2-support.md)

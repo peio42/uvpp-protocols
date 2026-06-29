@@ -16,6 +16,7 @@ references, not stable design truth.
 - [Fluent temporary route builders](fluent-temporary-route-builders.md)
 - [Route-level hooks](route-level-hooks.md)
 - [Route options body mode](route-options-body-mode.md)
+- [Route body limit inheritance](route-body-limit-inheritance.md)
 - [Route options parameter constraints](route-options-parameter-constraints.md)
 - [Member naming normalization](member-naming-normalization.md)
 - [HTTP/2 support](http2-support.md)

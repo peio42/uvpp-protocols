@@ -186,7 +186,7 @@ Option defaults should be safe for small services. Expensive or memory-heavy
 features should be opt-in.
 
 Fluent setters should validate values that are immediately invalid, such as a
-zero header limit when the protocol cannot operate with one. Cross-field
+zero header or body limit when the protocol cannot operate with one. Cross-field
 validation should happen when the options are consumed by a protocol owner:
 
 ```cpp

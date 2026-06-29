@@ -29,6 +29,10 @@ UVP_TEST_CASE("http options expose configured limits") {
   UVP_CHECK(!options.server_header());
 }
 
+UVP_TEST_CASE("http server options reject zero body limit") {
+  UVP_CHECK_THROWS(uvp::http::server_options{}.max_body_bytes(0), std::invalid_argument);
+}
+
 UVP_TEST_CASE("http headers are case insensitive") {
   uvp::http::headers headers;
   headers.set("Content-Type", "text/plain");

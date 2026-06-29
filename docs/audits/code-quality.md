@@ -369,13 +369,13 @@ notable pour tout client qui parse le JSON de façon stricte.
 
 ---
 
-## 16. `require_positive` non appelé pour `max_body_bytes`
+## 16. ✅ Résolu — `require_positive` non appelé pour `max_body_bytes`
 
 **Fichier :** `src/http/server_options.cpp`
 
-Les setters `max_header_bytes`, `max_pending_write_bytes`,
-`max_pending_responses_per_connection` valident leur argument via
-`require_positive`. Le setter `max_body_bytes` ne le fait pas :
+Avant correction, les setters `max_header_bytes`, `max_pending_write_bytes`,
+`max_pending_responses_per_connection` validaient leur argument via
+`require_positive`, mais le setter `max_body_bytes` ne le faisait pas :
 
 ```cpp
 server_options& server_options::max_body_bytes(std::size_t value) & {
@@ -384,9 +384,16 @@ server_options& server_options::max_body_bytes(std::size_t value) & {
 }
 ```
 
-Aucun commentaire n'explique si c'est intentionnel (0 signifiant « pas de
-body ») ou un oubli. La divergence avec les autres setters nuit à la
+Aucun commentaire n'expliquait si c'était intentionnel (0 signifiant « pas de
+body ») ou un oubli. La divergence avec les autres setters nuisait à la
 lisibilité.
+
+Résolution : `server_options::max_body_bytes(...)` et
+`server_options::validate()` refusent maintenant `0`. La documentation précise
+que `body::none{}` modélise une route sans body. La sentinelle `0` encore
+utilisée en interne par `route_options` pour exprimer l'héritage de la limite
+serveur est suivie dans la proposal
+[`route-body-limit-inheritance`](../proposals/route-body-limit-inheritance.md).
 
 ---
 
@@ -403,6 +410,6 @@ lisibilité.
 | ✅ Résolu | `http1_state_machine.cpp` | `return 2` documente le signal `HPE_PAUSED_UPGRADE` |
 | 🟢 Cadré | multiple | Convention d'underscore member documentée, migration proposée |
 | ✅ Résolu | `websocket/session.cpp` | Variable locale `on_write` renommée `write_callback` |
-| 🟡 Cohérence | `server_options.cpp` | `max_body_bytes` sans validation contrairement aux autres |
+| ✅ Résolu | `server_options.cpp` | `max_body_bytes` valide les limites serveur strictement positives |
 | 🟡 Mémoire | `http1_state_machine.hpp` | `http1_event` porte toujours deux champs dont un vide |
 | 🟢 Style | exemples | `(void)req` vs paramètre non nommé incohérent |
