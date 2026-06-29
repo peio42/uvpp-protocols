@@ -15,7 +15,7 @@ int main() {
   });
 
   srv.upgrade("/echo", [](uvp::http::upgrade_request& req) {
-    uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
+    uvp::websocket::accept_detached(req)
       .on_text([](uvp::websocket::session& ws, std::string_view message) {
         ws.text(message);
       })
@@ -24,7 +24,7 @@ int main() {
       })
       .on_error([](uvp::websocket::session&, std::error_code error) {
         std::cerr << "websocket error: " << error.message() << '\n';
-      }));
+      });
   });
 
   srv.listen("127.0.0.1", 8084);

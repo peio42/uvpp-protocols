@@ -63,11 +63,12 @@ Advanced users may opt out through explicit options. Once opted out, they own
 the corresponding protocol obligation:
 
 ```cpp
-uvp::websocket::accept_options{}
-  .auto_pong(false)
-  .on_ping([](uvp::websocket::session& ws, std::span<const std::byte> payload) {
-    ws.pong(payload);
-  });
+auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
+  .auto_pong(false));
+
+ws.on_ping([](uvp::websocket::session& ws, std::span<const std::byte> payload) {
+  ws.pong(payload);
+});
 ```
 
 Hooks in the automatic mode are observational by default. If a callback both

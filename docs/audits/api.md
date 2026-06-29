@@ -88,7 +88,7 @@ utilisant le même type de valeur et les conversions `from_json` / `to_json`.
 `examples/websocket_echo.cpp`
 
 ```cpp
-uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}.on_text(...));
+uvp::websocket::accept_detached(req).on_text(...);
 ```
 
 **Résolu :** `uvp::websocket::accept()` retourne maintenant une session
@@ -189,11 +189,11 @@ et aux générateurs de documentation.
 
 ---
 
-## 9. Callbacks dans `accept_options` WebSocket
+## 9. Callbacks dans `accept_options` WebSocket séparés
 
 **Fichier :** `include/uvpp/protocols/websocket/session.hpp`
 
-`accept_options` mélange deux natures distinctes :
+`accept_options` mélangeait deux natures distinctes :
 
 - **Configuration :** `max_message_bytes`, `max_pending_write_bytes`,
   `subprotocol`, `auto_pong`
@@ -205,9 +205,13 @@ ensemble de callbacks qui capturent de l'état applicatif. Les regrouper dans
 un même type rend l'objet difficile à séparer (stocker les options sans les
 handlers, changer un handler sans recréer les options, etc.).
 
-**En zéro-compatibilité :** un type `session_config` pour les scalaires, et
-un type `session_handler` (ou des setters sur la session elle-même) pour les
-callbacks.
+**Statut : résolu.** `accept_options` ne contient plus que la configuration
+d'acceptation (`max_message_bytes`, `max_pending_write_bytes`, `subprotocol`,
+`auto_pong`). Les callbacks (`on_text`, `on_binary`, `on_ping`, `on_pong`,
+`on_close`, `on_error`) sont maintenant des setters sur
+`uvp::websocket::session`. La forme détachée retourne un handle non
+propriétaire pour permettre `accept_detached(req).on_text(...)` tout en gardant
+la durée de vie interne explicite.
 
 ---
 
@@ -335,5 +339,5 @@ un vrai `uvp::http::server`.
 | ✅ Résolu | Router par trie de segments |
 | ✅ Résolu | `status` enum enrichi avec les codes courants |
 | ✅ Résolu | Méthodes HTTP explicites, sans macros de génération |
-| 🟡 Conception | Callbacks et config mélangés dans `accept_options` |
+| ✅ Résolu | Callbacks et config séparés côté WebSocket |
 | 🟡 Ergonomie | Route groups et middleware à concevoir |

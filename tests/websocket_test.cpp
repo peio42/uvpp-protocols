@@ -42,14 +42,24 @@ UVP_TEST_CASE("websocket accept value matches RFC 6455 example") {
   UVP_CHECK_EQ(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
 }
 
-UVP_TEST_CASE("websocket accept options expose configured callbacks and limits") {
+UVP_TEST_CASE("websocket accept options expose configured limits") {
   UVP_CHECK(uvp::websocket::accept_options{}.auto_pong());
 
   auto websocket_options = uvp::websocket::accept_options{}
     .max_message_bytes(64 * 1024)
     .max_pending_write_bytes(64 * 1024)
     .subprotocol("chat")
-    .auto_pong(false)
+    .auto_pong(false);
+
+  UVP_CHECK_EQ(websocket_options.max_message_bytes(), 64 * 1024U);
+  UVP_CHECK_EQ(websocket_options.max_pending_write_bytes(), 64 * 1024U);
+  UVP_CHECK_EQ(websocket_options.subprotocol(), "chat");
+  UVP_CHECK(!websocket_options.auto_pong());
+}
+
+UVP_TEST_CASE("websocket session exposes callback setters") {
+  auto websocket = uvp::websocket::session{};
+  websocket
     .on_text([](uvp::websocket::session& ws, std::string_view message) {
       ws.text(message);
     })
@@ -61,16 +71,6 @@ UVP_TEST_CASE("websocket accept options expose configured callbacks and limits")
     })
     .on_close([](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {})
     .on_error([](uvp::websocket::session&, std::error_code) {});
-
-  UVP_CHECK_EQ(websocket_options.max_message_bytes(), 64 * 1024U);
-  UVP_CHECK_EQ(websocket_options.max_pending_write_bytes(), 64 * 1024U);
-  UVP_CHECK_EQ(websocket_options.subprotocol(), "chat");
-  UVP_CHECK(!websocket_options.auto_pong());
-  UVP_CHECK(static_cast<bool>(websocket_options.on_text()));
-  UVP_CHECK(static_cast<bool>(websocket_options.on_binary()));
-  UVP_CHECK(static_cast<bool>(websocket_options.on_ping()));
-  UVP_CHECK(static_cast<bool>(websocket_options.on_close()));
-  UVP_CHECK(static_cast<bool>(websocket_options.on_error()));
 }
 
 UVP_TEST_CASE("websocket parses coalesced client frames without compacting per frame") {
@@ -91,9 +91,8 @@ UVP_TEST_CASE("websocket parses coalesced client frames without compacting per f
   server.upgrade("/ws/:name", [&](uvp::http::upgrade_request& req) {
     observed_name = req.params().get("name");
     observed_segments.assign(req.decoded_path_segments().begin(), req.decoded_path_segments().end());
-    (void)uvp::websocket::accept_detached(
-      req,
-      uvp::websocket::accept_options{}.on_text([&](uvp::websocket::session&, std::string_view message) {
+    (void)uvp::websocket::accept_detached(req)
+      .on_text([&](uvp::websocket::session&, std::string_view message) {
         messages.emplace_back(message);
         if (messages.size() == 2U) {
           timeout.close();
@@ -104,7 +103,7 @@ UVP_TEST_CASE("websocket parses coalesced client frames without compacting per f
           }
           server.close();
         }
-      }));
+      });
   });
 
   auto tcp_listener = uvp::io::tcp_listener{loop};

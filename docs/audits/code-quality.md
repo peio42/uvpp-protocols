@@ -42,8 +42,8 @@ Ce point a été corrigé avec `accept_options::auto_pong(bool)`.
 ```cpp
 void dispatch_ping(std::span<const std::byte> payload) {
     auto handle = session{shared_from_this()};
-    if (options.on_ping()) {
-        options.on_ping()(handle, payload);  // user callback
+    if (on_ping) {
+        on_ping(handle, payload);  // user callback
     }
     if (options.auto_pong()) {
         send_frame(opcode::pong, payload);

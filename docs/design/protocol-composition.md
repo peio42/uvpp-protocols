@@ -97,10 +97,10 @@ module:
 
 ```cpp
 srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
-  uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
+  uvp::websocket::accept_detached(req)
     .on_text([](uvp::websocket::session& ws, std::string_view msg) {
       ws.text(msg);
-    }));
+    });
 });
 ```
 
