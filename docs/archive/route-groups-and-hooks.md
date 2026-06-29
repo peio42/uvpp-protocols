@@ -311,10 +311,9 @@ an explicit body policy on `router`, `server`, `route_group`, and
 route-level body limit is set, `server_options::max_body_bytes()` remains the
 fallback.
 
-Per-route timeout options are intentionally deferred until
-[HTTP timeout enforcement](../proposals/http-timeout-enforcement.md) implements the global
-timeout lifecycle. That proposal should use `route_options` as the route-level
-extension point when body/request timeout overrides are added.
+Per-route body timeout options are handled by
+[HTTP timeout enforcement](http-timeout-enforcement.md), using `route_options`
+as the route-level extension point.
 
 ### 5. Lightweight Validation
 

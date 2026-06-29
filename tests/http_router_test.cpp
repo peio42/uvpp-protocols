@@ -1,5 +1,6 @@
 #include "test.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <span>
 #include <stdexcept>
@@ -154,7 +155,9 @@ UVP_TEST_CASE("http router stores route options body limits") {
 
   router.post(
     "/upload",
-    uvp::http::route_options{}.max_body_bytes(32),
+    uvp::http::route_options{}
+      .max_body_bytes(32)
+      .body_timeout(std::chrono::milliseconds{250}),
     uvp::http::body::stream{},
     [](uvp::http::request&, uvp::http::response&, uvp::http::request_body_stream&) {});
 
@@ -162,11 +165,14 @@ UVP_TEST_CASE("http router stores route options body limits") {
   UVP_REQUIRE(upload_match);
   UVP_CHECK(upload_match.body == uvp::http::detail::body_mode::stream);
   UVP_CHECK_EQ(upload_match.max_body_bytes, 32U);
+  UVP_CHECK(upload_match.body_timeout == std::chrono::milliseconds{250});
 
   router.group("/api")
     .resource("/items")
     .post(
-      uvp::http::route_options{}.max_body_bytes(24),
+      uvp::http::route_options{}
+        .max_body_bytes(24)
+        .body_timeout(std::chrono::milliseconds{500}),
       uvp::http::body::text{},
       [](uvp::http::request&, uvp::http::response&, std::string_view) {});
 
@@ -174,6 +180,7 @@ UVP_TEST_CASE("http router stores route options body limits") {
   UVP_REQUIRE(resource_match);
   UVP_CHECK(resource_match.body == uvp::http::detail::body_mode::text);
   UVP_CHECK_EQ(resource_match.max_body_bytes, 24U);
+  UVP_CHECK(resource_match.body_timeout == std::chrono::milliseconds{500});
 }
 
 UVP_TEST_CASE("http router exposes explicit convenience methods for every common verb") {

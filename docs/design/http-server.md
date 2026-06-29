@@ -231,14 +231,18 @@ Route-level options extend the body contract with operational metadata:
 ```cpp
 srv.post(
   "/upload",
-  route_options{}.max_body_bytes(20 * 1024 * 1024),
+  route_options{}
+    .max_body_bytes(20 * 1024 * 1024)
+    .body_timeout(std::chrono::seconds{30}),
   body::stream{},
   handler);
 ```
 
 Use `route_options::max_body_bytes(...)` when a route needs its own request
 body limit. Otherwise the server falls back to
-`server_options::max_body_bytes()`.
+`server_options::max_body_bytes()`. Use
+`route_options::body_timeout(...)` when a route needs a body receive timeout
+different from `server_options::body_timeout()`.
 
 Convenience overloads infer the body policy from the handler signature when the
 mapping is unambiguous:
@@ -579,6 +583,11 @@ Currently enforced options:
 - `max_header_bytes`: maximum accepted request header bytes;
 - `max_body_bytes`: default request body limit when a route does not override
   it with `route_options::max_body_bytes(...)`;
+- `header_timeout`: maximum time spent waiting for complete request headers;
+- `body_timeout`: default request body receive timeout when a route does not
+  override it with `route_options::body_timeout(...)`;
+- `idle_timeout`: maximum keep-alive idle time after a response has been fully
+  written;
 - `max_pending_write_bytes`: maximum queued serialized response bytes per
   connection before write backpressure is reported;
 - `max_pending_responses_per_connection`: maximum open, deferred, streaming, or
@@ -588,15 +597,6 @@ Currently enforced options:
 - `server_header`: whether the default `Server` response header is added;
 - `route_path_matching`: whether routing uses percent-decoded segments or raw
   path segments.
-
-Public but not yet enforced timeout options:
-
-- `header_timeout`;
-- `body_timeout`;
-- `idle_timeout`.
-
-Timeout enforcement is tracked in
-[HTTP timeout enforcement](../proposals/http-timeout-enforcement.md).
 
 User-facing configuration should normally use the builder style defined in the
 API principles:
@@ -615,7 +615,6 @@ uvp::http::server srv(
 
 Future HTTP work is tracked outside stable design:
 
-- [HTTP timeout enforcement](../proposals/http-timeout-enforcement.md)
 - [Typed JSON body policy](../proposals/typed-json-body-policy.md)
 - [Multipart handling](../proposals/multipart-handling.md)
 - [Server-Sent Events support](../proposals/sse-support.md)

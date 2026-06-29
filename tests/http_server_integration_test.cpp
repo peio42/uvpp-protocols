@@ -4,6 +4,7 @@
 #include <chrono>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -18,9 +19,13 @@ uv::buffer_view integration_alloc(uv::tcp&, std::size_t) {
 }
 
 template<class Configure>
-std::string perform_http_request(Configure configure, std::string request, std::string_view response_marker) {
+std::string perform_http_request(
+  uvp::http::server_options options,
+  Configure configure,
+  std::string request,
+  std::string_view response_marker) {
   uv::loop loop;
-  uvp::http::server server(loop);
+  uvp::http::server server(loop, options);
   configure(server);
 
   auto tcp_listener = uvp::io::tcp_listener{loop};
@@ -73,6 +78,80 @@ std::string perform_http_request(Configure configure, std::string request, std::
           });
           server.close();
         }
+      });
+    });
+  });
+
+  loop.run();
+
+  UVP_CHECK(!timed_out);
+  UVP_CHECK(client_closed);
+  loop.close();
+  return received;
+}
+
+template<class Configure>
+std::string perform_http_request(Configure configure, std::string request, std::string_view response_marker) {
+  return perform_http_request(uvp::http::server_options{}, std::move(configure), std::move(request), response_marker);
+}
+
+template<class Configure>
+std::string perform_http_request_until_close(
+  uvp::http::server_options options,
+  Configure configure,
+  std::string request) {
+  uv::loop loop;
+  uvp::http::server server(loop, options);
+  configure(server);
+
+  auto tcp_listener = uvp::io::tcp_listener{loop};
+  tcp_listener.bind("127.0.0.1", 0);
+  auto stream_listener = uvp::io::stream_listener{std::move(tcp_listener)};
+  const auto endpoint = stream_listener.local_endpoint();
+  const auto port = std::get<uvp::io::tcp_endpoint>(endpoint).port;
+  server.listen(std::move(stream_listener));
+
+  uv::tcp client(loop);
+  uv::connect_request connect_request;
+  uv::write_request write_request;
+  uv::timer timeout(loop);
+
+  std::string received;
+  bool client_closed = false;
+  bool timed_out = false;
+
+  timeout.start(std::chrono::seconds{2}, [&](uv::timer& timer) {
+    timed_out = true;
+    server.close();
+    if (!client_closed) {
+      client.close([&](uv::tcp&) {
+        client_closed = true;
+      });
+    }
+    timer.close();
+  });
+
+  client.connect(connect_request, uv::ipv4{"127.0.0.1", static_cast<int>(port)}, [&](uv::connect_request&, uv::result status) {
+    UVP_REQUIRE(status);
+
+    auto output = uv::buffer_view{request.data(), request.size()};
+    client.write(write_request, output, [&](uv::write_request&, uv::result write_status) {
+      UVP_REQUIRE(write_status);
+
+      client.read_start(integration_alloc, [&](uv::tcp& stream, uv::read_result read) {
+        if (read.eof()) {
+          stream.read_stop();
+          timeout.close();
+          stream.close([&](uv::tcp&) {
+            client_closed = true;
+          });
+          server.close();
+          return;
+        }
+        UVP_REQUIRE(read.ok());
+
+        const auto bytes = read.bytes();
+        received.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
       });
     });
   });
@@ -443,6 +522,54 @@ UVP_TEST_CASE("http server applies route options body limits") {
   UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
   UVP_CHECK(received.find("\r\n\r\nPayload Too Large\n") != std::string::npos);
   UVP_CHECK(received.find("accepted\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server returns request timeout for incomplete headers") {
+  const auto received = perform_http_request_until_close(
+    uvp::http::server_options{}.header_timeout(std::chrono::milliseconds{20}),
+    [](uvp::http::server&) {},
+    "GET /slow HTTP/1.1\r\nHost");
+
+  UVP_CHECK(received.find("HTTP/1.1 408 Request Timeout\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nRequest Timeout\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server closes slow request bodies using route timeout") {
+  const auto received = perform_http_request_until_close(
+    uvp::http::server_options{}.body_timeout(std::chrono::seconds{1}),
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::route_options{}.body_timeout(std::chrono::milliseconds{20}),
+        uvp::http::body::text{},
+        [](uvp::http::request&, uvp::http::response& res, std::string_view) {
+          res.text("accepted\n");
+        });
+    },
+    "POST /upload HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 4\r\n"
+    "\r\n");
+
+  UVP_CHECK(received.find("accepted\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server closes idle keep-alive connections") {
+  const auto received = perform_http_request_until_close(
+    uvp::http::server_options{}.idle_timeout(std::chrono::milliseconds{20}),
+    [](uvp::http::server& server) {
+      server.get("/hello", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("hello\n");
+      });
+    },
+    "GET /hello HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "\r\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("connection: keep-alive\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nhello\n") != std::string::npos);
 }
 
 UVP_TEST_CASE("http server mounts an independently declared router") {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <exception>
 #include <functional>
@@ -8,6 +9,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <stdexcept>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
@@ -67,8 +69,24 @@ struct route_options {
 
   [[nodiscard]] std::size_t max_body_bytes() const noexcept { return max_body_bytes_; }
 
+  route_options& body_timeout(std::chrono::milliseconds value) & {
+    if (value.count() <= 0) {
+      throw std::invalid_argument("body_timeout must be greater than zero");
+    }
+    body_timeout_ = value;
+    return *this;
+  }
+
+  route_options&& body_timeout(std::chrono::milliseconds value) && {
+    body_timeout(value);
+    return std::move(*this);
+  }
+
+  [[nodiscard]] std::chrono::milliseconds body_timeout() const noexcept { return body_timeout_; }
+
 private:
   std::size_t max_body_bytes_ = 0;
+  std::chrono::milliseconds body_timeout_{0};
 };
 
 namespace detail {
@@ -109,6 +127,7 @@ public:
     const handler_type* handler = nullptr;
     detail::body_mode body = detail::body_mode::none;
     std::size_t max_body_bytes = 0;
+    std::chrono::milliseconds body_timeout{0};
     std::string_view pattern;
     bool invalid_path = false;
     route_params params;
@@ -136,13 +155,13 @@ public:
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, route_options options, body::none policy, Handler&& handler) {
-    (void)options;
     (void)policy;
     return add_route(
       method_value,
       pattern,
       detail::body_mode::none,
       0,
+      options.body_timeout(),
       detail::wrap_none_handler(std::forward<Handler>(handler)));
   }
 
@@ -158,6 +177,7 @@ public:
       pattern,
       detail::body_mode::bytes,
       options.max_body_bytes(),
+      options.body_timeout(),
       detail::wrap_bytes_handler(std::forward<Handler>(handler)));
   }
 
@@ -173,6 +193,7 @@ public:
       pattern,
       detail::body_mode::text,
       options.max_body_bytes(),
+      options.body_timeout(),
       detail::wrap_text_handler(std::forward<Handler>(handler)));
   }
 
@@ -188,6 +209,7 @@ public:
       pattern,
       detail::body_mode::stream,
       options.max_body_bytes(),
+      options.body_timeout(),
       detail::wrap_stream_handler(std::forward<Handler>(handler)));
   }
 
@@ -346,6 +368,7 @@ private:
   struct route_target {
     detail::body_mode body;
     std::size_t max_body_bytes;
+    std::chrono::milliseconds body_timeout;
     handler_type handler;
     std::string pattern;
   };
@@ -374,6 +397,7 @@ private:
     std::string_view pattern,
     detail::body_mode body,
     std::size_t max_body_bytes,
+    std::chrono::milliseconds body_timeout,
     handler_type handler);
   router& add_on_request_hook(std::string_view prefix, hook_type hook);
   router& add_pre_handler_hook(std::string_view prefix, hook_type hook);

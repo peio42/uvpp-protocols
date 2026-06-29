@@ -7,16 +7,13 @@
 
 ## Current focus
 
-- Milestone 3: HTTP routing and application polish
-  - [HTTP timeout enforcement](proposals/http-timeout-enforcement.md)
-
-## Next
-
 - Milestone 4: HTTP payload and streaming helpers
   - [Typed JSON request bodies](proposals/typed-json-body-policy.md)
   - [Multipart handling](proposals/multipart-handling.md)
   - [Server-Sent Events helper](proposals/sse-support.md)
   - [Static file helper](proposals/static-file-helper.md)
+
+## Next
 
 - Milestone 5: TLS transport support
   - [TLS stream adapter](proposals/tls-support.md)

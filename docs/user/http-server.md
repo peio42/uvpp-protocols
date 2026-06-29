@@ -113,14 +113,24 @@ declaration:
 ```cpp
 srv.post(
   "/upload",
-  uvp::http::route_options{}.max_body_bytes(20 * 1024 * 1024),
+  uvp::http::route_options{}
+    .max_body_bytes(20 * 1024 * 1024)
+    .body_timeout(std::chrono::seconds{30}),
   uvp::http::body::stream{},
   upload_file);
 ```
 
 Use `route_options::max_body_bytes(...)` when a route needs its own request
 body limit. Otherwise the server falls back to
-`server_options::max_body_bytes()`.
+`server_options::max_body_bytes()`. Use
+`route_options::body_timeout(...)` when a route has a slower expected request
+body, such as an upload. Routes without an override use
+`server_options::body_timeout()`.
+
+`server_options::header_timeout(...)` applies while waiting for complete
+request headers. `server_options::idle_timeout(...)` applies while a
+keep-alive connection is open without an active request. Those two settings
+are connection-level policies, so they are not route options.
 
 ## Method Handling
 

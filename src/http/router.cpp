@@ -132,6 +132,7 @@ router& router::add_route(
   std::string_view pattern,
   detail::body_mode body,
   std::size_t max_body_bytes,
+  std::chrono::milliseconds body_timeout,
   handler_type handler) {
   auto method_index = static_cast<std::size_t>(method_value);
   if (method_index >= method_count_) {
@@ -204,7 +205,7 @@ router& router::add_route(
     throw std::invalid_argument("HTTP route already registered for this method and pattern");
   }
 
-  target = route_target{body, max_body_bytes, std::move(handler), std::move(normalized_pattern)};
+  target = route_target{body, max_body_bytes, body_timeout, std::move(handler), std::move(normalized_pattern)};
   ++route_count_;
   return *this;
 }
@@ -616,6 +617,7 @@ router::match_result router::match(method method_value, const detail::route_path
     &target->handler,
     target->body,
     target->max_body_bytes,
+    target->body_timeout,
     target->pattern,
     false,
     std::move(params),

@@ -1,6 +1,7 @@
 #include <uvpp/protocols/http/server.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <deque>
@@ -15,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include <uvpp/handles/timer.hpp>
 #include <uvpp/protocols/http/request.hpp>
 #include <uvpp/protocols/http/response.hpp>
 #include <uvpp/protocols/io/tcp_listener.hpp>
@@ -239,13 +241,19 @@ struct server::impl {
   class session : public std::enable_shared_from_this<session> {
   public:
     session(impl& owner, uvp::io::byte_stream stream)
-        : owner_(owner), stream_(std::move(stream)) {}
+        : owner_(owner),
+          stream_(std::move(stream)),
+          timeout_timer_(owner.owner.loop()) {}
 
     void start() {
+      start_timeout(timeout_phase::header, owner_.owner.options_.header_timeout());
       start_read();
     }
 
     void start_read() {
+      if (closed_) {
+        return;
+      }
       auto self = weak_from_this();
       stream_.read_start([self](uvp::io::read_result result) {
         if (auto session = self.lock()) {
@@ -259,6 +267,7 @@ struct server::impl {
         return;
       }
       closed_ = true;
+      close_timeout_timer();
       cancel_pending_responses();
       try {
         stream_.read_stop();
@@ -273,8 +282,15 @@ struct server::impl {
     }
 
   private:
+    enum class timeout_phase {
+      none,
+      header,
+      body,
+      idle,
+    };
+
     void on_read(uvp::io::read_result result) {
-      if (closed_) {
+      if (closed_ || timeout_closing_) {
         return;
       }
 
@@ -290,6 +306,13 @@ struct server::impl {
         return;
       }
 
+      if (timeout_phase_ == timeout_phase::idle) {
+        stop_timeout();
+        start_timeout(timeout_phase::header, owner_.owner.options_.header_timeout());
+      } else if (timeout_phase_ == timeout_phase::none && !active_request_) {
+        start_timeout(timeout_phase::header, owner_.owner.options_.header_timeout());
+      }
+
       const auto bytes = result.bytes();
       auto parse_result = parser_.parse(std::string_view{
         reinterpret_cast<const char*>(bytes.data()),
@@ -297,6 +320,7 @@ struct server::impl {
       });
 
       if (parse_result.code == detail::http1_parse_result::status::error) {
+        stop_timeout();
         send_error(status::bad_request, false);
         return;
       }
@@ -332,6 +356,10 @@ struct server::impl {
 
     std::size_t route_body_limit(const router::match_result& route) const noexcept {
       return route.max_body_bytes == 0 ? owner_.owner.options_.max_body_bytes() : route.max_body_bytes;
+    }
+
+    std::chrono::milliseconds route_body_timeout(const router::match_result& route) const noexcept {
+      return route.body_timeout.count() == 0 ? owner_.owner.options_.body_timeout() : route.body_timeout;
     }
 
     connection_info connection() const {
@@ -386,6 +414,7 @@ struct server::impl {
     }
 
     void handle_headers(const detail::http1_message& message) {
+      stop_timeout();
       const auto [path, query] = split_path_query(message.target);
       const auto parsed_path = detail::parse_route_path(path);
       if (!parsed_path.valid) {
@@ -424,22 +453,28 @@ struct server::impl {
           send_error(status::bad_request, false);
           return;
         }
+        start_body_timeout_if_needed();
         if (active_request_->route) {
           const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive && !request_has_body(message);
-          run_on_request_hooks(*active_request_, !keep_alive, active_request_->req.method() == method::head);
+          if (!run_on_request_hooks(*active_request_, !keep_alive, active_request_->req.method() == method::head)) {
+            stop_timeout();
+          }
         }
         return;
       }
 
       const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive;
+      start_body_timeout_if_needed();
       active_request_->slot = create_response_slot(!keep_alive, active_request_->req.method() == method::head);
       if (!active_request_->slot) {
         active_request_->rejected = true;
+        stop_timeout();
         return;
       }
       configure_response_observation(*active_request_->slot, active_request_->req, active_request_->route.on_response_hooks);
 
       if (!run_on_request_hooks(*active_request_, !keep_alive, active_request_->req.method() == method::head)) {
+        stop_timeout();
         return;
       }
 
@@ -489,10 +524,12 @@ struct server::impl {
         return;
       }
 
+      refresh_body_timeout();
       auto& active = *active_request_;
       active.received_body_bytes += chunk.size();
       if (active.route && active.received_body_bytes > route_body_limit(active.route)) {
         active.rejected = true;
+        stop_timeout();
         if (active.route.body == detail::body_mode::stream) {
           active.body_stream.emit_error(std::make_error_code(std::errc::message_size));
         }
@@ -515,6 +552,7 @@ struct server::impl {
       }
 
       auto active = std::move(active_request_);
+      stop_timeout();
       if (active->rejected) {
         return;
       }
@@ -629,6 +667,7 @@ struct server::impl {
     }
 
     void pause_request_body() {
+      stop_timeout();
       body_processing_paused_ = true;
       try {
         stream_.read_stop();
@@ -641,6 +680,7 @@ struct server::impl {
         return;
       }
       body_processing_paused_ = false;
+      start_body_timeout_if_needed();
       process_parser_events();
       if (!closed_ && !body_processing_paused_) {
         start_read();
@@ -842,6 +882,7 @@ struct server::impl {
     }
 
     void accept_upgrade(std::string response, upgrade_request::accept_callback on_accept) {
+      close_timeout_timer();
       try {
         stream_.read_stop();
       } catch (...) {
@@ -1103,6 +1144,7 @@ struct server::impl {
       }
 
       flush_next();
+      maybe_start_idle_timeout();
     }
 
     void notify_drains() {
@@ -1119,6 +1161,116 @@ struct server::impl {
       }
     }
 
+    void start_timeout(timeout_phase phase, std::chrono::milliseconds duration) {
+      if (closed_ || timeout_timer_closed_) {
+        return;
+      }
+      stop_timeout();
+      timeout_phase_ = phase;
+      timeout_timer_active_ = true;
+      auto self = weak_from_this();
+      timeout_timer_.start(duration, [self, phase](uv::timer&) {
+        if (auto session = self.lock()) {
+          session->on_timeout(phase);
+        }
+      });
+    }
+
+    void stop_timeout() noexcept {
+      if (timeout_timer_closed_) {
+        timeout_phase_ = timeout_phase::none;
+        timeout_timer_active_ = false;
+        return;
+      }
+      if (timeout_timer_active_) {
+        try {
+          timeout_timer_.stop();
+        } catch (...) {
+        }
+      }
+      timeout_phase_ = timeout_phase::none;
+      timeout_timer_active_ = false;
+    }
+
+    void close_timeout_timer() noexcept {
+      if (timeout_timer_closed_) {
+        return;
+      }
+      stop_timeout();
+      timeout_timer_closed_ = true;
+      if (auto self = weak_from_this().lock()) {
+        timeout_timer_.close([self](uv::timer&) {});
+      } else {
+        timeout_timer_.close();
+      }
+    }
+
+    void on_timeout(timeout_phase phase) {
+      if (closed_ || timeout_timer_closed_ || phase != timeout_phase_) {
+        return;
+      }
+      timeout_timer_active_ = false;
+      timeout_phase_ = timeout_phase::none;
+
+      switch (phase) {
+      case timeout_phase::header:
+        timeout_closing_ = true;
+        try {
+          stream_.read_stop();
+        } catch (...) {
+        }
+        send_error(status::request_timeout, false);
+        break;
+      case timeout_phase::body: {
+        const auto error = std::make_error_code(std::errc::timed_out);
+        timeout_closing_ = true;
+        if (active_request_ && active_request_->route && active_request_->route.body == detail::body_mode::stream) {
+          active_request_->body_stream.emit_error(error);
+        }
+        notify_stream_errors(error);
+        cancel_pending_responses(error);
+        close();
+        break;
+      }
+      case timeout_phase::idle:
+        close();
+        break;
+      case timeout_phase::none:
+        break;
+      }
+    }
+
+    void start_body_timeout_if_needed() {
+      if (!active_request_ || active_request_->rejected || body_processing_paused_ || !request_has_body(active_request_->headers)) {
+        return;
+      }
+      if (active_request_->route) {
+        start_timeout(timeout_phase::body, route_body_timeout(active_request_->route));
+      } else {
+        start_timeout(timeout_phase::body, owner_.owner.options_.body_timeout());
+      }
+    }
+
+    void refresh_body_timeout() {
+      if (timeout_phase_ != timeout_phase::body) {
+        return;
+      }
+      start_body_timeout_if_needed();
+    }
+
+    void maybe_start_idle_timeout() {
+      if (closed_ || timeout_closing_ || timeout_phase_ != timeout_phase::none || !owner_.owner.options_.keep_alive()) {
+        return;
+      }
+      if (active_request_ || body_processing_paused_ || writing_ || !writes_.empty() || !responses_.empty()) {
+        return;
+      }
+      if (pending_response_writes_ != 0 || handled_events_ < parser_.events().size()) {
+        return;
+      }
+      start_timeout(timeout_phase::idle, owner_.owner.options_.idle_timeout());
+    }
+
     void notify_stream_errors(std::error_code error) {
       for (auto& slot : responses_) {
         if (slot->streaming && !slot->completed) {
@@ -1129,6 +1281,7 @@ struct server::impl {
 
     impl& owner_;
     uvp::io::byte_stream stream_;
+    uv::timer timeout_timer_;
     detail::http1_state_machine parser_;
     std::size_t handled_events_ = 0;
     std::size_t pending_response_writes_ = 0;
@@ -1140,6 +1293,10 @@ struct server::impl {
     bool dispatching_response_ = false;
     bool body_processing_paused_ = false;
     bool closed_ = false;
+    bool timeout_closing_ = false;
+    bool timeout_timer_active_ = false;
+    bool timeout_timer_closed_ = false;
+    timeout_phase timeout_phase_ = timeout_phase::none;
   };
 
   void add_listener(uvp::io::stream_listener listener) {
