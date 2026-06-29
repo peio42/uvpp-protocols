@@ -8,7 +8,6 @@
 ## Current focus
 
 - Milestone 3: HTTP routing and application polish
-  - [Route path decoding](proposals/route-path-decoding.md)
   - [HTTP timeout enforcement](proposals/http-timeout-enforcement.md)
 
 ## Next

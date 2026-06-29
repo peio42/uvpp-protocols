@@ -42,6 +42,51 @@ UVP_TEST_CASE("http router captures parameters and wildcards") {
   UVP_CHECK_EQ(empty_wildcard_match.params.get("path"), "");
 }
 
+UVP_TEST_CASE("http router matches percent decoded path segments by default") {
+  uvp::http::router router;
+  router.get("/users/:id", [](uvp::http::request&, uvp::http::response&) {});
+  router.get("/files/:name", [](uvp::http::request&, uvp::http::response&) {});
+  router.get("/static/*path", [](uvp::http::request&, uvp::http::response&) {});
+  router.get("/literal/a+b", [](uvp::http::request&, uvp::http::response&) {});
+
+  auto user_match = router.match(uvp::http::method::get, "/users/alice%20smith");
+  UVP_REQUIRE(user_match);
+  UVP_CHECK_EQ(user_match.params.get("id"), "alice smith");
+
+  auto file_match = router.match(uvp::http::method::get, "/files/a%2Fb");
+  UVP_REQUIRE(file_match);
+  UVP_CHECK_EQ(file_match.params.get("name"), "a/b");
+  UVP_CHECK(!router.match(uvp::http::method::get, "/files/a/b"));
+
+  auto wildcard_match = router.match(uvp::http::method::get, "/static/a%2Fb/c%20d");
+  UVP_REQUIRE(wildcard_match);
+  UVP_CHECK_EQ(wildcard_match.params.get("path"), "a/b/c d");
+
+  UVP_CHECK(router.match(uvp::http::method::get, "/literal/a+b"));
+  UVP_CHECK(!router.match(uvp::http::method::get, "/literal/a%20b"));
+
+  auto invalid_match = router.match(uvp::http::method::get, "/users/%zz");
+  UVP_CHECK(!invalid_match);
+  UVP_CHECK(invalid_match.invalid_path);
+}
+
+UVP_TEST_CASE("http router can match raw path segments while still validating encoding") {
+  uvp::http::router router{uvp::http::route_path_matching::raw};
+  router.get("/users/:id", [](uvp::http::request&, uvp::http::response&) {});
+  router.get("/literal/alice%20smith", [](uvp::http::request&, uvp::http::response&) {});
+
+  auto param_match = router.match(uvp::http::method::get, "/users/alice%20smith");
+  UVP_REQUIRE(param_match);
+  UVP_CHECK_EQ(param_match.params.get("id"), "alice%20smith");
+
+  UVP_CHECK(router.match(uvp::http::method::get, "/literal/alice%20smith"));
+  UVP_CHECK(!router.match(uvp::http::method::get, "/literal/alice smith"));
+
+  auto invalid_match = router.match(uvp::http::method::get, "/users/%");
+  UVP_CHECK(!invalid_match);
+  UVP_CHECK(invalid_match.invalid_path);
+}
+
 UVP_TEST_CASE("http router prefers static routes over parameters and wildcards") {
   uvp::http::router router;
   router.get("/priority/:id", [](uvp::http::request&, uvp::http::response&) {});
@@ -77,6 +122,7 @@ UVP_TEST_CASE("http router rejects ambiguous or invalid patterns") {
   UVP_CHECK_THROWS(router.get("/assets/*", [](uvp::http::request&, uvp::http::response&) {}), std::invalid_argument);
   UVP_CHECK_THROWS(router.get("/assets/*path/thumb", [](uvp::http::request&, uvp::http::response&) {}), std::invalid_argument);
   UVP_CHECK_THROWS(router.get("/empty/:", [](uvp::http::request&, uvp::http::response&) {}), std::invalid_argument);
+  UVP_CHECK_THROWS(router.get("/bad/%zz", [](uvp::http::request&, uvp::http::response&) {}), std::invalid_argument);
 }
 
 UVP_TEST_CASE("http router infers body policies from handler signatures") {
@@ -151,12 +197,16 @@ UVP_TEST_CASE("http router reports methods allowed for a matched path") {
   router.get("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
   router.post("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
   router.delete_("/items/:id", [](uvp::http::request&, uvp::http::response&) {});
+  router.patch("/names/:name", [](uvp::http::request&, uvp::http::response&) {});
 
   const auto allowed = router.allowed_methods("/items/42");
   UVP_REQUIRE(allowed.size() == 3U);
   UVP_CHECK(allowed[0] == uvp::http::method::get);
   UVP_CHECK(allowed[1] == uvp::http::method::post);
   UVP_CHECK(allowed[2] == uvp::http::method::delete_);
+  const auto decoded_allowed = router.allowed_methods("/names/alice%20smith");
+  UVP_REQUIRE(decoded_allowed.size() == 1U);
+  UVP_CHECK(decoded_allowed[0] == uvp::http::method::patch);
   UVP_CHECK(router.allowed_methods("/missing").empty());
 }
 
@@ -233,6 +283,13 @@ UVP_TEST_CASE("http router mounts another router under a prefix") {
   UVP_CHECK(post_match.body == uvp::http::detail::body_mode::text);
   UVP_CHECK_EQ(post_match.pattern, "/api/v1/items/:id");
   UVP_CHECK(router.find(uvp::http::method::get, "/items/42") == nullptr);
+}
+
+UVP_TEST_CASE("http router rejects mounting routers with different path matching modes") {
+  uvp::http::router decoded;
+  uvp::http::router raw{uvp::http::route_path_matching::raw};
+
+  UVP_CHECK_THROWS(decoded.mount("/raw", std::move(raw)), std::invalid_argument);
 }
 
 UVP_TEST_CASE("http router groups mount routers relative to their prefix") {

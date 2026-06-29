@@ -26,38 +26,6 @@ constexpr std::array routed_methods{
   method::patch,
 };
 
-bool next_route_segment(std::string_view& input, std::string_view& segment) noexcept {
-  if (input.empty()) {
-    return false;
-  }
-
-  if (input.front() == '/') {
-    input.remove_prefix(1);
-  }
-
-  if (input.empty()) {
-    return false;
-  }
-
-  const auto offset = input.find('/');
-  if (offset == std::string_view::npos) {
-    segment = input;
-    input = {};
-    return true;
-  }
-
-  segment = input.substr(0, offset);
-  input.remove_prefix(offset + 1);
-  return true;
-}
-
-std::string capture_wildcard(std::string_view rest) {
-  if (!rest.empty() && rest.front() == '/') {
-    rest.remove_prefix(1);
-  }
-  return std::string(rest);
-}
-
 std::string normalize_group_prefix(std::string_view prefix) {
   if (prefix.empty() || prefix == "/") {
     return {};
@@ -98,49 +66,63 @@ std::string join_route_pattern(std::string_view prefix, std::string_view pattern
   return joined;
 }
 
+std::string_view route_segment_name(std::string_view segment) noexcept {
+  return segment.substr(1);
+}
+
+std::span<const std::string> selected_segments(
+  const detail::route_path& path,
+  route_path_matching matching) noexcept {
+  return path.segments(matching);
+}
+
 } // namespace
 
-bool route_pattern_matches(std::string_view pattern, std::string_view path, route_params& params) {
-  if (pattern == path) {
-    return true;
+bool route_pattern_matches(
+  std::string_view pattern,
+  const route_path& path,
+  route_path_matching matching,
+  route_params& params) {
+  const auto parsed_pattern = parse_route_path(pattern);
+  if (!parsed_pattern.valid || !path.valid) {
+    return false;
   }
 
-  std::string_view pattern_rest = pattern;
-  std::string_view path_rest = path;
+  const auto pattern_segments = selected_segments(parsed_pattern, matching);
+  const auto path_segments = selected_segments(path, matching);
+  const auto& raw_pattern_segments = parsed_pattern.raw_segments;
 
-  std::string_view pattern_segment;
-  while (next_route_segment(pattern_rest, pattern_segment)) {
-    if (!pattern_segment.empty() && pattern_segment.front() == '*') {
-      const auto name = pattern_segment.substr(1);
+  std::size_t path_index = 0;
+  for (std::size_t pattern_index = 0; pattern_index < raw_pattern_segments.size(); ++pattern_index) {
+    const auto& raw_pattern_segment = raw_pattern_segments[pattern_index];
+    if (!raw_pattern_segment.empty() && raw_pattern_segment.front() == '*') {
+      const auto name = route_segment_name(raw_pattern_segment);
       if (!name.empty()) {
-        if (!path_rest.empty() && path_rest.front() == '/') {
-          path_rest.remove_prefix(1);
-        }
-        params.set(name, path_rest);
+        params.set(name, join_route_segments(path_segments, path_index));
       }
-      return pattern_rest.empty();
+      return pattern_index + 1 == raw_pattern_segments.size();
     }
 
-    std::string_view path_segment;
-    if (!next_route_segment(path_rest, path_segment)) {
+    if (path_index >= path_segments.size()) {
       return false;
     }
 
-    if (!pattern_segment.empty() && pattern_segment.front() == ':') {
-      const auto name = pattern_segment.substr(1);
+    if (!raw_pattern_segment.empty() && raw_pattern_segment.front() == ':') {
+      const auto name = route_segment_name(raw_pattern_segment);
       if (!name.empty()) {
-        params.set(name, path_segment);
+        params.set(name, path_segments[path_index]);
       }
+      ++path_index;
       continue;
     }
 
-    if (pattern_segment != path_segment) {
+    if (pattern_segments[pattern_index] != path_segments[path_index]) {
       return false;
     }
+    ++path_index;
   }
 
-  std::string_view trailing;
-  return !next_route_segment(path_rest, trailing);
+  return path_index == path_segments.size();
 }
 
 } // namespace detail
@@ -157,17 +139,21 @@ router& router::add_route(
   }
 
   auto normalized_pattern = detail::join_route_pattern({}, pattern);
+  auto parsed_pattern = detail::parse_route_path(normalized_pattern);
+  if (!parsed_pattern.valid) {
+    throw std::invalid_argument("HTTP route pattern contains invalid percent encoding");
+  }
+
+  const auto route_segments = detail::selected_segments(parsed_pattern, matching_);
   std::size_t node_index = 0;
-  std::string_view rest = normalized_pattern;
-  std::string_view segment;
-  while (detail::next_route_segment(rest, segment)) {
+  for (std::size_t segment_index = 0; segment_index < parsed_pattern.raw_segments.size(); ++segment_index) {
+    const auto& segment = parsed_pattern.raw_segments[segment_index];
     if (!segment.empty() && segment.front() == '*') {
-      const auto name = segment.substr(1);
+      const auto name = detail::route_segment_name(segment);
       if (name.empty()) {
         throw std::invalid_argument("HTTP route wildcard must be named");
       }
-      std::string_view trailing;
-      if (detail::next_route_segment(rest, trailing)) {
+      if (segment_index + 1 < parsed_pattern.raw_segments.size()) {
         throw std::invalid_argument("HTTP route wildcard must be the final segment");
       }
 
@@ -184,7 +170,7 @@ router& router::add_route(
     }
 
     if (!segment.empty() && segment.front() == ':') {
-      const auto name = segment.substr(1);
+      const auto name = detail::route_segment_name(segment);
       if (name.empty()) {
         throw std::invalid_argument("HTTP route parameter must be named");
       }
@@ -201,13 +187,14 @@ router& router::add_route(
       continue;
     }
 
-    const auto child = nodes_[node_index].static_children.find(std::string(segment));
+    const auto& route_segment = route_segments[segment_index];
+    const auto child = nodes_[node_index].static_children.find(route_segment);
     if (child != nodes_[node_index].static_children.end()) {
       node_index = child->second;
     } else {
       const auto child_index = nodes_.size();
       nodes_.push_back(trie_node{});
-      nodes_[node_index].static_children.emplace(std::string(segment), child_index);
+      nodes_[node_index].static_children.emplace(route_segment, child_index);
       node_index = child_index;
     }
   }
@@ -248,16 +235,21 @@ router& router::add_exception_handler(std::string_view prefix, exception_handler
 }
 
 std::size_t router::ensure_prefix_node(std::string_view prefix) {
+  const auto parsed_prefix = detail::parse_route_path(prefix);
+  if (!parsed_prefix.valid) {
+    throw std::invalid_argument("HTTP route group prefix contains invalid percent encoding");
+  }
+
+  const auto prefix_segments = detail::selected_segments(parsed_prefix, matching_);
   std::size_t node_index = 0;
-  std::string_view rest = prefix;
-  std::string_view segment;
-  while (detail::next_route_segment(rest, segment)) {
+  for (std::size_t segment_index = 0; segment_index < parsed_prefix.raw_segments.size(); ++segment_index) {
+    const auto& segment = parsed_prefix.raw_segments[segment_index];
     if (!segment.empty() && segment.front() == '*') {
       throw std::invalid_argument("HTTP route group wildcard prefixes are not supported");
     }
 
     if (!segment.empty() && segment.front() == ':') {
-      const auto name = segment.substr(1);
+      const auto name = detail::route_segment_name(segment);
       if (name.empty()) {
         throw std::invalid_argument("HTTP route group parameter must be named");
       }
@@ -274,13 +266,14 @@ std::size_t router::ensure_prefix_node(std::string_view prefix) {
       continue;
     }
 
-    const auto child = nodes_[node_index].static_children.find(std::string(segment));
+    const auto& prefix_segment = prefix_segments[segment_index];
+    const auto child = nodes_[node_index].static_children.find(prefix_segment);
     if (child != nodes_[node_index].static_children.end()) {
       node_index = child->second;
     } else {
       const auto child_index = nodes_.size();
       nodes_.push_back(trie_node{});
-      nodes_[node_index].static_children.emplace(std::string(segment), child_index);
+      nodes_[node_index].static_children.emplace(prefix_segment, child_index);
       node_index = child_index;
     }
   }
@@ -291,6 +284,9 @@ std::size_t router::ensure_prefix_node(std::string_view prefix) {
 router& router::mount(std::string_view prefix, router&& mounted) {
   if (&mounted == this) {
     throw std::invalid_argument("HTTP router cannot mount itself");
+  }
+  if (mounted.matching_ != matching_) {
+    throw std::invalid_argument("HTTP mounted router path matching mode conflicts with destination router");
   }
 
   const auto destination_index = ensure_prefix_node(prefix);
@@ -432,7 +428,8 @@ std::size_t router::move_mount_subtree(router& mounted, std::size_t source_index
 const router::route_target* router::match_node(
   std::size_t node_index,
   std::size_t method_index,
-  std::string_view path,
+  std::span<const std::string> segments,
+  std::size_t segment_index,
   route_params& params,
   std::vector<const hook_type*>& on_request_hooks,
   std::vector<const hook_type*>& pre_handler_hooks,
@@ -452,9 +449,7 @@ const router::route_target* router::match_node(
     exception_handler = &*node.exception_handler;
   }
 
-  std::string_view rest = path;
-  std::string_view segment;
-  if (!detail::next_route_segment(rest, segment)) {
+  if (segment_index >= segments.size()) {
     if (const auto& target = node.targets[method_index]) {
       return &*target;
     }
@@ -492,7 +487,10 @@ const router::route_target* router::match_node(
     return nullptr;
   }
 
-  if (auto child = node.static_children.find(std::string(segment)); child != node.static_children.end()) {
+  const auto& segment = segments[segment_index];
+  const auto next_segment_index = segment_index + 1;
+
+  if (auto child = node.static_children.find(segment); child != node.static_children.end()) {
     auto child_params = params;
     auto child_on_request_hooks = on_request_hooks;
     auto child_pre_handler_hooks = pre_handler_hooks;
@@ -501,7 +499,8 @@ const router::route_target* router::match_node(
     if (auto target = match_node(
           child->second,
           method_index,
-          rest,
+          segments,
+          next_segment_index,
           child_params,
           child_on_request_hooks,
           child_pre_handler_hooks,
@@ -526,7 +525,8 @@ const router::route_target* router::match_node(
     if (auto target = match_node(
           node.parameter_child->node,
           method_index,
-          rest,
+          segments,
+          next_segment_index,
           child_params,
           child_on_request_hooks,
           child_pre_handler_hooks,
@@ -544,7 +544,7 @@ const router::route_target* router::match_node(
   if (node.wildcard_child) {
     auto wildcard_params = params;
     if (!node.wildcard_child->name.empty()) {
-      wildcard_params.set(node.wildcard_child->name, detail::capture_wildcard(path));
+      wildcard_params.set(node.wildcard_child->name, detail::join_route_segments(segments, segment_index));
     }
     auto wildcard_on_request_hooks = on_request_hooks;
     auto wildcard_pre_handler_hooks = pre_handler_hooks;
@@ -577,11 +577,23 @@ const router::route_target* router::match_node(
 }
 
 router::match_result router::match(method method_value, std::string_view path) const {
+  const auto parsed_path = detail::parse_route_path(path);
+  return match(method_value, parsed_path);
+}
+
+router::match_result router::match(method method_value, const detail::route_path& path) const {
+  if (!path.valid) {
+    match_result result;
+    result.invalid_path = true;
+    return result;
+  }
+
   const auto method_index = static_cast<std::size_t>(method_value);
   if (method_index >= method_count_) {
     return {};
   }
 
+  const auto path_segments = detail::selected_segments(path, matching_);
   route_params params;
   std::vector<const hook_type*> on_request_hooks;
   std::vector<const hook_type*> pre_handler_hooks;
@@ -590,7 +602,8 @@ router::match_result router::match(method method_value, std::string_view path) c
   const auto* target = match_node(
     0,
     method_index,
-    path,
+    path_segments,
+    0,
     params,
     on_request_hooks,
     pre_handler_hooks,
@@ -604,6 +617,7 @@ router::match_result router::match(method method_value, std::string_view path) c
     target->body,
     target->max_body_bytes,
     target->pattern,
+    false,
     std::move(params),
     std::move(on_request_hooks),
     std::move(pre_handler_hooks),
@@ -613,8 +627,17 @@ router::match_result router::match(method method_value, std::string_view path) c
 }
 
 router::fallback_result router::fallback(std::string_view path) const {
+  const auto parsed_path = detail::parse_route_path(path);
+  if (!parsed_path.valid) {
+    return {};
+  }
+  return fallback(parsed_path);
+}
+
+router::fallback_result router::fallback(const detail::route_path& path) const {
   fallback_result result;
   route_params params;
+  const auto path_segments = detail::selected_segments(path, matching_);
 
   std::size_t node_index = 0;
   const auto remember_fallback = [&](const trie_node& node) {
@@ -629,11 +652,10 @@ router::fallback_result router::fallback(std::string_view path) const {
 
   remember_fallback(nodes_[node_index]);
 
-  std::string_view rest = path;
-  std::string_view segment;
-  while (detail::next_route_segment(rest, segment)) {
+  for (std::size_t segment_index = 0; segment_index < path_segments.size(); ++segment_index) {
+    const auto& segment = path_segments[segment_index];
     const auto& node = nodes_[node_index];
-    if (auto child = node.static_children.find(std::string(segment)); child != node.static_children.end()) {
+    if (auto child = node.static_children.find(segment); child != node.static_children.end()) {
       node_index = child->second;
       remember_fallback(nodes_[node_index]);
       continue;
@@ -648,7 +670,7 @@ router::fallback_result router::fallback(std::string_view path) const {
 
     if (node.wildcard_child) {
       if (!node.wildcard_child->name.empty()) {
-        params.set(node.wildcard_child->name, detail::capture_wildcard(segment.empty() ? rest : path));
+        params.set(node.wildcard_child->name, detail::join_route_segments(path_segments, segment_index));
       }
       node_index = node.wildcard_child->node;
       remember_fallback(nodes_[node_index]);
@@ -664,7 +686,16 @@ const router::handler_type* router::find(method method_value, std::string_view p
 }
 
 std::vector<method> router::allowed_methods(std::string_view path) const {
+  const auto parsed_path = detail::parse_route_path(path);
+  if (!parsed_path.valid) {
+    return {};
+  }
+  return allowed_methods(parsed_path);
+}
+
+std::vector<method> router::allowed_methods(const detail::route_path& path) const {
   std::vector<method> methods;
+  const auto path_segments = detail::selected_segments(path, matching_);
   for (auto method_value : detail::routed_methods) {
     auto params = route_params{};
     std::vector<const hook_type*> on_request_hooks;
@@ -676,7 +707,8 @@ std::vector<method> router::allowed_methods(std::string_view path) const {
         match_node(
           0,
           method_index,
-          path,
+          path_segments,
+          0,
           params,
           on_request_hooks,
           pre_handler_hooks,

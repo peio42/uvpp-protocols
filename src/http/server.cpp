@@ -314,6 +314,7 @@ struct server::impl {
     struct active_request_state {
       detail::http1_message headers;
       router::match_result route;
+      detail::route_path parsed_path;
       request req;
       request_body_stream body_stream;
       std::shared_ptr<response_slot> slot;
@@ -337,7 +338,7 @@ struct server::impl {
       return connection_info{stream_.local_endpoint(), stream_.remote_endpoint()};
     }
 
-    router::match_result match_request_route(method method_value, std::string_view path) const {
+    router::match_result match_request_route(method method_value, const detail::route_path& path) const {
       auto route_match = owner_.owner.router_.match(method_value, path);
       if (!route_match && method_value == method::head) {
         route_match = owner_.owner.router_.match(method::get, path);
@@ -386,6 +387,14 @@ struct server::impl {
 
     void handle_headers(const detail::http1_message& message) {
       const auto [path, query] = split_path_query(message.target);
+      const auto parsed_path = detail::parse_route_path(path);
+      if (!parsed_path.valid) {
+        active_request_ = std::make_unique<active_request_state>();
+        active_request_->headers = message;
+        active_request_->rejected = true;
+        send_error(status::bad_request, false);
+        return;
+      }
       auto req = request{
         message.method,
         message.target,
@@ -395,8 +404,9 @@ struct server::impl {
         {},
         route_params{},
         connection(),
+        parsed_path.decoded_segments,
       };
-      auto route_match = match_request_route(req.method(), req.path());
+      auto route_match = match_request_route(req.method(), parsed_path);
       if (route_match) {
         req.params_ = route_match.params;
         req.matched_pattern_ = route_match.pattern;
@@ -405,6 +415,7 @@ struct server::impl {
       active_request_ = std::make_unique<active_request_state>();
       active_request_->headers = message;
       active_request_->route = std::move(route_match);
+      active_request_->parsed_path = parsed_path;
       active_request_->req = std::move(req);
 
       if (!active_request_->route || active_request_->route.body != detail::body_mode::stream) {
@@ -513,12 +524,17 @@ struct server::impl {
         return;
       }
 
-      handle_buffered_message(message, std::move(active->route), std::move(active->slot));
+      handle_buffered_message(
+        message,
+        std::move(active->route),
+        active->parsed_path,
+        std::move(active->slot));
     }
 
     void handle_buffered_message(
       const detail::http1_message& message,
       router::match_result route_match,
+      const detail::route_path& parsed_path,
       std::shared_ptr<response_slot> existing_slot = {}) {
       const auto [path, query] = split_path_query(message.target);
       const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive;
@@ -547,15 +563,16 @@ struct server::impl {
         body_bytes(message.body),
         route_params{},
         connection(),
+        parsed_path.decoded_segments,
       };
 
       response& res = slot->res;
 
       if (!route_match) {
-        auto fallback = owner_.owner.router_.fallback(path);
+        auto fallback = owner_.owner.router_.fallback(parsed_path);
         req.params_ = std::move(fallback.params);
         try {
-          auto allowed_methods = owner_.owner.router_.allowed_methods(path);
+          auto allowed_methods = owner_.owner.router_.allowed_methods(parsed_path);
           if (!allowed_methods.empty()) {
             dispatch_automatic_method_response(req, res, std::move(allowed_methods));
           } else if (fallback.not_found_handler) {
@@ -601,7 +618,14 @@ struct server::impl {
     }
 
     void handle_message(const detail::http1_message& message) {
-      handle_buffered_message(message, match_request_route(message.method, split_path_query(message.target).first));
+      const auto [path, query] = split_path_query(message.target);
+      (void)query;
+      const auto parsed_path = detail::parse_route_path(path);
+      if (!parsed_path.valid) {
+        send_error(status::bad_request, false);
+        return;
+      }
+      handle_buffered_message(message, match_request_route(message.method, parsed_path), parsed_path);
     }
 
     void pause_request_body() {
@@ -769,11 +793,20 @@ struct server::impl {
       }
 
       const auto [path, query] = split_path_query(active_request_->headers.target);
+      const auto parsed_path = detail::parse_route_path(path);
+      if (!parsed_path.valid) {
+        send_error(status::bad_request, false);
+        return;
+      }
       route_params params;
       const server::upgrade_route* route = nullptr;
       for (const auto& candidate : owner_.owner.upgrade_routes_) {
         params = {};
-        if (detail::route_pattern_matches(candidate.pattern, path, params)) {
+        if (detail::route_pattern_matches(
+              candidate.pattern,
+              parsed_path,
+              owner_.owner.options_.route_path_matching(),
+              params)) {
           route = &candidate;
           break;
         }
@@ -798,6 +831,7 @@ struct server::impl {
             session->accept_upgrade(std::move(response), std::move(on_accept));
           }
         },
+        parsed_path.decoded_segments,
       };
 
       try {
@@ -1146,7 +1180,10 @@ server::server(uv::loop& loop)
     : server(loop, server_options{}) {}
 
 server::server(uv::loop& loop, server_options options)
-    : loop_(&loop), options_(options), impl_(std::make_unique<impl>(*this)) {
+    : loop_(&loop),
+      options_(options),
+      router_(options_.route_path_matching()),
+      impl_(std::make_unique<impl>(*this)) {
   options_.validate();
 }
 

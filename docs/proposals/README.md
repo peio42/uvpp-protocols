@@ -5,7 +5,6 @@ references, not stable design truth.
 
 ## Active Drafts
 
-- [Route path decoding](route-path-decoding.md)
 - [HTTP timeout enforcement](http-timeout-enforcement.md)
 - [Static file helper](static-file-helper.md)
 - [Typed JSON body policy](typed-json-body-policy.md)

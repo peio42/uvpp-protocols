@@ -2,8 +2,10 @@
 
 #include <chrono>
 #include <cstddef>
+#include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include <uvpp/uv.hpp>
 #include <uvpp/protocols/http.hpp>
@@ -16,12 +18,14 @@ UVP_TEST_CASE("http options expose configured limits") {
     .max_body_bytes(1024 * 1024)
     .max_pending_responses_per_connection(8)
     .idle_timeout(30s)
+    .route_path_matching(uvp::http::route_path_matching::raw)
     .server_header(false);
 
   UVP_CHECK_EQ(options.max_header_bytes(), 32 * 1024U);
   UVP_CHECK_EQ(options.max_body_bytes(), 1024 * 1024U);
   UVP_CHECK_EQ(options.max_pending_responses_per_connection(), 8U);
   UVP_CHECK(options.idle_timeout() == 30s);
+  UVP_CHECK(options.route_path_matching() == uvp::http::route_path_matching::raw);
   UVP_CHECK(!options.server_header());
 }
 
@@ -56,9 +60,13 @@ UVP_TEST_CASE("http request exposes raw and parsed query parameters") {
     uvp::http::headers{},
     {},
     uvp::http::route_params{},
-    connection);
+    connection,
+    std::vector<std::string>{"search"});
 
   UVP_CHECK_EQ(request.query(), "tag=cxx&tag=networking&q=&encoded=a+b%2Fc&bad=%zz");
+  const auto path_segments = request.decoded_path_segments();
+  UVP_REQUIRE(path_segments.size() == 1U);
+  UVP_CHECK_EQ(path_segments[0], "search");
   const auto first_tag = request.query("tag");
   UVP_REQUIRE(first_tag);
   UVP_CHECK_EQ(*first_tag, "cxx");

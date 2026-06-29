@@ -83,10 +83,14 @@ UVP_TEST_CASE("websocket parses coalesced client frames without compacting per f
 
   uvp::http::server server(loop);
   std::vector<std::string> messages;
+  std::string observed_name;
+  std::vector<std::string> observed_segments;
   bool client_closed = false;
   bool timed_out = false;
 
-  server.upgrade("/ws", [&](uvp::http::upgrade_request& req) {
+  server.upgrade("/ws/:name", [&](uvp::http::upgrade_request& req) {
+    observed_name = req.params().get("name");
+    observed_segments.assign(req.decoded_path_segments().begin(), req.decoded_path_segments().end());
     (void)uvp::websocket::accept_detached(
       req,
       uvp::websocket::accept_options{}.on_text([&](uvp::websocket::session&, std::string_view message) {
@@ -111,7 +115,7 @@ UVP_TEST_CASE("websocket parses coalesced client frames without compacting per f
   server.listen(std::move(stream_listener));
 
   std::string handshake =
-    "GET /ws HTTP/1.1\r\n"
+    "GET /ws/a%2Fb HTTP/1.1\r\n"
     "Host: example.test\r\n"
     "Upgrade: websocket\r\n"
     "Connection: Upgrade\r\n"
@@ -170,6 +174,10 @@ UVP_TEST_CASE("websocket parses coalesced client frames without compacting per f
   UVP_REQUIRE(messages.size() == 2U);
   UVP_CHECK_EQ(messages[0], "one");
   UVP_CHECK_EQ(messages[1], "two");
+  UVP_CHECK_EQ(observed_name, "a/b");
+  UVP_REQUIRE(observed_segments.size() == 2U);
+  UVP_CHECK_EQ(observed_segments[0], "ws");
+  UVP_CHECK_EQ(observed_segments[1], "a/b");
 
   loop.close();
 }

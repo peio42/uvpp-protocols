@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include <uvpp/protocols/http/detail/route_path.hpp>
 #include <uvpp/protocols/http/method.hpp>
 #include <uvpp/protocols/http/request.hpp>
 #include <uvpp/protocols/http/response.hpp>
@@ -109,6 +110,7 @@ public:
     detail::body_mode body = detail::body_mode::none;
     std::size_t max_body_bytes = 0;
     std::string_view pattern;
+    bool invalid_path = false;
     route_params params;
     std::vector<const hook_type*> on_request_hooks;
     std::vector<const hook_type*> pre_handler_hooks;
@@ -127,7 +129,10 @@ public:
     [[nodiscard]] bool has_not_found() const noexcept { return not_found_handler != nullptr; }
   };
 
-  router() = default;
+  explicit router(route_path_matching matching = route_path_matching::percent_decoded_segments) noexcept
+      : matching_(matching) {}
+
+  [[nodiscard]] http::route_path_matching path_matching() const noexcept { return matching_; }
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, route_options options, body::none policy, Handler&& handler) {
@@ -383,7 +388,8 @@ private:
   [[nodiscard]] const route_target* match_node(
     std::size_t node_index,
     std::size_t method_index,
-    std::string_view path,
+    std::span<const std::string> segments,
+    std::size_t segment_index,
     route_params& params,
     std::vector<const hook_type*>& on_request_hooks,
     std::vector<const hook_type*>& pre_handler_hooks,
@@ -392,7 +398,13 @@ private:
 
   std::vector<trie_node> nodes_{{}};
   std::size_t route_count_ = 0;
+  http::route_path_matching matching_ = http::route_path_matching::percent_decoded_segments;
 
+  [[nodiscard]] match_result match(method method_value, const detail::route_path& path) const;
+  [[nodiscard]] fallback_result fallback(const detail::route_path& path) const;
+  [[nodiscard]] std::vector<method> allowed_methods(const detail::route_path& path) const;
+
+  friend class server;
   friend class route_group;
   friend class route_resource;
 };

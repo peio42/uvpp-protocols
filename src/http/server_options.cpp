@@ -116,6 +116,16 @@ server_options&& server_options::server_header(bool value) && noexcept {
   return std::move(*this);
 }
 
+server_options& server_options::route_path_matching(http::route_path_matching value) & noexcept {
+  route_path_matching_ = value;
+  return *this;
+}
+
+server_options&& server_options::route_path_matching(http::route_path_matching value) && noexcept {
+  route_path_matching(value);
+  return std::move(*this);
+}
+
 void server_options::validate() const {
   require_positive(max_header_bytes_, "max_header_bytes must be greater than zero");
   require_positive(max_pending_write_bytes_, "max_pending_write_bytes must be greater than zero");

@@ -160,9 +160,21 @@ HTTP route registration validates patterns early:
 
 - named parameters must have a non-empty name;
 - wildcard tails must have a non-empty name and be the final segment;
+- percent escapes in route patterns must be valid;
 - duplicate method + pattern registrations are rejected;
 - conflicting parameter names at the same tree position, such as `/users/:id`
   and `/users/:name`, are rejected.
+
+Request paths are parsed into raw and percent-decoded segments once per
+request. The default matching mode uses decoded segments. Percent-decoding is
+segment-local: `%2F` decodes to `/` inside the segment value but never creates
+another segment. `+` remains a literal plus sign in path segments. Malformed
+percent escapes reject the request with `400 Bad Request`.
+
+Servers can opt into raw route matching with
+`server_options::route_path_matching(route_path_matching::raw)`. Raw mode keeps
+captured route parameters raw, while still validating percent escapes and
+keeping decoded segments available for application inspection.
 
 The trie also drives method-aware HTTP behavior:
 
@@ -270,6 +282,7 @@ public:
   std::string_view body() const noexcept;
 
   const route_params& params() const noexcept;
+  std::span<const std::string> decoded_path_segments() const noexcept;
   const connection_info& connection() const noexcept;
 };
 ```
@@ -572,7 +585,9 @@ Currently enforced options:
   completed-but-not-written response slots per connection;
 - `keep_alive`: whether the server keeps HTTP/1.1 connections open when the
   request allows it;
-- `server_header`: whether the default `Server` response header is added.
+- `server_header`: whether the default `Server` response header is added;
+- `route_path_matching`: whether routing uses percent-decoded segments or raw
+  path segments.
 
 Public but not yet enforced timeout options:
 

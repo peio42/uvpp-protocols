@@ -565,6 +565,45 @@ HTTP route registration rejects duplicate method/pattern pairs, unnamed
 parameters, wildcards that are not the final segment, and conflicting parameter
 names at the same tree position.
 
+## Route Path Decoding
+
+Routes match percent-decoded path segments by default. The server first splits
+the raw path on literal `/`, then decodes each segment independently:
+
+```cpp
+srv.get("/files/:name", [](uvp::http::request& req, uvp::http::response& res) {
+  auto name = req.params().get("name"); // "a/b"
+  res.text(std::string{name});
+});
+```
+
+`GET /files/a%2Fb` matches this route and captures `a/b` as one parameter
+value. The encoded slash does not create another route segment. `+` remains a
+literal plus sign in path segments; it is not decoded as a space. Invalid
+percent escapes such as `%`, `%0`, or `%zz` are rejected with
+`400 Bad Request`.
+
+Use `req.decoded_path_segments()` when application code needs the decoded path
+without losing segment boundaries:
+
+```cpp
+auto segments = req.decoded_path_segments(); // ["files", "a/b"]
+```
+
+Applications that need raw matching can opt in at server construction time:
+
+```cpp
+uvp::http::server srv(
+  loop,
+  uvp::http::server_options{}
+    .route_path_matching(uvp::http::route_path_matching::raw));
+```
+
+In raw mode, route matching and captured parameters use raw path segments, but
+the server still validates percent escapes and still exposes decoded segments
+for inspection. Routers mounted into a server or another router must use the
+same route path matching mode as their destination.
+
 ## Matched Route Pattern
 
 Use `req.matched_pattern()` when logging or exporting metrics for matched

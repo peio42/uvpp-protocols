@@ -13,13 +13,15 @@ upgrade_request::upgrade_request(
   route_params params,
   http::connection_info connection,
   std::span<const std::byte> extra_bytes,
-  accept_operation accept)
+  accept_operation accept,
+  std::vector<std::string> decoded_path_segments)
     : method_(method),
       target_(std::move(target)),
       path_(std::move(path)),
       query_(std::move(query)),
       headers_(std::move(headers)),
       params_(std::move(params)),
+      decoded_path_segments_(std::move(decoded_path_segments)),
       connection_(std::move(connection)),
       extra_bytes_(extra_bytes.begin(), extra_bytes.end()),
       accept_(std::move(accept)) {}

@@ -8,6 +8,7 @@
 #include <uvpp/protocols/http/method.hpp>
 #include <uvpp/protocols/http/request.hpp>
 #include <uvpp/protocols/http/response.hpp>
+#include <uvpp/protocols/http/route_path_matching.hpp>
 #include <uvpp/protocols/http/route_params.hpp>
 #include <uvpp/protocols/http/router.hpp>
 #include <uvpp/protocols/http/server.hpp>

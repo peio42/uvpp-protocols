@@ -194,6 +194,47 @@ UVP_TEST_CASE("http server falls back from HEAD to GET without sending a body") 
   UVP_CHECK(received.find("\r\n\r\nhello ada") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server routes on decoded path segments") {
+  std::vector<std::string> observed_segments;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/files/:name", [&](uvp::http::request& req, uvp::http::response& res) {
+        observed_segments.assign(req.decoded_path_segments().begin(), req.decoded_path_segments().end());
+        res.text(std::string{"file "} + std::string(req.params().get("name")) + "\n");
+      });
+    },
+    "GET /files/a%2Fb+c%20d HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "file a/b+c d\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nfile a/b+c d\n") != std::string::npos);
+  UVP_REQUIRE(observed_segments.size() == 2U);
+  UVP_CHECK_EQ(observed_segments[0], "files");
+  UVP_CHECK_EQ(observed_segments[1], "a/b+c d");
+}
+
+UVP_TEST_CASE("http server rejects invalid path percent encoding") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.get("/files/:name", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("should not run\n");
+      });
+    },
+    "GET /files/%zz HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "Bad Request\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nBad Request\n") != std::string::npos);
+  UVP_CHECK(received.find("should not run\n") == std::string::npos);
+}
+
 UVP_TEST_CASE("http server returns 405 and allow for a known path with another method") {
   const auto received = perform_http_request(
     [](uvp::http::server& server) {

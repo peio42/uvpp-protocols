@@ -32,7 +32,8 @@ public:
     route_params params,
     http::connection_info connection,
     std::span<const std::byte> extra_bytes,
-    accept_operation accept);
+    accept_operation accept,
+    std::vector<std::string> decoded_path_segments = {});
 
   [[nodiscard]] http::method method() const noexcept { return method_; }
   [[nodiscard]] std::string_view target() const noexcept { return target_; }
@@ -42,6 +43,9 @@ public:
   [[nodiscard]] const http::headers& headers() const noexcept { return headers_; }
   [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
   [[nodiscard]] const route_params& params() const noexcept { return params_; }
+  [[nodiscard]] std::span<const std::string> decoded_path_segments() const noexcept {
+    return decoded_path_segments_;
+  }
   [[nodiscard]] const http::connection_info& connection() const noexcept { return connection_; }
   [[nodiscard]] std::span<const std::byte> extra_bytes() const noexcept { return extra_bytes_; }
 
@@ -55,6 +59,7 @@ private:
   std::string query_;
   http::headers headers_;
   route_params params_;
+  std::vector<std::string> decoded_path_segments_;
   http::connection_info connection_;
   std::vector<std::byte> extra_bytes_;
   accept_operation accept_;

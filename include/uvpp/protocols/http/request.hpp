@@ -106,7 +106,8 @@ public:
     http::headers headers,
     std::vector<std::byte> body,
     route_params params,
-    http::connection_info connection);
+    http::connection_info connection,
+    std::vector<std::string> decoded_path_segments = {});
 
   [[nodiscard]] http::method method() const noexcept { return method_; }
   [[nodiscard]] std::string_view target() const noexcept { return target_; }
@@ -131,6 +132,7 @@ public:
   [[nodiscard]] std::string_view body() const noexcept;
 
   [[nodiscard]] const route_params& params() const noexcept { return params_; }
+  [[nodiscard]] std::span<const std::string> decoded_path_segments() const noexcept { return decoded_path_segments_; }
   [[nodiscard]] const http::connection_info& connection() const noexcept { return connection_; }
 
 private:
@@ -146,6 +148,7 @@ private:
   http::headers headers_;
   std::vector<std::byte> body_;
   route_params params_;
+  std::vector<std::string> decoded_path_segments_;
   http::connection_info connection_;
 };
 
