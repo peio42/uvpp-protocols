@@ -181,6 +181,10 @@ La variable locale `on_write` porte le même nom que la méthode courante.
 Bien que correct en l'état (les appels sont bien distincts), c'est une source
 de confusion lors de la lecture du code.
 
+**Statut : résolu.** La variable locale a été renommée `write_callback`, ce qui
+distingue clairement le callback applicatif déplacé depuis la file d'écriture
+de la méthode `on_write(...)`.
+
 ---
 
 ## 9. `header_name_equals` crée un objet `headers` temporaire
@@ -398,7 +402,7 @@ lisibilité.
 | ✅ Résolu | `server.cpp` | `reason_phrase_for` délègue à `reason_phrase` |
 | ✅ Résolu | `http1_state_machine.cpp` | `return 2` documente le signal `HPE_PAUSED_UPGRADE` |
 | 🟢 Cadré | multiple | Convention d'underscore member documentée, migration proposée |
-| 🟡 Cohérence | `websocket/session.cpp` | Variable locale `on_write` occulte la méthode |
+| ✅ Résolu | `websocket/session.cpp` | Variable locale `on_write` renommée `write_callback` |
 | 🟡 Cohérence | `server_options.cpp` | `max_body_bytes` sans validation contrairement aux autres |
 | 🟡 Mémoire | `http1_state_machine.hpp` | `http1_event` porte toujours deux champs dont un vide |
 | 🟢 Style | exemples | `(void)req` vs paramètre non nommé incohérent |

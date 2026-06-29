@@ -538,13 +538,13 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
 
     const bool close_after = !writes.empty() && writes.front().close_after;
-    auto on_write = !writes.empty() ? std::move(writes.front().on_write) : uvp::io::write_callback{};
+    auto write_callback = !writes.empty() ? std::move(writes.front().on_write) : uvp::io::write_callback{};
     if (!writes.empty()) {
       pending_write_bytes -= std::min(pending_write_bytes, writes.front().payload.size());
       writes.pop_front();
     }
-    if (on_write) {
-      on_write({});
+    if (write_callback) {
+      write_callback({});
     }
 
     if (close_after) {
