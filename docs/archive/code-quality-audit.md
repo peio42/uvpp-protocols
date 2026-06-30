@@ -2,8 +2,12 @@
 _(Temporary working file - sorry for the French)_
 
 Cet audit couvre l'écriture, la cohérence, la lisibilité et la correction du
-code. Il est distinct de l'audit API archivé (`../archive/api-audit.md`) ; les
-deux se complètent.
+code. Il est distinct de l'audit API archivé (`api-audit.md`) ; les deux se
+complètent.
+
+**Statut : clôturé.** Les correctifs nécessaires ont été appliqués, les sujets
+volontairement différés sont documentés comme décisions ou proposals, et les
+points purement stylistiques ont été normalisés ou classés.
 
 ---
 
@@ -120,7 +124,7 @@ de concaténer des chaînes.
 
 ---
 
-## 6. `as_bytes()` défini dans deux unités de traduction
+## 6. 🟢 Décision — `as_bytes()` défini dans deux unités de traduction
 
 **Fichiers :** `src/http/server.cpp`, `examples/log_streaming.cpp`
 
@@ -135,6 +139,11 @@ std::span<const std::byte> as_bytes(const std::string& value) noexcept { ... }
 La même conversion est redéfinie deux fois. En C++20, `std::as_bytes` couvre
 ce cas. À défaut, une version commune dans un header utilitaire éviterait
 cette duplication.
+
+Décision : ne pas introduire de header utilitaire commun pour ce micro-helper.
+Les deux fonctions ont une liaison interne et ne créent pas de risque ODR. Le
+helper local dans `server.cpp` garde lisible l'écriture du buffer possédé ; celui
+de l'exemple reste cosmétique et acceptable.
 
 ---
 
@@ -250,9 +259,12 @@ reason phrase vide.
 
 ---
 
-## 11. `http1_event` transporte toujours les deux champs
+## 11. ✅ Résolu — `http1_event` transporte toujours les deux champs
 
 **Fichier :** `src/http/detail/http1_state_machine.hpp`
+
+Avant correction, `http1_event` portait toujours un `http1_message` et une
+`std::string` de body :
 
 ```cpp
 struct http1_event {
@@ -262,13 +274,13 @@ struct http1_event {
 };
 ```
 
-Pour les événements de type `body`, `message` est un `http1_message`
-default-construit (avec un `headers` vide et des strings allouées). Pour les
-événements `headers` et `complete`, `body` est une string vide. Chaque
-événement porte systématiquement des données inutiles.
+Pour les événements de type `body`, `message` était un `http1_message`
+default-construit. Pour les événements `headers` et `complete`, `body` était une
+string vide. Chaque événement portait systématiquement des données inutiles.
 
-**Correctif :** `std::variant<http1_message, std::string>`, ou des types
-d'événements distincts.
+Résolution : `http1_event` utilise maintenant un `std::variant` de payloads
+typés (`headers_payload`, `body_payload`, `complete_payload`) et expose des
+helpers d'accès alignés avec le type de l'événement.
 
 ---
 
@@ -332,7 +344,7 @@ politiques HTTP/WebSocket aux sessions.
 
 ---
 
-## 14. `(void)req` vs paramètre non nommé dans les exemples
+## 14. ✅ Résolu — `(void)req` vs paramètre non nommé dans les exemples
 
 Les exemples n'adoptent pas de convention uniforme pour ignorer un paramètre
 inutilisé :
@@ -353,9 +365,14 @@ srv.get("/health", [](uvp::http::request&, uvp::http::response& res) {
 La forme sans nom est idiomatique en C++ moderne et plus concise. Le pattern
 `(void)param` est utilisé dans certains fichiers, pas dans d'autres.
 
+Résolution : les exemples et extraits de documentation concernés utilisent
+maintenant des paramètres non nommés lorsque le paramètre n'est pas utilisé.
+Les `(void)` restants ignorent soit une valeur de retour, soit des variables
+locales volontairement montrées dans un extrait explicatif.
+
 ---
 
-## 15. Sérialisation incorrecte du booléen dans `local_json_api.cpp`
+## 15. ✅ Résolu — Sérialisation incorrecte du booléen dans `local_json_api.cpp`
 
 **Fichier :** `examples/local_json_api.cpp`
 
@@ -366,6 +383,9 @@ out << "\",\"done\":\"" << (value.done ? "true" : "false") << "\"";
 Le champ `done` est sérialisé comme une chaîne JSON (`"true"` / `"false"`)
 plutôt que comme un booléen JSON (`true` / `false`). La différence est
 notable pour tout client qui parse le JSON de façon stricte.
+
+Résolution : l'exemple construit maintenant de vraies valeurs `uvp::json`.
+`done` est sérialisé depuis un booléen C++ et sort donc comme booléen JSON.
 
 ---
 
@@ -404,6 +424,8 @@ serveur est suivie dans la proposal
 | ✅ Résolu | `server.cpp` | `server` non déplaçable, plus de référence pendante |
 | ✅ Résolu | `websocket/detail/handshake.cpp` | SHA-1 WebSocket délégué à OpenSSL EVP et testé |
 | ✅ Résolu | `websocket/session.cpp` | `read_buffer` utilise un offset et un compactage amorti |
+| ✅ Résolu | exemples | JSON sérialisé par `uvp::json` |
+| 🟢 Décision | `server.cpp`, `examples/log_streaming.cpp` | Helpers `as_bytes` locaux tolérés |
 | 🟢 Décision | `server.cpp`, `websocket/session.cpp` | Files d'écriture séparées, abstraction différée |
 | ✅ Résolu | `server.cpp`, `headers.hpp` | `header_name_equals` compare sans allocation |
 | ✅ Résolu | `server.cpp` | `reason_phrase_for` délègue à `reason_phrase` |
@@ -411,5 +433,6 @@ serveur est suivie dans la proposal
 | 🟢 Cadré | multiple | Convention d'underscore member documentée, migration proposée |
 | ✅ Résolu | `websocket/session.cpp` | Variable locale `on_write` renommée `write_callback` |
 | ✅ Résolu | `server_options.cpp` | `max_body_bytes` valide les limites serveur strictement positives |
-| 🟡 Mémoire | `http1_state_machine.hpp` | `http1_event` porte toujours deux champs dont un vide |
-| 🟢 Style | exemples | `(void)req` vs paramètre non nommé incohérent |
+| ✅ Résolu | `http1_state_machine.hpp` | `http1_event` porte un payload typé via `std::variant` |
+| ✅ Résolu | exemples | Paramètres inutilisés non nommés |
+| ✅ Résolu | `examples/local_json_api.cpp` | `done` sérialisé comme booléen JSON |

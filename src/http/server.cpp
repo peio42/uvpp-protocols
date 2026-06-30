@@ -349,7 +349,7 @@ struct server::impl {
     void process_parser_events(bool stop_before_complete = false) {
       const auto& events = parser_.events();
       while (!closed_ && !body_processing_paused_ && handled_events_ < events.size()) {
-        if (stop_before_complete && events[handled_events_].event_type == detail::http1_event::type::complete) {
+        if (stop_before_complete && events[handled_events_].event_type() == detail::http1_event::type::complete) {
           return;
         }
         handle_event(events[handled_events_++]);
@@ -357,15 +357,15 @@ struct server::impl {
     }
 
     void handle_event(const detail::http1_event& event) {
-      switch (event.event_type) {
+      switch (event.event_type()) {
       case detail::http1_event::type::headers:
-        handle_headers(event.message);
+        handle_headers(event.message());
         break;
       case detail::http1_event::type::body:
-        handle_body_chunk(event.body);
+        handle_body_chunk(event.body());
         break;
       case detail::http1_event::type::complete:
-        handle_message_complete(event.message);
+        handle_message_complete(event.message());
         break;
       }
     }

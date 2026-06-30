@@ -63,12 +63,8 @@ ws
   .on_text([](uvp::websocket::session& ws, std::string_view message) {
     ws.text(message);
   })
-  .on_ping([](uvp::websocket::session&, std::span<const std::byte> payload) {
-    (void)payload;
-  })
-  .on_pong([](uvp::websocket::session&, std::span<const std::byte> payload) {
-    (void)payload;
-  })
+  .on_ping([](uvp::websocket::session&, std::span<const std::byte>) {})
+  .on_pong([](uvp::websocket::session&, std::span<const std::byte>) {})
   .on_close([](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {})
   .on_error([](uvp::websocket::session&, std::error_code) {});
 ```

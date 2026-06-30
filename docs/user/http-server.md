@@ -425,12 +425,13 @@ the accepted connection:
 ```cpp
 srv.get("/whoami", [](uvp::http::request& req, uvp::http::response& res) {
   const auto& connection = req.connection();
-  const auto& local = connection.local_endpoint();
-  const auto& remote = connection.remote_endpoint();
+  const auto local_known = connection.local_endpoint().index() != 0;
+  const auto remote_known = connection.remote_endpoint().index() != 0;
 
-  (void)local;
-  (void)remote;
-  res.text("ok\n");
+  res.json(uvp::json{
+    {"local_endpoint", local_known ? "known" : "unknown"},
+    {"remote_endpoint", remote_known ? "known" : "unknown"},
+  });
 });
 ```
 
@@ -646,16 +647,16 @@ srv.upgrade("/raw/:name", [](uvp::http::upgrade_request& req) {
   auto name = req.params().get("name");
   auto protocol = req.header("upgrade");
   auto extra = req.extra_bytes();
-
-  (void)name;
-  (void)protocol;
-  (void)extra;
+  auto body = std::string{"unsupported upgrade for "} + std::string{name}
+    + " using " + std::string{protocol}
+    + " with " + std::to_string(extra.size()) + " extra bytes\n";
 
   req.reject(
-    "HTTP/1.1 400 Bad Request\r\n"
+    std::string{"HTTP/1.1 400 Bad Request\r\n"}
     "Connection: close\r\n"
-    "Content-Length: 0\r\n"
-    "\r\n");
+    "Content-Type: text/plain\r\n"
+    "Content-Length: " + std::to_string(body.size()) + "\r\n"
+    "\r\n" + body);
 });
 ```
 

@@ -53,10 +53,10 @@ UVP_TEST_CASE("http1 parser emits header body and complete events") {
 
   UVP_REQUIRE(result.ok());
   UVP_REQUIRE(parser.events().size() == 3);
-  UVP_CHECK(parser.events()[0].event_type == uvp::http::detail::http1_event::type::headers);
-  UVP_CHECK(parser.events()[1].event_type == uvp::http::detail::http1_event::type::body);
-  UVP_CHECK_EQ(parser.events()[1].body, "test");
-  UVP_CHECK(parser.events()[2].event_type == uvp::http::detail::http1_event::type::complete);
+  UVP_CHECK(parser.events()[0].event_type() == uvp::http::detail::http1_event::type::headers);
+  UVP_CHECK(parser.events()[1].event_type() == uvp::http::detail::http1_event::type::body);
+  UVP_CHECK_EQ(parser.events()[1].body(), "test");
+  UVP_CHECK(parser.events()[2].event_type() == uvp::http::detail::http1_event::type::complete);
 }
 
 UVP_TEST_CASE("http1 parser decodes chunked request bodies") {
@@ -106,4 +106,3 @@ UVP_TEST_CASE("http1 parser reports websocket upgrade pause") {
     "Sec-WebSocket-Version: 13\r\n"
     "\r\nextra"}.size());
 }
-

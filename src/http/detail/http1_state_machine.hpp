@@ -3,6 +3,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 #include <uvpp/protocols/http/headers.hpp>
@@ -28,9 +30,64 @@ struct http1_event {
     complete,
   };
 
-  type event_type = type::complete;
-  http1_message message;
-  std::string body;
+  struct headers_payload {
+    http1_message message;
+  };
+
+  struct body_payload {
+    std::string body;
+  };
+
+  struct complete_payload {
+    http1_message message;
+  };
+
+  using payload_type = std::variant<headers_payload, body_payload, complete_payload>;
+
+  explicit http1_event(headers_payload value)
+      : payload(std::move(value)) {}
+
+  explicit http1_event(body_payload value)
+      : payload(std::move(value)) {}
+
+  explicit http1_event(complete_payload value)
+      : payload(std::move(value)) {}
+
+  [[nodiscard]] static http1_event headers(http1_message message) {
+    return http1_event{headers_payload{std::move(message)}};
+  }
+
+  [[nodiscard]] static http1_event body(std::string chunk) {
+    return http1_event{body_payload{std::move(chunk)}};
+  }
+
+  [[nodiscard]] static http1_event complete(http1_message message) {
+    return http1_event{complete_payload{std::move(message)}};
+  }
+
+  [[nodiscard]] type event_type() const noexcept {
+    switch (payload.index()) {
+    case 0:
+      return type::headers;
+    case 1:
+      return type::body;
+    default:
+      return type::complete;
+    }
+  }
+
+  [[nodiscard]] const http1_message& message() const {
+    if (const auto* headers = std::get_if<headers_payload>(&payload)) {
+      return headers->message;
+    }
+    return std::get<complete_payload>(payload).message;
+  }
+
+  [[nodiscard]] const std::string& body() const {
+    return std::get<body_payload>(payload).body;
+  }
+
+  payload_type payload;
 };
 
 struct http1_parse_result {

@@ -127,4 +127,4 @@ not yet enforced" to the stable enforced option list.
 ## Source Documents
 
 - [HTTP server design](../design/http-server.md)
-- [Code quality audit](../audits/code-quality.md)
+- [Code quality audit](code-quality-audit.md)

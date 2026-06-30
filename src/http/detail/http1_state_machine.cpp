@@ -140,11 +140,7 @@ private:
     self.current_.method = map_method(static_cast<llhttp_method_t>(llhttp_get_method(parser)));
     self.current_.http_major = static_cast<unsigned int>(llhttp_get_http_major(parser));
     self.current_.http_minor = static_cast<unsigned int>(llhttp_get_http_minor(parser));
-    self.events_.push_back(http1_event{
-      http1_event::type::headers,
-      self.current_,
-      {},
-    });
+    self.events_.push_back(http1_event::headers(self.current_));
     if (!self.current_.headers.get("upgrade").empty() || self.current_.method == http::method::connect) {
       // llhttp uses callback return value 2 to pause with HPE_PAUSED_UPGRADE.
       return 2;
@@ -155,11 +151,7 @@ private:
   static int on_body(llhttp_t* parser, const char* at, std::size_t length) {
     auto& self = impl::self(parser);
     self.current_.body.append(at, length);
-    self.events_.push_back(http1_event{
-      http1_event::type::body,
-      {},
-      std::string{at, length},
-    });
+    self.events_.push_back(http1_event::body(std::string{at, length}));
     return HPE_OK;
   }
 
@@ -167,11 +159,7 @@ private:
     auto& self = impl::self(parser);
     self.commit_pending_header();
     self.current_.keep_alive = llhttp_should_keep_alive(parser) != 0;
-    self.events_.push_back(http1_event{
-      http1_event::type::complete,
-      self.current_,
-      {},
-    });
+    self.events_.push_back(http1_event::complete(self.current_));
     self.completed_messages_.push_back(std::move(self.current_));
     self.current_ = http1_message{};
     return HPE_OK;
