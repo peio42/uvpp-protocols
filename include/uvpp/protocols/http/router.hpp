@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cstddef>
 #include <exception>
 #include <functional>
@@ -97,6 +98,7 @@ enum class body_mode {
   none,
   bytes,
   text,
+  json,
   stream,
 };
 
@@ -108,6 +110,8 @@ template<class Handler>
 route_handler_type wrap_bytes_handler(Handler&& handler);
 template<class Handler>
 route_handler_type wrap_text_handler(Handler&& handler);
+template<class T, class Handler>
+route_handler_type wrap_json_handler(Handler&& handler);
 template<class Handler>
 route_handler_type wrap_stream_handler(Handler&& handler);
 template<class Handler>
@@ -201,6 +205,23 @@ public:
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, body::text policy, Handler&& handler) {
+    return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
+  }
+
+  template<class T, class Handler>
+  router& route(method method_value, std::string_view pattern, route_options options, body::json<T> policy, Handler&& handler) {
+    (void)policy;
+    return add_route(
+      method_value,
+      pattern,
+      detail::body_mode::json,
+      options.max_body_bytes(),
+      options.body_timeout(),
+      detail::wrap_json_handler<T>(std::forward<Handler>(handler)));
+  }
+
+  template<class T, class Handler>
+  router& route(method method_value, std::string_view pattern, body::json<T> policy, Handler&& handler) {
     return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
   }
 
@@ -830,6 +851,98 @@ router::handler_type wrap_text_handler(Handler&& handler) {
       body.size(),
     };
     handler(req, res, text);
+  };
+}
+
+inline std::string_view trim_http_ows(std::string_view value) noexcept {
+  while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+    value.remove_prefix(1);
+  }
+  while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
+    value.remove_suffix(1);
+  }
+  return value;
+}
+
+inline bool ascii_iequals(std::string_view lhs, std::string_view rhs) noexcept {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+
+  for (std::size_t index = 0; index < lhs.size(); ++index) {
+    const auto left = static_cast<unsigned char>(lhs[index]);
+    const auto right = static_cast<unsigned char>(rhs[index]);
+    if (std::tolower(left) != std::tolower(right)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool ascii_iends_with(std::string_view value, std::string_view suffix) noexcept {
+  return value.size() >= suffix.size() &&
+         ascii_iequals(value.substr(value.size() - suffix.size()), suffix);
+}
+
+inline bool is_json_content_type(std::string_view content_type) noexcept {
+  const auto parameter_offset = content_type.find(';');
+  auto media_type = trim_http_ows(content_type.substr(0, parameter_offset));
+  if (media_type.empty()) {
+    return false;
+  }
+
+  if (ascii_iequals(media_type, "application/json")) {
+    return true;
+  }
+
+  const auto slash_offset = media_type.find('/');
+  return slash_offset != std::string_view::npos &&
+         slash_offset + 1 < media_type.size() &&
+         ascii_iends_with(media_type.substr(slash_offset + 1), "+json");
+}
+
+template<class T, class Handler>
+router::handler_type wrap_json_handler(Handler&& handler) {
+  using stored_handler = std::decay_t<Handler>;
+  using decoded_type = std::decay_t<T>;
+  static_assert(
+    std::is_invocable_v<stored_handler&, request&, response&, const decoded_type&>,
+    "HTTP JSON route handler must accept (request&, response&, const T&) or a compatible value parameter");
+
+  return [handler = stored_handler(std::forward<Handler>(handler))](
+           request& req,
+           response& res,
+           std::span<const std::byte> body,
+           request_body_stream*) mutable {
+    if (!is_json_content_type(req.header("content-type"))) {
+      res.status(status::unsupported_media_type).text("unsupported media type\n");
+      return;
+    }
+
+    uvp::json parsed;
+    try {
+      const auto text = std::string_view{
+        reinterpret_cast<const char*>(body.data()),
+        body.size(),
+      };
+      parsed = uvp::json::parse(text.begin(), text.end());
+    } catch (const uvp::json::parse_error&) {
+      res.status(status::bad_request).text("invalid json\n");
+      return;
+    }
+
+    if constexpr (std::is_same_v<decoded_type, uvp::json>) {
+      handler(req, res, parsed);
+    } else {
+      std::optional<decoded_type> decoded;
+      try {
+        decoded.emplace(parsed.get<decoded_type>());
+      } catch (const uvp::json::exception&) {
+        res.status(status::unprocessable_content).text("invalid json body\n");
+        return;
+      }
+      handler(req, res, *decoded);
+    }
   };
 }
 

@@ -79,6 +79,11 @@ srv.post(
   uvp::http::route_options{}.max_body_bytes(64 * 1024),
   uvp::http::body::text{},
   handler);
+srv.post(
+  "/json",
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::json<my_type>{},
+  handler);
 srv.post("/events", uvp::http::body::stream{}, handler);
 ```
 
@@ -90,6 +95,7 @@ receives.
 | `body::none{}` | After headers | None |
 | `body::bytes{}` | After full body is buffered | `std::span<const std::byte>` |
 | `body::text{}` | After full body is buffered | `std::string_view` |
+| `body::json<T>{}` | After full body is buffered and decoded | `const T&` |
 | `body::stream{}` | After headers | `request_body_stream&` |
 
 Short route overloads infer the body policy from the handler signature:
@@ -103,9 +109,10 @@ srv.post("/upload", [](uvp::http::request&, uvp::http::response&, uvp::http::req
 
 Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
 `body::stream{}` respectively.
-Use `route_options` for route-level limits, and use the explicit policy form
-when future typed policies such as JSON or multipart matter at the declaration
-site.
+JSON is not inferred from handler signatures. Use `body::json<T>{}` explicitly
+when the route should parse and convert JSON. Use `route_options` for
+route-level limits, and use the explicit policy form when future typed policies
+such as multipart matter at the declaration site.
 
 Route-level options can carry operational body settings next to the route
 declaration:
@@ -347,6 +354,37 @@ srv.post("/message",
 The string view is borrowed and valid only while the handler is running. The
 initial text policy does not validate or transcode charsets; it exposes the
 buffered bytes as a `std::string_view`.
+
+## JSON Bodies
+
+Use `body::json<T>{}` when a route expects a JSON request body:
+
+```cpp
+struct create_item {
+  std::string title;
+};
+
+void from_json(const uvp::json& value, create_item& out) {
+  out.title = value.at("title").get<std::string>();
+}
+
+srv.post("/items",
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::json<create_item>{},
+  [](uvp::http::request&, uvp::http::response& res, const create_item& body) {
+    res.status(uvp::http::status::created).json(uvp::json{{"title", body.title}});
+  });
+```
+
+`body::json<>` parses and passes `const uvp::json&` directly. Typed policies
+use nlohmann `from_json` customization. The decoded value is borrowed and valid
+only while the handler is running.
+
+JSON routes accept `application/json`, structured suffixes such as
+`application/problem+json`, and media type parameters such as
+`application/json; charset=utf-8`. Missing or non-JSON `Content-Type` returns
+`415 Unsupported Media Type`; malformed JSON returns `400 Bad Request`; typed
+conversion failures return `422 Unprocessable Content`.
 
 ## Streaming Request Bodies
 

@@ -19,6 +19,7 @@ enum class status : unsigned int {
   request_timeout = 408,
   conflict = 409,
   payload_too_large = 413,
+  unsupported_media_type = 415,
   unprocessable_content = 422,
   unprocessable_entity = unprocessable_content,
   too_many_requests = 429,

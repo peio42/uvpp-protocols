@@ -1,7 +1,7 @@
 # Proposals
 
-Draft proposals capture planned or unimplemented work. They are working
-references, not stable design truth.
+Proposals capture planned, unimplemented, or milestone-tracked work. They are
+working references, not stable design truth.
 
 When a proposal belongs to the roadmap `Current focus`, leave it listed there
 for the whole milestone. Once the implementation is complete, mark the roadmap
@@ -9,7 +9,7 @@ line with `[x]` instead of removing the line immediately. Move completed
 proposals out of this directory only when the next milestone or step replaces
 the `Current focus` block.
 
-## Active Drafts
+## Milestone-Tracked Proposals
 
 - [Static file helper](static-file-helper.md)
 - [Typed JSON body policy](typed-json-body-policy.md)

@@ -150,6 +150,26 @@ UVP_TEST_CASE("http router infers body policies from handler signatures") {
   UVP_CHECK(none_match.body == uvp::http::detail::body_mode::none);
 }
 
+UVP_TEST_CASE("http router stores explicit json body policies") {
+  uvp::http::router router;
+  router.post(
+    "/items",
+    uvp::http::body::json<int>{},
+    [](uvp::http::request&, uvp::http::response&, int) {});
+  router.post(
+    "/raw",
+    uvp::http::body::json<>{},
+    [](uvp::http::request&, uvp::http::response&, const uvp::json&) {});
+
+  auto item_match = router.match(uvp::http::method::post, "/items");
+  UVP_REQUIRE(item_match);
+  UVP_CHECK(item_match.body == uvp::http::detail::body_mode::json);
+
+  auto raw_match = router.match(uvp::http::method::post, "/raw");
+  UVP_REQUIRE(raw_match);
+  UVP_CHECK(raw_match.body == uvp::http::detail::body_mode::json);
+}
+
 UVP_TEST_CASE("http router stores route options body limits") {
   uvp::http::router router;
 

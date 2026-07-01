@@ -217,6 +217,7 @@ Routes declare a body policy explicitly:
 srv.get("/health", body::none{}, handler);
 srv.post("/echo", route_options{}.max_body_bytes(64 * 1024), body::bytes{}, handler);
 srv.post("/message", route_options{}.max_body_bytes(64 * 1024), body::text{}, handler);
+srv.post("/json", route_options{}.max_body_bytes(64 * 1024), body::json<my_type>{}, handler);
 srv.post("/events", body::stream{}, handler);
 ```
 
@@ -226,12 +227,17 @@ The body policy is part of the route contract:
 - `body::bytes{}` buffers the body, then dispatches with
   `std::span<const std::byte>`;
 - `body::text{}` buffers the body, then dispatches with `std::string_view`;
+- `body::json<T>{}` buffers the body, validates a JSON content type, parses
+  through `uvp::json`, converts with nlohmann `from_json`, then dispatches
+  with `const T&`;
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`.
 
-Future typed policies such as JSON and multipart should use the same explicit
-route declaration shape. They are tracked in
-[typed JSON body policy](../proposals/typed-json-body-policy.md) and
+`body::json<>` dispatches with `const uvp::json&`. JSON request policies are
+not inferred from handler signatures; routes declare them explicitly because
+parsing and typed conversion are part of the route contract. Future typed
+policies such as multipart should use the same explicit route declaration
+shape. Multipart work is tracked in
 [multipart handling](../proposals/multipart-handling.md).
 
 Route-level options extend the body contract with operational metadata:
@@ -394,9 +400,8 @@ public:
 JSON is represented by `uvp::json`, a public alias for `nlohmann::json`.
 `json(std::string_view)` remains available for already serialized payloads.
 `json(const uvp::json&)` serializes with `dump()` and supports strings,
-numbers, booleans, arrays, objects, and null values. Future typed JSON request
-bodies should build on the same type and nlohmann's `from_json` / `to_json`
-customization points.
+numbers, booleans, arrays, objects, and null values. Typed JSON request bodies
+use the same type and nlohmann's `from_json` customization point.
 
 ## Handler Completion
 
@@ -630,7 +635,6 @@ uvp::http::server srv(
 
 Future HTTP work is tracked outside stable design:
 
-- [Typed JSON body policy](../proposals/typed-json-body-policy.md)
 - [Multipart handling](../proposals/multipart-handling.md)
 - [Server-Sent Events support](../proposals/sse-support.md)
 - [Static file helper](../proposals/static-file-helper.md)

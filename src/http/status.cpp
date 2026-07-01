@@ -32,6 +32,8 @@ std::string_view reason_phrase(status value) noexcept {
     return "Conflict";
   case status::payload_too_large:
     return "Payload Too Large";
+  case status::unsupported_media_type:
+    return "Unsupported Media Type";
   case status::unprocessable_content:
     return "Unprocessable Content";
   case status::too_many_requests:

@@ -13,6 +13,16 @@
 
 namespace {
 
+struct json_widget {
+  std::string name;
+  int count = 0;
+};
+
+void from_json(const uvp::json& value, json_widget& widget) {
+  widget.name = value.at("name").get<std::string>();
+  widget.count = value.at("count").get<int>();
+}
+
 uv::buffer_view integration_alloc(uv::tcp&, std::size_t) {
   static std::array<char, 4096> storage{};
   return uv::buffer_view{storage.data(), storage.size()};
@@ -548,6 +558,165 @@ UVP_TEST_CASE("http server applies route options body limits") {
   UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
   UVP_CHECK(received.find("\r\n\r\nPayload Too Large\n") != std::string::npos);
   UVP_CHECK(received.find("accepted\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server parses raw json request bodies") {
+  const std::string body = R"({"name":"ada"})";
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/json",
+        uvp::http::body::json<>{},
+        [](uvp::http::request&, uvp::http::response& res, const uvp::json& body) {
+          res.text(body.at("name").get<std::string>() + "\n");
+        });
+    },
+    std::string{
+      "POST /json HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "ada\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nada\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server converts typed json request bodies") {
+  const std::string body = R"({"name":"bolt","count":3})";
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/widgets",
+        uvp::http::body::json<json_widget>{},
+        [](uvp::http::request&, uvp::http::response& res, const json_widget& body) {
+          res.text(body.name + " " + std::to_string(body.count) + "\n");
+        });
+    },
+    std::string{
+      "POST /widgets HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: Application/Problem+JSON; charset=utf-8\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "bolt 3\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nbolt 3\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server rejects json bodies with non json content types") {
+  unsigned int observed_status = 0;
+  const std::string body = R"({"name":"ada"})";
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      auto api = server.group("/api");
+      api.pre_handler([](uvp::http::request&, uvp::http::response& res) {
+        res.header("x-pre-handler", "ran");
+      });
+      api.on_response([&](const uvp::http::response_info& info) {
+        observed_status = info.status;
+      });
+      api.post(
+        "/json",
+        uvp::http::body::json<>{},
+        [](uvp::http::request&, uvp::http::response& res, const uvp::json&) {
+          res.text("handler\n");
+        });
+    },
+    std::string{
+      "POST /api/json HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: text/plain\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "unsupported media type\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 415 Unsupported Media Type\r\n") != std::string::npos);
+  UVP_CHECK(received.find("x-pre-handler: ran\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nunsupported media type\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+  UVP_CHECK_EQ(observed_status, 415U);
+}
+
+UVP_TEST_CASE("http server rejects malformed json request bodies") {
+  const std::string body = R"({"name":)";
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/json",
+        uvp::http::body::json<>{},
+        [](uvp::http::request&, uvp::http::response& res, const uvp::json&) {
+          res.text("handler\n");
+        });
+    },
+    std::string{
+      "POST /json HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "invalid json\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\ninvalid json\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server rejects json conversion failures") {
+  const std::string body = R"({"name":"bolt","count":"bad"})";
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/widgets",
+        uvp::http::body::json<json_widget>{},
+        [](uvp::http::request&, uvp::http::response& res, const json_widget&) {
+          res.text("handler\n");
+        });
+    },
+    std::string{
+      "POST /widgets HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "invalid json body\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 422 Unprocessable Content\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\ninvalid json body\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server applies route body limits before json parsing") {
+  const std::string body = R"({"x":1})";
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/json",
+        uvp::http::route_options{}.max_body_bytes(2),
+        uvp::http::body::json<>{},
+        [](uvp::http::request&, uvp::http::response& res, const uvp::json&) {
+          res.text("handler\n");
+        });
+    },
+    std::string{
+      "POST /json HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "Payload Too Large\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nPayload Too Large\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
 }
 
 UVP_TEST_CASE("http server returns request timeout for incomplete headers") {

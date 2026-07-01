@@ -15,6 +15,7 @@
 #include <uvpp/protocols/http/headers.hpp>
 #include <uvpp/protocols/http/method.hpp>
 #include <uvpp/protocols/http/route_params.hpp>
+#include <uvpp/protocols/json.hpp>
 
 namespace uvp::http {
 
@@ -31,6 +32,9 @@ struct bytes {};
 struct text {};
 
 struct stream {};
+
+template<class T = uvp::json>
+struct json {};
 
 } // namespace body
 
