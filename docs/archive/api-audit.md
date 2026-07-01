@@ -1,5 +1,5 @@
 # Audit API — uvpp-protocols
-_(Temporary working file - sorry for the French)_
+_(Archived completed audit - sorry for the French)_
 
 Cet audit examine l'API publique du projet telle qu'elle existe au milestone 3.
 Il se place dans la perspective d'une reconstruction sans contrainte de
@@ -88,7 +88,7 @@ utilisant le même type de valeur et les conversions `from_json` / `to_json`.
 `examples/websocket_echo.cpp`
 
 ```cpp
-uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}.on_text(...));
+uvp::websocket::accept_detached(req).on_text(...);
 ```
 
 **Résolu :** `uvp::websocket::accept()` retourne maintenant une session
@@ -189,11 +189,11 @@ et aux générateurs de documentation.
 
 ---
 
-## 9. Callbacks dans `accept_options` WebSocket
+## 9. Callbacks dans `accept_options` WebSocket séparés
 
 **Fichier :** `include/uvpp/protocols/websocket/session.hpp`
 
-`accept_options` mélange deux natures distinctes :
+`accept_options` mélangeait deux natures distinctes :
 
 - **Configuration :** `max_message_bytes`, `max_pending_write_bytes`,
   `subprotocol`, `auto_pong`
@@ -205,9 +205,13 @@ ensemble de callbacks qui capturent de l'état applicatif. Les regrouper dans
 un même type rend l'objet difficile à séparer (stocker les options sans les
 handlers, changer un handler sans recréer les options, etc.).
 
-**En zéro-compatibilité :** un type `session_config` pour les scalaires, et
-un type `session_handler` (ou des setters sur la session elle-même) pour les
-callbacks.
+**Statut : résolu.** `accept_options` ne contient plus que la configuration
+d'acceptation (`max_message_bytes`, `max_pending_write_bytes`, `subprotocol`,
+`auto_pong`). Les callbacks (`on_text`, `on_binary`, `on_ping`, `on_pong`,
+`on_close`, `on_error`) sont maintenant des setters sur
+`uvp::websocket::session`. La forme détachée retourne un handle non
+propriétaire pour permettre `accept_detached(req).on_text(...)` tout en gardant
+la durée de vie interne explicite.
 
 ---
 
@@ -265,10 +269,10 @@ invalides sous forme littérale.
 
 ---
 
-## 12. Pas de middleware ni de groupes de routes
+## 12. Middleware et groupes de routes
 
-L'API ne propose pas de concept de middleware (`srv.use(handler)`) ni de
-groupes de routes préfixées (`srv.group("/api/v1", ...)`). Chaque route doit
+L'API ne proposait pas de concept de middleware (`srv.use(handler)`) ni de
+groupes de routes préfixées (`srv.group("/api/v1", ...)`). Chaque route devait
 répliquer indépendamment la logique transversale (authentification, CORS,
 logging, validation de contenu).
 
@@ -276,9 +280,22 @@ Ce point est moins critique pour une lib bas-niveau axée sur la composition
 explicite, mais constitue un point d'attention si l'objectif inclut
 l'ergonomie applicative.
 
-**Statut : partiellement traité.** Les groupes de routes préfixées et les
-middlewares restent une étape d'API à concevoir séparément. En revanche, les
-ajouts peu coûteux rendus naturels par le trie sont implémentés :
+**Statut : résolu.** Les groupes de routes préfixées sont implémentés via
+`server::group(...)`, `router::group(...)` et `route_group`, avec groupes
+imbriqués, `resource(...)`, `mount(...)`, fallbacks scopés et handlers
+d'exception scopés.
+
+Le middleware générique `srv.use(...)` n'a pas été ajouté tel quel. Le design
+retenu expose plutôt des hooks de phase explicites :
+
+- `on_request` pour agir après le matching et avant la gestion du body ;
+- `pre_handler` pour agir juste avant le handler final ;
+- `on_response` pour observer la réponse complétée, annulée ou en erreur.
+
+Ces hooks couvrent les usages transversaux ciblés sans introduire un pipeline
+middleware ambigu.
+
+Les ajouts rendus naturels par le trie sont également implémentés :
 
 - `405 Method Not Allowed` avec header `Allow` quand le chemin existe pour une
   autre méthode ;
@@ -335,5 +352,5 @@ un vrai `uvp::http::server`.
 | ✅ Résolu | Router par trie de segments |
 | ✅ Résolu | `status` enum enrichi avec les codes courants |
 | ✅ Résolu | Méthodes HTTP explicites, sans macros de génération |
-| 🟡 Conception | Callbacks et config mélangés dans `accept_options` |
-| 🟡 Ergonomie | Route groups et middleware à concevoir |
+| ✅ Résolu | Callbacks et config séparés côté WebSocket |
+| ✅ Résolu | Route groups et hooks HTTP implémentés |

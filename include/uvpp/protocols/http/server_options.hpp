@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cstddef>
 
+#include <uvpp/protocols/http/route_path_matching.hpp>
+
 namespace uvp::http {
 
 struct server_options {
@@ -44,6 +46,10 @@ struct server_options {
   server_options&& server_header(bool value) && noexcept;
   [[nodiscard]] bool server_header() const noexcept { return server_header_; }
 
+  server_options& route_path_matching(http::route_path_matching value) & noexcept;
+  server_options&& route_path_matching(http::route_path_matching value) && noexcept;
+  [[nodiscard]] http::route_path_matching route_path_matching() const noexcept { return route_path_matching_; }
+
   void validate() const;
 
 private:
@@ -58,6 +64,7 @@ private:
 
   bool keep_alive_ = true;
   bool server_header_ = true;
+  http::route_path_matching route_path_matching_ = http::route_path_matching::percent_decoded_segments;
 };
 
 } // namespace uvp::http

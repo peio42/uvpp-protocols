@@ -46,13 +46,13 @@ The server-side API is:
 uvp::http::server srv(loop);
 
 srv.upgrade("/events", [](uvp::http::upgrade_request& req) {
-  uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
+  uvp::websocket::accept_detached(req)
     .on_text([](uvp::websocket::session& ws, std::string_view message) {
       ws.text(message);
     })
     .on_binary([](uvp::websocket::session& ws, std::span<const std::byte> message) {
       ws.binary(message);
-    }));
+    });
 });
 ```
 
@@ -77,7 +77,8 @@ WebSocket session.
 Callback-only endpoints that intentionally do not keep a handle should call
 `uvp::websocket::accept_detached()`. The detached form is the only WebSocket
 acceptance path where the internal session state keeps itself alive while the
-upgraded transport remains open.
+upgraded transport remains open. It returns a non-owning session handle so
+callbacks can still be registered directly on the session.
 
 ## Protocols Above WebSocket
 
@@ -176,9 +177,9 @@ upgrade request.
 - `ping(std::span<const std::byte> payload = {})`;
 - `pong(std::span<const std::byte> payload = {})`;
 - `close(close_code code = close_code::normal, std::string_view reason = {})`;
-- callback registration through `accept_options` for text, binary, ping, pong,
-  close, and errors;
-- `auto_pong(bool)` to keep the default automatic ping response or make
+- callback registration on the session for text, binary, ping, pong, close, and
+  errors;
+- `accept_options::auto_pong(bool)` to keep the default automatic ping response or make
   `on_ping` responsible for replying;
 - accessors for local and remote endpoints through the underlying transport;
 - `into_byte_stream()` for binary byte-stream protocols over WebSocket.

@@ -19,6 +19,8 @@ public:
   headers& set(std::string_view name, std::string_view value);
   headers& add(std::string_view name, std::string_view value);
 
+  [[nodiscard]] static bool names_equal(std::string_view lhs, std::string_view rhs) noexcept;
+
   [[nodiscard]] std::string_view get(std::string_view name) const noexcept;
   [[nodiscard]] bool contains(std::string_view name) const noexcept;
   [[nodiscard]] bool empty() const noexcept { return entries_.empty(); }
@@ -28,10 +30,7 @@ public:
   [[nodiscard]] const_iterator end() const noexcept { return entries_.end(); }
 
 private:
-  static bool names_equal(std::string_view lhs, std::string_view rhs) noexcept;
-
   container_type entries_;
 };
 
 } // namespace uvp::http
-

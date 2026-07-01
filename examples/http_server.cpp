@@ -40,13 +40,11 @@ int main() {
       .max_body_bytes(1024 * 1024)
       .idle_timeout(30s));
 
-  srv.get("/health", [](uvp::http::request& req, uvp::http::response& res) {
-    (void)req;
+  srv.get("/health", [](uvp::http::request&, uvp::http::response& res) {
     res.json(uvp::json{{"status", "ok"}});
   });
 
-  srv.get("/logs", [](uvp::http::request& req, uvp::http::response& res) {
-    (void)req;
+  srv.get("/logs", [](uvp::http::request&, uvp::http::response& res) {
     res.text(read_recent_logs());
   });
 

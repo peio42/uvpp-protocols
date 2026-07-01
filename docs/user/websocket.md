@@ -11,13 +11,13 @@ uv::loop loop;
 uvp::http::server srv(loop);
 
 srv.upgrade("/echo", [](uvp::http::upgrade_request& req) {
-  uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
+  uvp::websocket::accept_detached(req)
     .on_text([](uvp::websocket::session& ws, std::string_view message) {
       ws.text(message);
     })
     .on_binary([](uvp::websocket::session& ws, std::span<const std::byte> message) {
       ws.binary(message);
-    }));
+    });
 });
 
 srv.listen("127.0.0.1", 8084);
@@ -57,18 +57,16 @@ state, and queued writes.
 auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
   .max_message_bytes(1024 * 1024)
   .max_pending_write_bytes(1024 * 1024)
-  .subprotocol("chat")
+  .subprotocol("chat"));
+
+ws
   .on_text([](uvp::websocket::session& ws, std::string_view message) {
     ws.text(message);
   })
-  .on_ping([](uvp::websocket::session&, std::span<const std::byte> payload) {
-    (void)payload;
-  })
-  .on_pong([](uvp::websocket::session&, std::span<const std::byte> payload) {
-    (void)payload;
-  })
+  .on_ping([](uvp::websocket::session&, std::span<const std::byte>) {})
+  .on_pong([](uvp::websocket::session&, std::span<const std::byte>) {})
   .on_close([](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {})
-  .on_error([](uvp::websocket::session&, std::error_code) {}));
+  .on_error([](uvp::websocket::session&, std::error_code) {});
 ```
 
 A session can send:
@@ -81,16 +79,17 @@ ws.pong(payload);
 ws.close(uvp::websocket::close_code::normal, "bye");
 ```
 
-For callback-only endpoints that intentionally do not keep a session handle,
-use `uvp::websocket::accept_detached()`. The detached form keeps the internal
-session alive until the WebSocket closes:
+For callback-only endpoints that intentionally do not keep an owning session
+handle, use `uvp::websocket::accept_detached()`. The detached form returns a
+non-owning handle for callback registration and keeps the internal session
+alive until the WebSocket closes:
 
 ```cpp
 srv.upgrade("/echo", [](uvp::http::upgrade_request& req) {
-  uvp::websocket::accept_detached(req, uvp::websocket::accept_options{}
+  uvp::websocket::accept_detached(req)
     .on_text([](uvp::websocket::session& ws, std::string_view message) {
       ws.text(message);
-    }));
+    });
 });
 ```
 
@@ -103,10 +102,12 @@ the required pong response:
 
 ```cpp
 auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
-  .auto_pong(false)
+  .auto_pong(false));
+
+ws
   .on_ping([](uvp::websocket::session& ws, std::span<const std::byte> payload) {
     ws.pong(payload);
-  }));
+  });
 ```
 
 `pong()` remains available for manual ping handling and for unsolicited pong

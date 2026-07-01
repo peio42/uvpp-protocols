@@ -385,21 +385,21 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
 
     if (data_opcode == opcode::text) {
-      if (options.on_text()) {
-        options.on_text()(handle, std::string_view{reinterpret_cast<const char*>(payload.data()), payload.size()});
+      if (on_text) {
+        on_text(handle, std::string_view{reinterpret_cast<const char*>(payload.data()), payload.size()});
       }
       return;
     }
 
-    if (options.on_binary()) {
-      options.on_binary()(handle, payload);
+    if (on_binary) {
+      on_binary(handle, payload);
     }
   }
 
   void dispatch_ping(std::span<const std::byte> payload) {
     auto handle = session{shared_from_this()};
-    if (options.on_ping()) {
-      options.on_ping()(handle, payload);
+    if (on_ping) {
+      on_ping(handle, payload);
     }
     if (options.auto_pong()) {
       send_frame(opcode::pong, payload);
@@ -408,8 +408,8 @@ struct session::state : public std::enable_shared_from_this<state> {
 
   void dispatch_pong(std::span<const std::byte> payload) {
     auto handle = session{shared_from_this()};
-    if (options.on_pong()) {
-      options.on_pong()(handle, payload);
+    if (on_pong) {
+      on_pong(handle, payload);
     }
   }
 
@@ -433,8 +433,8 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
 
     auto handle = session{shared_from_this()};
-    if (options.on_close()) {
-      options.on_close()(handle, code, reason);
+    if (on_close) {
+      on_close(handle, code, reason);
     }
     if (byte_read) {
       byte_read(uvp::io::read_result{{}, {}, true});
@@ -500,8 +500,8 @@ struct session::state : public std::enable_shared_from_this<state> {
 
   void notify_error(std::error_code error) {
     auto handle = session{shared_from_this()};
-    if (options.on_error()) {
-      options.on_error()(handle, error);
+    if (on_error) {
+      on_error(handle, error);
     }
   }
 
@@ -538,13 +538,13 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
 
     const bool close_after = !writes.empty() && writes.front().close_after;
-    auto on_write = !writes.empty() ? std::move(writes.front().on_write) : uvp::io::write_callback{};
+    auto write_callback = !writes.empty() ? std::move(writes.front().on_write) : uvp::io::write_callback{};
     if (!writes.empty()) {
       pending_write_bytes -= std::min(pending_write_bytes, writes.front().payload.size());
       writes.pop_front();
     }
-    if (on_write) {
-      on_write({});
+    if (write_callback) {
+      write_callback({});
     }
 
     if (close_after) {
@@ -600,6 +600,12 @@ struct session::state : public std::enable_shared_from_this<state> {
   }
 
   accept_options options;
+  session::text_callback on_text;
+  session::binary_callback on_binary;
+  session::control_callback on_ping;
+  session::control_callback on_pong;
+  session::close_callback on_close;
+  session::error_callback on_error;
   uvp::io::byte_stream stream;
   std::vector<std::byte> read_buffer;
   std::size_t read_offset = 0;
@@ -712,66 +718,6 @@ accept_options&& accept_options::auto_pong(bool value) && noexcept {
   return std::move(*this);
 }
 
-accept_options& accept_options::on_text(std::function<void(session&, std::string_view)> callback) & {
-  on_text_ = std::move(callback);
-  return *this;
-}
-
-accept_options&& accept_options::on_text(std::function<void(session&, std::string_view)> callback) && {
-  on_text(std::move(callback));
-  return std::move(*this);
-}
-
-accept_options& accept_options::on_binary(std::function<void(session&, std::span<const std::byte>)> callback) & {
-  on_binary_ = std::move(callback);
-  return *this;
-}
-
-accept_options&& accept_options::on_binary(std::function<void(session&, std::span<const std::byte>)> callback) && {
-  on_binary(std::move(callback));
-  return std::move(*this);
-}
-
-accept_options& accept_options::on_ping(std::function<void(session&, std::span<const std::byte>)> callback) & {
-  on_ping_ = std::move(callback);
-  return *this;
-}
-
-accept_options&& accept_options::on_ping(std::function<void(session&, std::span<const std::byte>)> callback) && {
-  on_ping(std::move(callback));
-  return std::move(*this);
-}
-
-accept_options& accept_options::on_pong(std::function<void(session&, std::span<const std::byte>)> callback) & {
-  on_pong_ = std::move(callback);
-  return *this;
-}
-
-accept_options&& accept_options::on_pong(std::function<void(session&, std::span<const std::byte>)> callback) && {
-  on_pong(std::move(callback));
-  return std::move(*this);
-}
-
-accept_options& accept_options::on_close(std::function<void(session&, close_code, std::string_view)> callback) & {
-  on_close_ = std::move(callback);
-  return *this;
-}
-
-accept_options&& accept_options::on_close(std::function<void(session&, close_code, std::string_view)> callback) && {
-  on_close(std::move(callback));
-  return std::move(*this);
-}
-
-accept_options& accept_options::on_error(std::function<void(session&, std::error_code)> callback) & {
-  on_error_ = std::move(callback);
-  return *this;
-}
-
-accept_options&& accept_options::on_error(std::function<void(session&, std::error_code)> callback) && {
-  on_error(std::move(callback));
-  return std::move(*this);
-}
-
 session::session(std::shared_ptr<state> state, bool owns_lifetime)
     : state_(std::move(state)), owns_lifetime_(owns_lifetime) {}
 
@@ -833,6 +779,78 @@ void session::close(close_code code, std::string_view reason) {
   }
 }
 
+session& session::on_text(text_callback callback) & {
+  if (state_) {
+    state_->on_text = std::move(callback);
+  }
+  return *this;
+}
+
+session&& session::on_text(text_callback callback) && {
+  on_text(std::move(callback));
+  return std::move(*this);
+}
+
+session& session::on_binary(binary_callback callback) & {
+  if (state_) {
+    state_->on_binary = std::move(callback);
+  }
+  return *this;
+}
+
+session&& session::on_binary(binary_callback callback) && {
+  on_binary(std::move(callback));
+  return std::move(*this);
+}
+
+session& session::on_ping(control_callback callback) & {
+  if (state_) {
+    state_->on_ping = std::move(callback);
+  }
+  return *this;
+}
+
+session&& session::on_ping(control_callback callback) && {
+  on_ping(std::move(callback));
+  return std::move(*this);
+}
+
+session& session::on_pong(control_callback callback) & {
+  if (state_) {
+    state_->on_pong = std::move(callback);
+  }
+  return *this;
+}
+
+session&& session::on_pong(control_callback callback) && {
+  on_pong(std::move(callback));
+  return std::move(*this);
+}
+
+session& session::on_close(close_callback callback) & {
+  if (state_) {
+    state_->on_close = std::move(callback);
+  }
+  return *this;
+}
+
+session&& session::on_close(close_callback callback) && {
+  on_close(std::move(callback));
+  return std::move(*this);
+}
+
+session& session::on_error(error_callback callback) & {
+  if (state_) {
+    state_->on_error = std::move(callback);
+  }
+  return *this;
+}
+
+session&& session::on_error(error_callback callback) && {
+  on_error(std::move(callback));
+  return std::move(*this);
+}
+
 uvp::io::endpoint session::local_endpoint() const {
   return state_ ? state_->local_endpoint() : uvp::io::endpoint{};
 }
@@ -870,18 +888,20 @@ session accept(uvp::http::upgrade_request& req, accept_options options) {
   return handle;
 }
 
-void accept_detached(uvp::http::upgrade_request& req, accept_options options) {
+session accept_detached(uvp::http::upgrade_request& req, accept_options options) {
   if (!valid_handshake(req)) {
     req.reject(bad_request_response());
-    return;
+    return {};
   }
 
   auto state = std::make_shared<session::state>(std::move(options));
+  auto handle = session{state};
   const auto response = handshake_response(req, state->options.subprotocol());
   std::vector<std::byte> extra_bytes(req.extra_bytes().begin(), req.extra_bytes().end());
   req.accept(response, [state, extra_bytes = std::move(extra_bytes)](uvp::io::byte_stream stream) {
     state->start(std::move(stream), extra_bytes, true);
   });
+  return handle;
 }
 
 uvp::io::byte_stream accept_byte_stream(uvp::http::upgrade_request& req, accept_options options) {

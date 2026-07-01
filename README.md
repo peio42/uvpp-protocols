@@ -187,8 +187,8 @@ Planning and review material:
 
 - [Roadmap](docs/roadmap.md)
 - [Proposals](docs/proposals/README.md)
-- [API audit](docs/audits/api.md)
-- [Code quality audit](docs/audits/code-quality.md)
+- [Archived code quality audit](docs/archive/code-quality-audit.md)
+- [Archived API audit](docs/archive/api-audit.md)
 
 ## Status
 

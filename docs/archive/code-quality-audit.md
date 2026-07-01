@@ -2,8 +2,12 @@
 _(Temporary working file - sorry for the French)_
 
 Cet audit couvre l'écriture, la cohérence, la lisibilité et la correction du
-code. Il est distinct de l'audit API (`api.md`) ; les deux se
+code. Il est distinct de l'audit API archivé (`api-audit.md`) ; les deux se
 complètent.
+
+**Statut : clôturé.** Les correctifs nécessaires ont été appliqués, les sujets
+volontairement différés sont documentés comme décisions ou proposals, et les
+points purement stylistiques ont été normalisés ou classés.
 
 ---
 
@@ -42,8 +46,8 @@ Ce point a été corrigé avec `accept_options::auto_pong(bool)`.
 ```cpp
 void dispatch_ping(std::span<const std::byte> payload) {
     auto handle = session{shared_from_this()};
-    if (options.on_ping()) {
-        options.on_ping()(handle, payload);  // user callback
+    if (on_ping) {
+        on_ping(handle, payload);  // user callback
     }
     if (options.auto_pong()) {
         send_frame(opcode::pong, payload);
@@ -120,7 +124,7 @@ de concaténer des chaînes.
 
 ---
 
-## 6. `as_bytes()` défini dans deux unités de traduction
+## 6. 🟢 Décision — `as_bytes()` défini dans deux unités de traduction
 
 **Fichiers :** `src/http/server.cpp`, `examples/log_streaming.cpp`
 
@@ -135,6 +139,11 @@ std::span<const std::byte> as_bytes(const std::string& value) noexcept { ... }
 La même conversion est redéfinie deux fois. En C++20, `std::as_bytes` couvre
 ce cas. À défaut, une version commune dans un header utilitaire éviterait
 cette duplication.
+
+Décision : ne pas introduire de header utilitaire commun pour ce micro-helper.
+Les deux fonctions ont une liaison interne et ne créent pas de risque ODR. Le
+helper local dans `server.cpp` garde lisible l'écriture du buffer possédé ; celui
+de l'exemple reste cosmétique et acceptable.
 
 ---
 
@@ -151,6 +160,14 @@ internes :
 Les deux structs jouent un rôle symétrique (état interne d'une session) et
 appliquent des conventions opposées. La cohérence devrait s'appliquer à
 l'ensemble du projet.
+
+**Décision : règle documentée, migration planifiée.** Les règles de stockage,
+suffixe `_` et accès public sont maintenant décrites dans
+[`api-principles.md`](../design/api-principles.md). La remise à plat du code
+est suivie dans
+[`member-naming-normalization.md`](../proposals/member-naming-normalization.md)
+afin de traiter ce changement comme une passe mécanique dédiée plutôt qu'un
+refactoring opportuniste.
 
 ---
 
@@ -173,6 +190,10 @@ La variable locale `on_write` porte le même nom que la méthode courante.
 Bien que correct en l'état (les appels sont bien distincts), c'est une source
 de confusion lors de la lecture du code.
 
+**Statut : résolu.** La variable locale a été renommée `write_callback`, ce qui
+distingue clairement le callback applicatif déplacé depuis la file d'écriture
+de la méthode `on_write(...)`.
+
 ---
 
 ## 9. `header_name_equals` crée un objet `headers` temporaire
@@ -190,6 +211,15 @@ alloue un `headers` complet (avec son `vector<pair<string,string>>`), insère
 une entrée, puis vérifie la présence. La raison est que `headers::names_equal`
 est privé. Le correctif serait de rendre `names_equal` accessible (méthode
 statique publique ou fonction libre) pour éviter cette allocation.
+
+**Statut : résolu.** `headers::names_equal` est maintenant une méthode statique
+publique et `server.cpp` l'utilise directement :
+
+```cpp
+bool header_name_equals(std::string_view name, std::string_view expected) noexcept {
+    return headers::names_equal(name, expected);
+}
+```
 
 ---
 
@@ -214,11 +244,27 @@ La version de `server.cpp` enveloppe celle de `status.cpp` mais duplique
 tout le `switch`. Le code devrait juste caster l'entier en `status` et appeler
 `reason_phrase`, ou étendre `reason_phrase` pour accepter un entier.
 
+**Statut : résolu.** Le helper local ne duplique plus le `switch` et délègue
+directement à `reason_phrase(status)` :
+
+```cpp
+std::string_view reason_phrase_for(unsigned int status_code) noexcept {
+    return reason_phrase(static_cast<status>(status_code));
+}
+```
+
+Les codes numériques valides qui ne correspondent à aucun énumérateur nommé
+restent acceptés par `response::status(unsigned int)` et sérialisés avec une
+reason phrase vide.
+
 ---
 
-## 11. `http1_event` transporte toujours les deux champs
+## 11. ✅ Résolu — `http1_event` transporte toujours les deux champs
 
 **Fichier :** `src/http/detail/http1_state_machine.hpp`
+
+Avant correction, `http1_event` portait toujours un `http1_message` et une
+`std::string` de body :
 
 ```cpp
 struct http1_event {
@@ -228,13 +274,13 @@ struct http1_event {
 };
 ```
 
-Pour les événements de type `body`, `message` est un `http1_message`
-default-construit (avec un `headers` vide et des strings allouées). Pour les
-événements `headers` et `complete`, `body` est une string vide. Chaque
-événement porte systématiquement des données inutiles.
+Pour les événements de type `body`, `message` était un `http1_message`
+default-construit. Pour les événements `headers` et `complete`, `body` était une
+string vide. Chaque événement portait systématiquement des données inutiles.
 
-**Correctif :** `std::variant<http1_message, std::string>`, ou des types
-d'événements distincts.
+Résolution : `http1_event` utilise maintenant un `std::variant` de payloads
+typés (`headers_payload`, `body_payload`, `complete_payload`) et expose des
+helpers d'accès alignés avec le type de l'événement.
 
 ---
 
@@ -256,6 +302,10 @@ La valeur `2` est une constante interne de llhttp qui signifie « pause et
 signale upgrade ». Elle n'est pas définie comme constante nommée dans les
 headers publics de llhttp. Un commentaire explicatif s'impose au minimum :
 `return 2; // HPE_PAUSED_UPGRADE: signal llhttp to pause for upgrade`.
+
+**Statut : résolu.** Le `return 2` porte maintenant un commentaire local qui
+explique le contrat llhttp : cette valeur met le parser en pause avec
+`HPE_PAUSED_UPGRADE`.
 
 ---
 
@@ -294,7 +344,7 @@ politiques HTTP/WebSocket aux sessions.
 
 ---
 
-## 14. `(void)req` vs paramètre non nommé dans les exemples
+## 14. ✅ Résolu — `(void)req` vs paramètre non nommé dans les exemples
 
 Les exemples n'adoptent pas de convention uniforme pour ignorer un paramètre
 inutilisé :
@@ -315,9 +365,14 @@ srv.get("/health", [](uvp::http::request&, uvp::http::response& res) {
 La forme sans nom est idiomatique en C++ moderne et plus concise. Le pattern
 `(void)param` est utilisé dans certains fichiers, pas dans d'autres.
 
+Résolution : les exemples et extraits de documentation concernés utilisent
+maintenant des paramètres non nommés lorsque le paramètre n'est pas utilisé.
+Les `(void)` restants ignorent soit une valeur de retour, soit des variables
+locales volontairement montrées dans un extrait explicatif.
+
 ---
 
-## 15. Sérialisation incorrecte du booléen dans `local_json_api.cpp`
+## 15. ✅ Résolu — Sérialisation incorrecte du booléen dans `local_json_api.cpp`
 
 **Fichier :** `examples/local_json_api.cpp`
 
@@ -329,15 +384,18 @@ Le champ `done` est sérialisé comme une chaîne JSON (`"true"` / `"false"`)
 plutôt que comme un booléen JSON (`true` / `false`). La différence est
 notable pour tout client qui parse le JSON de façon stricte.
 
+Résolution : l'exemple construit maintenant de vraies valeurs `uvp::json`.
+`done` est sérialisé depuis un booléen C++ et sort donc comme booléen JSON.
+
 ---
 
-## 16. `require_positive` non appelé pour `max_body_bytes`
+## 16. ✅ Résolu — `require_positive` non appelé pour `max_body_bytes`
 
 **Fichier :** `src/http/server_options.cpp`
 
-Les setters `max_header_bytes`, `max_pending_write_bytes`,
-`max_pending_responses_per_connection` valident leur argument via
-`require_positive`. Le setter `max_body_bytes` ne le fait pas :
+Avant correction, les setters `max_header_bytes`, `max_pending_write_bytes`,
+`max_pending_responses_per_connection` validaient leur argument via
+`require_positive`, mais le setter `max_body_bytes` ne le faisait pas :
 
 ```cpp
 server_options& server_options::max_body_bytes(std::size_t value) & {
@@ -346,9 +404,16 @@ server_options& server_options::max_body_bytes(std::size_t value) & {
 }
 ```
 
-Aucun commentaire n'explique si c'est intentionnel (0 signifiant « pas de
-body ») ou un oubli. La divergence avec les autres setters nuit à la
+Aucun commentaire n'expliquait si c'était intentionnel (0 signifiant « pas de
+body ») ou un oubli. La divergence avec les autres setters nuisait à la
 lisibilité.
+
+Résolution : `server_options::max_body_bytes(...)` et
+`server_options::validate()` refusent maintenant `0`. La documentation précise
+que `body::none{}` modélise une route sans body. La sentinelle `0` encore
+utilisée en interne par `route_options` pour exprimer l'héritage de la limite
+serveur est suivie dans la proposal
+[`route-body-limit-inheritance`](../proposals/route-body-limit-inheritance.md).
 
 ---
 
@@ -359,12 +424,15 @@ lisibilité.
 | ✅ Résolu | `server.cpp` | `server` non déplaçable, plus de référence pendante |
 | ✅ Résolu | `websocket/detail/handshake.cpp` | SHA-1 WebSocket délégué à OpenSSL EVP et testé |
 | ✅ Résolu | `websocket/session.cpp` | `read_buffer` utilise un offset et un compactage amorti |
+| ✅ Résolu | exemples | JSON sérialisé par `uvp::json` |
+| 🟢 Décision | `server.cpp`, `examples/log_streaming.cpp` | Helpers `as_bytes` locaux tolérés |
 | 🟢 Décision | `server.cpp`, `websocket/session.cpp` | Files d'écriture séparées, abstraction différée |
-| 🟡 Lisibilité | `server.cpp` | `header_name_equals` alloue inutilement |
-| 🟡 Lisibilité | `server.cpp` | `reason_phrase_for` duplique `reason_phrase` |
-| 🟡 Lisibilité | `http1_state_machine.cpp` | Nombre magique `return 2` sans commentaire |
-| 🟡 Cohérence | multiple | Convention d'underscore member incohérente |
-| 🟡 Cohérence | `websocket/session.cpp` | Variable locale `on_write` occulte la méthode |
-| 🟡 Cohérence | `server_options.cpp` | `max_body_bytes` sans validation contrairement aux autres |
-| 🟡 Mémoire | `http1_state_machine.hpp` | `http1_event` porte toujours deux champs dont un vide |
-| 🟢 Style | exemples | `(void)req` vs paramètre non nommé incohérent |
+| ✅ Résolu | `server.cpp`, `headers.hpp` | `header_name_equals` compare sans allocation |
+| ✅ Résolu | `server.cpp` | `reason_phrase_for` délègue à `reason_phrase` |
+| ✅ Résolu | `http1_state_machine.cpp` | `return 2` documente le signal `HPE_PAUSED_UPGRADE` |
+| 🟢 Cadré | multiple | Convention d'underscore member documentée, migration proposée |
+| ✅ Résolu | `websocket/session.cpp` | Variable locale `on_write` renommée `write_callback` |
+| ✅ Résolu | `server_options.cpp` | `max_body_bytes` valide les limites serveur strictement positives |
+| ✅ Résolu | `http1_state_machine.hpp` | `http1_event` porte un payload typé via `std::variant` |
+| ✅ Résolu | exemples | Paramètres inutilisés non nommés |
+| ✅ Résolu | `examples/local_json_api.cpp` | `done` sérialisé comme booléen JSON |

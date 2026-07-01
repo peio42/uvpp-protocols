@@ -1,6 +1,7 @@
 #include <uvpp/protocols/http/server.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <deque>
@@ -15,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include <uvpp/handles/timer.hpp>
 #include <uvpp/protocols/http/request.hpp>
 #include <uvpp/protocols/http/response.hpp>
 #include <uvpp/protocols/io/tcp_listener.hpp>
@@ -71,55 +73,12 @@ std::string allow_header_value(std::vector<method> methods) {
   return value;
 }
 
-std::string reason_phrase_for(unsigned int status_code) {
-  switch (status_code) {
-  case 200:
-    return std::string(reason_phrase(status::ok));
-  case 201:
-    return std::string(reason_phrase(status::created));
-  case 204:
-    return std::string(reason_phrase(status::no_content));
-  case 301:
-    return std::string(reason_phrase(status::moved_permanently));
-  case 302:
-    return std::string(reason_phrase(status::found));
-  case 304:
-    return std::string(reason_phrase(status::not_modified));
-  case 400:
-    return std::string(reason_phrase(status::bad_request));
-  case 401:
-    return std::string(reason_phrase(status::unauthorized));
-  case 403:
-    return std::string(reason_phrase(status::forbidden));
-  case 404:
-    return std::string(reason_phrase(status::not_found));
-  case 405:
-    return std::string(reason_phrase(status::method_not_allowed));
-  case 408:
-    return std::string(reason_phrase(status::request_timeout));
-  case 409:
-    return std::string(reason_phrase(status::conflict));
-  case 413:
-    return std::string(reason_phrase(status::payload_too_large));
-  case 422:
-    return std::string(reason_phrase(status::unprocessable_content));
-  case 429:
-    return std::string(reason_phrase(status::too_many_requests));
-  case 500:
-    return std::string(reason_phrase(status::internal_server_error));
-  case 501:
-    return std::string(reason_phrase(status::not_implemented));
-  case 502:
-    return std::string(reason_phrase(status::bad_gateway));
-  case 503:
-    return std::string(reason_phrase(status::service_unavailable));
-  default:
-    return {};
-  }
+std::string_view reason_phrase_for(unsigned int status_code) noexcept {
+  return reason_phrase(static_cast<status>(status_code));
 }
 
 bool header_name_equals(std::string_view name, std::string_view expected) noexcept {
-  return headers{}.set(name, "").contains(expected);
+  return headers::names_equal(name, expected);
 }
 
 std::string serialize_response_head(
@@ -222,6 +181,8 @@ struct server::impl {
 
   struct response_slot {
     response res;
+    request_snapshot request;
+    std::vector<response_hook_handle> on_response_hooks;
     bool completed = false;
     bool close_after = false;
     bool suppress_body = false;
@@ -229,19 +190,27 @@ struct server::impl {
     bool stream_headers_queued = false;
     bool stream_backpressured = false;
     bool stream_ended = false;
+    bool response_hooks_ran = false;
+    std::size_t stream_body_bytes = 0;
     std::deque<pending_write> stream_writes;
   };
 
   class session : public std::enable_shared_from_this<session> {
   public:
     session(impl& owner, uvp::io::byte_stream stream)
-        : owner_(owner), stream_(std::move(stream)) {}
+        : owner_(owner),
+          stream_(std::move(stream)),
+          timeout_timer_(owner.owner.loop()) {}
 
     void start() {
+      start_timeout(timeout_phase::header, owner_.owner.options_.header_timeout());
       start_read();
     }
 
     void start_read() {
+      if (closed_) {
+        return;
+      }
       auto self = weak_from_this();
       stream_.read_start([self](uvp::io::read_result result) {
         if (auto session = self.lock()) {
@@ -255,6 +224,7 @@ struct server::impl {
         return;
       }
       closed_ = true;
+      close_timeout_timer();
       cancel_pending_responses();
       try {
         stream_.read_stop();
@@ -269,8 +239,15 @@ struct server::impl {
     }
 
   private:
+    enum class timeout_phase {
+      none,
+      header,
+      body,
+      idle,
+    };
+
     void on_read(uvp::io::read_result result) {
-      if (closed_) {
+      if (closed_ || timeout_closing_) {
         return;
       }
 
@@ -286,6 +263,13 @@ struct server::impl {
         return;
       }
 
+      if (timeout_phase_ == timeout_phase::idle) {
+        stop_timeout();
+        start_timeout(timeout_phase::header, owner_.owner.options_.header_timeout());
+      } else if (timeout_phase_ == timeout_phase::none && !active_request_) {
+        start_timeout(timeout_phase::header, owner_.owner.options_.header_timeout());
+      }
+
       const auto bytes = result.bytes();
       auto parse_result = parser_.parse(std::string_view{
         reinterpret_cast<const char*>(bytes.data()),
@@ -293,6 +277,7 @@ struct server::impl {
       });
 
       if (parse_result.code == detail::http1_parse_result::status::error) {
+        stop_timeout();
         send_error(status::bad_request, false);
         return;
       }
@@ -310,6 +295,7 @@ struct server::impl {
     struct active_request_state {
       detail::http1_message headers;
       router::match_result route;
+      detail::route_path parsed_path;
       request req;
       request_body_stream body_stream;
       std::shared_ptr<response_slot> slot;
@@ -329,11 +315,15 @@ struct server::impl {
       return route.max_body_bytes == 0 ? owner_.owner.options_.max_body_bytes() : route.max_body_bytes;
     }
 
+    std::chrono::milliseconds route_body_timeout(const router::match_result& route) const noexcept {
+      return route.body_timeout.count() == 0 ? owner_.owner.options_.body_timeout() : route.body_timeout;
+    }
+
     connection_info connection() const {
       return connection_info{stream_.local_endpoint(), stream_.remote_endpoint()};
     }
 
-    router::match_result match_request_route(method method_value, std::string_view path) const {
+    router::match_result match_request_route(method method_value, const detail::route_path& path) const {
       auto route_match = owner_.owner.router_.match(method_value, path);
       if (!route_match && method_value == method::head) {
         route_match = owner_.owner.router_.match(method::get, path);
@@ -359,7 +349,7 @@ struct server::impl {
     void process_parser_events(bool stop_before_complete = false) {
       const auto& events = parser_.events();
       while (!closed_ && !body_processing_paused_ && handled_events_ < events.size()) {
-        if (stop_before_complete && events[handled_events_].event_type == detail::http1_event::type::complete) {
+        if (stop_before_complete && events[handled_events_].event_type() == detail::http1_event::type::complete) {
           return;
         }
         handle_event(events[handled_events_++]);
@@ -367,21 +357,30 @@ struct server::impl {
     }
 
     void handle_event(const detail::http1_event& event) {
-      switch (event.event_type) {
+      switch (event.event_type()) {
       case detail::http1_event::type::headers:
-        handle_headers(event.message);
+        handle_headers(event.message());
         break;
       case detail::http1_event::type::body:
-        handle_body_chunk(event.body);
+        handle_body_chunk(event.body());
         break;
       case detail::http1_event::type::complete:
-        handle_message_complete(event.message);
+        handle_message_complete(event.message());
         break;
       }
     }
 
     void handle_headers(const detail::http1_message& message) {
+      stop_timeout();
       const auto [path, query] = split_path_query(message.target);
+      const auto parsed_path = detail::parse_route_path(path);
+      if (!parsed_path.valid) {
+        active_request_ = std::make_unique<active_request_state>();
+        active_request_->headers = message;
+        active_request_->rejected = true;
+        send_error(status::bad_request, false);
+        return;
+      }
       auto req = request{
         message.method,
         message.target,
@@ -391,29 +390,48 @@ struct server::impl {
         {},
         route_params{},
         connection(),
+        parsed_path.decoded_segments,
       };
-      auto route_match = match_request_route(req.method(), req.path());
+      auto route_match = match_request_route(req.method(), parsed_path);
       if (route_match) {
         req.params_ = route_match.params;
+        req.matched_pattern_ = route_match.pattern;
       }
 
       active_request_ = std::make_unique<active_request_state>();
       active_request_->headers = message;
       active_request_->route = std::move(route_match);
+      active_request_->parsed_path = parsed_path;
       active_request_->req = std::move(req);
 
       if (!active_request_->route || active_request_->route.body != detail::body_mode::stream) {
         if (active_request_->route && active_request_->route.body == detail::body_mode::none && request_has_body(message)) {
           active_request_->rejected = true;
           send_error(status::bad_request, false);
+          return;
+        }
+        start_body_timeout_if_needed();
+        if (active_request_->route) {
+          const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive && !request_has_body(message);
+          if (!run_on_request_hooks(*active_request_, !keep_alive, active_request_->req.method() == method::head)) {
+            stop_timeout();
+          }
         }
         return;
       }
 
-      const auto keep_alive = owner_.owner.options_.keep_alive();
+      const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive;
+      start_body_timeout_if_needed();
       active_request_->slot = create_response_slot(!keep_alive, active_request_->req.method() == method::head);
       if (!active_request_->slot) {
         active_request_->rejected = true;
+        stop_timeout();
+        return;
+      }
+      configure_response_observation(*active_request_->slot, active_request_->req, active_request_->route.on_response_hooks);
+
+      if (!run_on_request_hooks(*active_request_, !keep_alive, active_request_->req.method() == method::head)) {
+        stop_timeout();
         return;
       }
 
@@ -446,9 +464,14 @@ struct server::impl {
       response& res = active.slot->res;
 
       try {
+        if (!run_hooks(active.route.pre_handler_hooks, active.req, res)) {
+          finish_response_if_needed(res);
+          active.rejected = true;
+          return;
+        }
         (*active.route.handler)(active.req, res, {}, &active.body_stream);
       } catch (...) {
-        handle_exception(active.req, res, std::current_exception());
+        handle_exception(active.req, res, std::current_exception(), active.route.exception_handler);
         active.rejected = true;
       }
     }
@@ -458,10 +481,12 @@ struct server::impl {
         return;
       }
 
+      refresh_body_timeout();
       auto& active = *active_request_;
       active.received_body_bytes += chunk.size();
       if (active.route && active.received_body_bytes > route_body_limit(active.route)) {
         active.rejected = true;
+        stop_timeout();
         if (active.route.body == detail::body_mode::stream) {
           active.body_stream.emit_error(std::make_error_code(std::errc::message_size));
         }
@@ -484,6 +509,7 @@ struct server::impl {
       }
 
       auto active = std::move(active_request_);
+      stop_timeout();
       if (active->rejected) {
         return;
       }
@@ -493,13 +519,24 @@ struct server::impl {
         return;
       }
 
-      handle_buffered_message(message, std::move(active->route));
+      handle_buffered_message(
+        message,
+        std::move(active->route),
+        active->parsed_path,
+        std::move(active->slot));
     }
 
-    void handle_buffered_message(const detail::http1_message& message, router::match_result route_match) {
+    void handle_buffered_message(
+      const detail::http1_message& message,
+      router::match_result route_match,
+      const detail::route_path& parsed_path,
+      std::shared_ptr<response_slot> existing_slot = {}) {
       const auto [path, query] = split_path_query(message.target);
       const auto keep_alive = owner_.owner.options_.keep_alive() && message.keep_alive;
-      auto slot = create_response_slot(!keep_alive, message.method == method::head);
+      auto slot = std::move(existing_slot);
+      if (!slot) {
+        slot = create_response_slot(!keep_alive, message.method == method::head);
+      }
       if (!slot) {
         return;
       }
@@ -521,15 +558,23 @@ struct server::impl {
         body_bytes(message.body),
         route_params{},
         connection(),
+        parsed_path.decoded_segments,
       };
 
       response& res = slot->res;
 
       if (!route_match) {
+        auto fallback = owner_.owner.router_.fallback(parsed_path);
+        req.params_ = std::move(fallback.params);
         try {
-          auto allowed_methods = owner_.owner.router_.allowed_methods(path);
+          auto allowed_methods = owner_.owner.router_.allowed_methods(parsed_path);
           if (!allowed_methods.empty()) {
             dispatch_automatic_method_response(req, res, std::move(allowed_methods));
+          } else if (fallback.not_found_handler) {
+            (*fallback.not_found_handler)(req, res, {}, nullptr);
+            if (!res.ended() && !res.deferred() && !res.streaming()) {
+              res.end();
+            }
           } else if (owner_.owner.not_found_handler_) {
             owner_.owner.not_found_handler_(req, res, {}, nullptr);
             if (!res.ended() && !res.deferred() && !res.streaming()) {
@@ -539,7 +584,7 @@ struct server::impl {
             res.status(status::not_found).text("not found\n");
           }
         } catch (...) {
-          handle_exception(req, res, std::current_exception());
+          handle_exception(req, res, std::current_exception(), fallback.exception_handler);
           return;
         }
         if (!res.ended() && !res.deferred() && !res.streaming()) {
@@ -549,24 +594,37 @@ struct server::impl {
       }
 
       req.params_ = std::move(route_match.params);
+      req.matched_pattern_ = route_match.pattern;
+      const auto* exception_handler = route_match.exception_handler;
+      configure_response_observation(*slot, req, route_match.on_response_hooks);
 
       try {
+        if (!run_hooks(route_match.pre_handler_hooks, req, res)) {
+          finish_response_if_needed(res);
+          return;
+        }
         auto body = req.body_bytes();
         (*route_match.handler)(req, res, body, nullptr);
-        if (!res.ended() && !res.deferred() && !res.streaming()) {
-          res.end();
-        }
+        finish_response_if_needed(res);
       } catch (...) {
-        handle_exception(req, res, std::current_exception());
+        handle_exception(req, res, std::current_exception(), exception_handler);
         return;
       }
     }
 
     void handle_message(const detail::http1_message& message) {
-      handle_buffered_message(message, match_request_route(message.method, split_path_query(message.target).first));
+      const auto [path, query] = split_path_query(message.target);
+      (void)query;
+      const auto parsed_path = detail::parse_route_path(path);
+      if (!parsed_path.valid) {
+        send_error(status::bad_request, false);
+        return;
+      }
+      handle_buffered_message(message, match_request_route(message.method, parsed_path), parsed_path);
     }
 
     void pause_request_body() {
+      stop_timeout();
       body_processing_paused_ = true;
       try {
         stream_.read_stop();
@@ -579,17 +637,23 @@ struct server::impl {
         return;
       }
       body_processing_paused_ = false;
+      start_body_timeout_if_needed();
       process_parser_events();
       if (!closed_ && !body_processing_paused_) {
         start_read();
       }
     }
 
-    void handle_exception(request& req, response& res, std::exception_ptr error) {
+    void handle_exception(
+      request& req,
+      response& res,
+      std::exception_ptr error,
+      const exception_handler_type* scoped_handler = nullptr) {
       res.reset();
-      if (owner_.owner.error_handler_) {
+      const auto* handler = scoped_handler ? scoped_handler : &owner_.owner.exception_handler_;
+      if (*handler) {
         try {
-          owner_.owner.error_handler_(req, res, std::move(error));
+          (*handler)(req, res, std::move(error));
           if (!res.ended() && !res.deferred() && !res.streaming()) {
             res.end();
           }
@@ -599,6 +663,117 @@ struct server::impl {
         }
       } else {
         res.status(status::internal_server_error).text("internal server error\n");
+      }
+    }
+
+    bool run_on_request_hooks(active_request_state& active, bool close_after, bool suppress_body) {
+      if (active.route.on_request_hooks.empty()) {
+        return true;
+      }
+
+      if (!active.slot) {
+        active.slot = create_response_slot(close_after, suppress_body);
+        if (!active.slot) {
+          active.rejected = true;
+          return false;
+        }
+      }
+      configure_response_observation(*active.slot, active.req, active.route.on_response_hooks);
+
+      dispatching_response_ = true;
+      struct dispatch_guard {
+        session& self;
+        ~dispatch_guard() {
+          self.dispatching_response_ = false;
+          self.flush_response_slots();
+        }
+      } guard{*this};
+
+      response& res = active.slot->res;
+      try {
+        if (!run_hooks(active.route.on_request_hooks, active.req, res)) {
+          finish_response_if_needed(res);
+          active.rejected = true;
+          return false;
+        }
+      } catch (...) {
+        handle_exception(active.req, res, std::current_exception(), active.route.exception_handler);
+        active.rejected = true;
+        return false;
+      }
+
+      return true;
+    }
+
+    bool run_hooks(const std::vector<const hook_type*>& hooks, request& req, response& res) {
+      for (const auto* hook : hooks) {
+        const auto result = (*hook)(req, res);
+        if (result == hook_result::stop || res.ended() || res.deferred() || res.streaming()) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    void finish_response_if_needed(response& res) {
+      if (!res.ended() && !res.deferred() && !res.streaming()) {
+        res.end();
+      }
+    }
+
+    request_snapshot snapshot_request(const request& req) const {
+      return request_snapshot{
+        req.method(),
+        std::string(req.target()),
+        std::string(req.path()),
+        std::string(req.query()),
+        std::string(req.matched_pattern()),
+        req.params(),
+        req.connection(),
+      };
+    }
+
+    void configure_response_observation(
+      response_slot& slot,
+      const request& req,
+      std::vector<response_hook_handle> hooks) {
+      slot.request = snapshot_request(req);
+      slot.on_response_hooks = std::move(hooks);
+    }
+
+    std::size_t response_body_size(const response_slot& slot) const noexcept {
+      if (slot.streaming) {
+        return slot.stream_body_bytes;
+      }
+      if (slot.res.status_code() == static_cast<unsigned int>(status::no_content)) {
+        return 0;
+      }
+      return slot.res.body().size();
+    }
+
+    void run_response_hooks(response_slot& slot, response_outcome outcome) noexcept {
+      if (slot.response_hooks_ran) {
+        return;
+      }
+      slot.response_hooks_ran = true;
+
+      if (slot.on_response_hooks.empty()) {
+        return;
+      }
+
+      const auto info = response_info{
+        slot.request,
+        slot.res.status_code(),
+        slot.res.headers(),
+        response_body_size(slot),
+        outcome,
+      };
+
+      for (auto hook = slot.on_response_hooks.rbegin(); hook != slot.on_response_hooks.rend(); ++hook) {
+        try {
+          (**hook)(info);
+        } catch (...) {
+        }
       }
     }
 
@@ -615,11 +790,20 @@ struct server::impl {
       }
 
       const auto [path, query] = split_path_query(active_request_->headers.target);
+      const auto parsed_path = detail::parse_route_path(path);
+      if (!parsed_path.valid) {
+        send_error(status::bad_request, false);
+        return;
+      }
       route_params params;
       const server::upgrade_route* route = nullptr;
       for (const auto& candidate : owner_.owner.upgrade_routes_) {
         params = {};
-        if (detail::route_pattern_matches(candidate.pattern, path, params)) {
+        if (detail::route_pattern_matches(
+              candidate.parsed_pattern,
+              parsed_path,
+              owner_.owner.options_.route_path_matching(),
+              params)) {
           route = &candidate;
           break;
         }
@@ -644,6 +828,7 @@ struct server::impl {
             session->accept_upgrade(std::move(response), std::move(on_accept));
           }
         },
+        parsed_path.decoded_segments,
       };
 
       try {
@@ -654,6 +839,7 @@ struct server::impl {
     }
 
     void accept_upgrade(std::string response, upgrade_request::accept_callback on_accept) {
+      close_timeout_timer();
       try {
         stream_.read_stop();
       } catch (...) {
@@ -708,6 +894,7 @@ struct server::impl {
       }
 
       slot->completed = true;
+      run_response_hooks(*slot, response_outcome::completed);
       if (!dispatching_response_) {
         flush_response_slots();
       }
@@ -751,6 +938,17 @@ struct server::impl {
       for (auto& slot : responses_) {
         if (!slot->completed) {
           slot->res.cancel();
+          run_response_hooks(*slot, response_outcome::cancelled);
+        }
+      }
+      responses_.clear();
+    }
+
+    void cancel_pending_responses(std::error_code) noexcept {
+      for (auto& slot : responses_) {
+        if (!slot->completed) {
+          slot->res.cancel();
+          run_response_hooks(*slot, response_outcome::error);
         }
       }
       responses_.clear();
@@ -798,6 +996,7 @@ struct server::impl {
       }
 
       if (!slot.suppress_body && !payload.empty()) {
+        slot.stream_body_bytes += payload.size();
         queue_stream_write(slot, serialize_chunk(std::move(payload)));
       }
 
@@ -871,6 +1070,7 @@ struct server::impl {
 
       if (error) {
         notify_stream_errors(error.code());
+        cancel_pending_responses(error.code());
         close();
         return;
       }
@@ -901,6 +1101,7 @@ struct server::impl {
       }
 
       flush_next();
+      maybe_start_idle_timeout();
     }
 
     void notify_drains() {
@@ -917,6 +1118,116 @@ struct server::impl {
       }
     }
 
+    void start_timeout(timeout_phase phase, std::chrono::milliseconds duration) {
+      if (closed_ || timeout_timer_closed_) {
+        return;
+      }
+      stop_timeout();
+      timeout_phase_ = phase;
+      timeout_timer_active_ = true;
+      auto self = weak_from_this();
+      timeout_timer_.start(duration, [self, phase](uv::timer&) {
+        if (auto session = self.lock()) {
+          session->on_timeout(phase);
+        }
+      });
+    }
+
+    void stop_timeout() noexcept {
+      if (timeout_timer_closed_) {
+        timeout_phase_ = timeout_phase::none;
+        timeout_timer_active_ = false;
+        return;
+      }
+      if (timeout_timer_active_) {
+        try {
+          timeout_timer_.stop();
+        } catch (...) {
+        }
+      }
+      timeout_phase_ = timeout_phase::none;
+      timeout_timer_active_ = false;
+    }
+
+    void close_timeout_timer() noexcept {
+      if (timeout_timer_closed_) {
+        return;
+      }
+      stop_timeout();
+      timeout_timer_closed_ = true;
+      if (auto self = weak_from_this().lock()) {
+        timeout_timer_.close([self](uv::timer&) {});
+      } else {
+        timeout_timer_.close();
+      }
+    }
+
+    void on_timeout(timeout_phase phase) {
+      if (closed_ || timeout_timer_closed_ || phase != timeout_phase_) {
+        return;
+      }
+      timeout_timer_active_ = false;
+      timeout_phase_ = timeout_phase::none;
+
+      switch (phase) {
+      case timeout_phase::header:
+        timeout_closing_ = true;
+        try {
+          stream_.read_stop();
+        } catch (...) {
+        }
+        send_error(status::request_timeout, false);
+        break;
+      case timeout_phase::body: {
+        const auto error = std::make_error_code(std::errc::timed_out);
+        timeout_closing_ = true;
+        if (active_request_ && active_request_->route && active_request_->route.body == detail::body_mode::stream) {
+          active_request_->body_stream.emit_error(error);
+        }
+        notify_stream_errors(error);
+        cancel_pending_responses(error);
+        close();
+        break;
+      }
+      case timeout_phase::idle:
+        close();
+        break;
+      case timeout_phase::none:
+        break;
+      }
+    }
+
+    void start_body_timeout_if_needed() {
+      if (!active_request_ || active_request_->rejected || body_processing_paused_ || !request_has_body(active_request_->headers)) {
+        return;
+      }
+      if (active_request_->route) {
+        start_timeout(timeout_phase::body, route_body_timeout(active_request_->route));
+      } else {
+        start_timeout(timeout_phase::body, owner_.owner.options_.body_timeout());
+      }
+    }
+
+    void refresh_body_timeout() {
+      if (timeout_phase_ != timeout_phase::body) {
+        return;
+      }
+      start_body_timeout_if_needed();
+    }
+
+    void maybe_start_idle_timeout() {
+      if (closed_ || timeout_closing_ || timeout_phase_ != timeout_phase::none || !owner_.owner.options_.keep_alive()) {
+        return;
+      }
+      if (active_request_ || body_processing_paused_ || writing_ || !writes_.empty() || !responses_.empty()) {
+        return;
+      }
+      if (pending_response_writes_ != 0 || handled_events_ < parser_.events().size()) {
+        return;
+      }
+      start_timeout(timeout_phase::idle, owner_.owner.options_.idle_timeout());
+    }
+
     void notify_stream_errors(std::error_code error) {
       for (auto& slot : responses_) {
         if (slot->streaming && !slot->completed) {
@@ -927,6 +1238,7 @@ struct server::impl {
 
     impl& owner_;
     uvp::io::byte_stream stream_;
+    uv::timer timeout_timer_;
     detail::http1_state_machine parser_;
     std::size_t handled_events_ = 0;
     std::size_t pending_response_writes_ = 0;
@@ -938,6 +1250,10 @@ struct server::impl {
     bool dispatching_response_ = false;
     bool body_processing_paused_ = false;
     bool closed_ = false;
+    bool timeout_closing_ = false;
+    bool timeout_timer_active_ = false;
+    bool timeout_timer_closed_ = false;
+    timeout_phase timeout_phase_ = timeout_phase::none;
   };
 
   void add_listener(uvp::io::stream_listener listener) {
@@ -978,11 +1294,27 @@ server::server(uv::loop& loop)
     : server(loop, server_options{}) {}
 
 server::server(uv::loop& loop, server_options options)
-    : loop_(&loop), options_(options), impl_(std::make_unique<impl>(*this)) {
+    : loop_(&loop),
+      options_(options),
+      router_(options_.route_path_matching()),
+      impl_(std::make_unique<impl>(*this)) {
   options_.validate();
 }
 
 server::~server() = default;
+
+server& server::add_upgrade_route(std::string_view pattern, upgrade_handler_type handler) {
+  auto parsed_pattern = detail::parse_route_path(pattern);
+  if (!parsed_pattern.valid) {
+    throw std::invalid_argument("HTTP upgrade route pattern contains invalid percent encoding");
+  }
+
+  upgrade_routes_.push_back(upgrade_route{
+    std::move(parsed_pattern),
+    std::move(handler),
+  });
+  return *this;
+}
 
 void server::listen(std::string_view host, unsigned int port) {
   auto listener = uvp::io::tcp_listener{*loop_};

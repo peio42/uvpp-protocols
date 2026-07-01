@@ -69,8 +69,16 @@ Routes declare how the request body should be handled:
 
 ```cpp
 srv.get("/health", uvp::http::body::none{}, handler);
-srv.post("/echo", uvp::http::body::bytes{.max_size = 64 * 1024}, handler);
-srv.post("/message", uvp::http::body::text{.max_size = 64 * 1024}, handler);
+srv.post(
+  "/echo",
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::bytes{},
+  handler);
+srv.post(
+  "/message",
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::text{},
+  handler);
 srv.post("/events", uvp::http::body::stream{}, handler);
 ```
 
@@ -95,8 +103,37 @@ srv.post("/upload", [](uvp::http::request&, uvp::http::response&, uvp::http::req
 
 Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
 `body::stream{}` respectively.
-Use the explicit policy form when route limits or future typed policies such as
-JSON or multipart matter at the declaration site.
+Use `route_options` for route-level limits, and use the explicit policy form
+when future typed policies such as JSON or multipart matter at the declaration
+site.
+
+Route-level options can carry operational body settings next to the route
+declaration:
+
+```cpp
+srv.post(
+  "/upload",
+  uvp::http::route_options{}
+    .max_body_bytes(20 * 1024 * 1024)
+    .body_timeout(std::chrono::seconds{30}),
+  uvp::http::body::stream{},
+  upload_file);
+```
+
+Use `route_options::max_body_bytes(...)` when a route needs its own request
+body limit. Otherwise the server falls back to
+`server_options::max_body_bytes()`. Use
+`route_options::body_timeout(...)` when a route has a slower expected request
+body, such as an upload. Routes without an override use
+`server_options::body_timeout()`.
+
+Body limits must be greater than zero. Use `body::none{}` for routes that should
+not receive a request body; do not use `max_body_bytes(0)` for that case.
+
+`server_options::header_timeout(...)` applies while waiting for complete
+request headers. `server_options::idle_timeout(...)` applies while a
+keep-alive connection is open without an active request. Those two settings
+are connection-level policies, so they are not route options.
 
 ## Method Handling
 
@@ -105,6 +142,162 @@ returns `405 Method Not Allowed` with an `Allow` header. `HEAD` requests fall
 back to a matching `GET` route and omit the response body. `OPTIONS` requests
 for a known path are answered automatically with `204 No Content` and `Allow`
 unless an explicit `OPTIONS` route is registered.
+
+## Route Groups and Hooks
+
+Use route groups to share a path prefix and hooks across related routes:
+
+```cpp
+auto api = srv.group("/api/v1");
+
+api.on_request([](uvp::http::request& req, uvp::http::response& res) {
+  if (req.header("authorization").empty()) {
+    res.status(uvp::http::status::unauthorized).text("unauthorized\n");
+    return uvp::http::hook_result::stop;
+  }
+  return uvp::http::hook_result::next;
+});
+
+api.pre_handler([](uvp::http::request&, uvp::http::response& res) {
+  res.header("x-api", "v1");
+});
+
+api.on_response([](const uvp::http::response_info& info) {
+  // Observe status, response size, outcome, and a copied request snapshot.
+  record_request(info.request.path, info.status, info.response_body_size);
+});
+
+api.get("/health", [](uvp::http::request&, uvp::http::response& res) {
+  res.text("ok\n");
+});
+```
+
+Groups may be nested. Prefixes are normalized, so these declarations register
+`/api/v1/items/:id`:
+
+```cpp
+auto api = srv.group("/api");
+auto v1 = api.group("v1");
+v1.get("items/:id", show_item);
+```
+
+`on_request` runs after the route is matched and before the request body is
+buffered or handed to a streaming route. It can return `hook_result::stop` to
+short-circuit the final handler. A hook that writes, defers, or starts a
+streaming response also stops the chain.
+
+`pre_handler` runs immediately before the final route handler. For buffered
+body policies, the request body is already available. For streaming policies,
+it runs before the handler receives `request_body_stream&`.
+
+Hook execution order is root to leaf: server-level hooks, parent groups, child
+groups, then the final route handler. Hooks that return `void` are treated as
+`hook_result::next`.
+
+`on_response` is observational. It runs once when the response completes or is
+cancelled, and receives `response_info` with a copied request snapshot, status,
+response headers, logical response body size, and a `response_outcome`.
+Response hooks cannot mutate the response. They run leaf to root, so the most
+specific group observes first.
+
+The applicable response hooks are captured when the response lifecycle starts.
+Hooks registered later apply only to future responses; in-flight deferred and
+streaming responses keep stable handles to the hooks they captured.
+
+Groups can also define scoped fallbacks:
+
+```cpp
+auto api = srv.group("/api");
+
+api.not_found([](uvp::http::request&, uvp::http::response& res) {
+  res.status(uvp::http::status::not_found).json(uvp::json{{"error", "api route not found"}});
+});
+
+api.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+  res.status(uvp::http::status::internal_server_error).json(uvp::json{{"error", "api failure"}});
+});
+```
+
+Scoped fallbacks use the most specific matching group. If no group fallback is
+available, the server-level `not_found()` or `on_exception()` handler is used.
+
+Route groups are lightweight value handles. You can chain route declarations
+directly:
+
+```cpp
+srv.group("/api/v1")
+  .get("/items", list_items)
+  .get("/items/:id", show_item);
+```
+
+When you want to keep using a group later, prefer naming it before chaining:
+
+```cpp
+auto api = srv.group("/api/v1");
+api
+  .get("/items", list_items)
+  .get("/items/:id", show_item);
+```
+
+## Resources
+
+Use `resource()` when several methods apply to the same exact endpoint:
+
+```cpp
+srv.resource("/items/:id")
+  .get(show_item)
+  .put(uvp::http::body::text{}, update_item)
+  .delete_(delete_item);
+```
+
+Resources are declaration helpers. They do not create a subtree and do not own
+hooks. Combine them with groups when a resource lives under a shared prefix or
+shared hooks:
+
+```cpp
+auto api = srv.group("/api/v1");
+
+api.resource("/items/:id")
+  .get(show_item)
+  .patch(uvp::http::body::text{}, patch_item);
+```
+
+## Mountable Routers
+
+Use `mount()` to compose an independently declared router under a path prefix:
+
+```cpp
+uvp::http::router api;
+
+api.on_request(authenticate_api_request);
+api.get("/items", list_items);
+api.resource("/items/:id")
+  .get(show_item)
+  .put(uvp::http::body::text{}, update_item);
+
+srv.mount("/api/v1", std::move(api));
+```
+
+Mounted routers are moved into the destination router. This keeps route
+handlers and hooks owned by one router after composition and avoids copying
+application callables.
+
+Mounting preserves the mounted router's internal routes, body policies, route
+parameters, wildcard routes, and hooks. Hooks already registered on the
+destination prefix run before hooks from the mounted router for
+`on_request` and `pre_handler`; `on_response` keeps the usual leaf-to-root
+order.
+
+Groups can mount routers relative to their prefix:
+
+```cpp
+auto api = srv.group("/api");
+api.mount("/v1", std::move(v1_router));
+```
+
+If a mounted route conflicts with an existing route for the same effective
+method and path, or if parameter/wildcard names conflict at the same trie
+position, `mount()` throws `std::invalid_argument`.
 
 ## No Request Body
 
@@ -127,7 +320,8 @@ Use `body::bytes{}` when the handler needs the complete request body:
 
 ```cpp
 srv.post("/echo",
-  uvp::http::body::bytes{.max_size = 64 * 1024},
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::bytes{},
   [](uvp::http::request&, uvp::http::response& res, std::span<const std::byte> body) {
     res.bytes(body);
   });
@@ -143,7 +337,8 @@ data:
 
 ```cpp
 srv.post("/message",
-  uvp::http::body::text{.max_size = 64 * 1024},
+  uvp::http::route_options{}.max_body_bytes(64 * 1024),
+  uvp::http::body::text{},
   [](uvp::http::request&, uvp::http::response& res, std::string_view body) {
     res.text(body);
   });
@@ -234,12 +429,13 @@ the accepted connection:
 ```cpp
 srv.get("/whoami", [](uvp::http::request& req, uvp::http::response& res) {
   const auto& connection = req.connection();
-  const auto& local = connection.local_endpoint();
-  const auto& remote = connection.remote_endpoint();
+  const auto local_known = connection.local_endpoint().index() != 0;
+  const auto remote_known = connection.remote_endpoint().index() != 0;
 
-  (void)local;
-  (void)remote;
-  res.text("ok\n");
+  res.json(uvp::json{
+    {"local_endpoint", local_known ? "known" : "unknown"},
+    {"remote_endpoint", remote_known ? "known" : "unknown"},
+  });
 });
 ```
 
@@ -387,6 +583,62 @@ HTTP route registration rejects duplicate method/pattern pairs, unnamed
 parameters, wildcards that are not the final segment, and conflicting parameter
 names at the same tree position.
 
+## Route Path Decoding
+
+Routes match percent-decoded path segments by default. The server first splits
+the raw path on literal `/`, then decodes each segment independently:
+
+```cpp
+srv.get("/files/:name", [](uvp::http::request& req, uvp::http::response& res) {
+  auto name = req.params().get("name"); // "a/b"
+  res.text(std::string{name});
+});
+```
+
+`GET /files/a%2Fb` matches this route and captures `a/b` as one parameter
+value. The encoded slash does not create another route segment. `+` remains a
+literal plus sign in path segments; it is not decoded as a space. Invalid
+percent escapes such as `%`, `%0`, or `%zz` are rejected with
+`400 Bad Request`.
+
+Use `req.decoded_path_segments()` when application code needs the decoded path
+without losing segment boundaries:
+
+```cpp
+auto segments = req.decoded_path_segments(); // ["files", "a/b"]
+```
+
+Applications that need raw matching can opt in at server construction time:
+
+```cpp
+uvp::http::server srv(
+  loop,
+  uvp::http::server_options{}
+    .route_path_matching(uvp::http::route_path_matching::raw));
+```
+
+In raw mode, route matching and captured parameters use raw path segments, but
+the server still validates percent escapes and still exposes decoded segments
+for inspection. Routers mounted into a server or another router must use the
+same route path matching mode as their destination.
+
+## Matched Route Pattern
+
+Use `req.matched_pattern()` when logging or exporting metrics for matched
+routes:
+
+```cpp
+srv.get("/items/:id", [](uvp::http::request& req, uvp::http::response& res) {
+  auto pattern = req.matched_pattern(); // "/items/:id"
+  res.text(std::string{"route "} + std::string(pattern) + "\n");
+});
+```
+
+The value is the canonical full pattern after group prefixes and mounted
+router prefixes have been applied. For `not_found`, automatic 404/405
+responses, and other unmatched requests, the value is empty. `on_response`
+receives the same value through `info.request.matched_pattern`.
+
 ## Upgrade Routes
 
 `server::upgrade(...)` registers upgrade routes separately from normal HTTP
@@ -394,21 +646,24 @@ routes. The handler receives an `upgrade_request` with the parsed request
 metadata, route parameters, connection info, and any bytes already read after
 the upgrade boundary:
 
+Upgrade route patterns are validated and prepared when they are registered.
+They use the same segment-local percent-decoding rules as normal routes.
+
 ```cpp
 srv.upgrade("/raw/:name", [](uvp::http::upgrade_request& req) {
   auto name = req.params().get("name");
   auto protocol = req.header("upgrade");
   auto extra = req.extra_bytes();
-
-  (void)name;
-  (void)protocol;
-  (void)extra;
+  auto body = std::string{"unsupported upgrade for "} + std::string{name}
+    + " using " + std::string{protocol}
+    + " with " + std::to_string(extra.size()) + " extra bytes\n";
 
   req.reject(
-    "HTTP/1.1 400 Bad Request\r\n"
+    std::string{"HTTP/1.1 400 Bad Request\r\n"}
     "Connection: close\r\n"
-    "Content-Length: 0\r\n"
-    "\r\n");
+    "Content-Type: text/plain\r\n"
+    "Content-Length: " + std::to_string(body.size()) + "\r\n"
+    "\r\n" + body);
 });
 ```
 
@@ -434,11 +689,11 @@ upgrade protocol.
 
 ## Errors
 
-Route handlers may throw. Uncaught exceptions are handled by the route error
-policy:
+Route handlers may throw. Uncaught application exceptions are handled by the
+route exception policy:
 
 ```cpp
-srv.on_error([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+srv.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
   res.status(500).json(uvp::json{{"error", "internal server error"}});
 });
 ```
@@ -450,3 +705,8 @@ srv.not_found([](uvp::http::request&, uvp::http::response& res) {
   res.status(404).json(uvp::json{{"error", "not found"}});
 });
 ```
+
+`on_exception()` handles uncaught C++ exceptions from route handlers and
+request-side hooks. It does not handle malformed HTTP, socket failures,
+request-body stream errors, streaming response errors, or exceptions thrown by
+`on_response` observers.

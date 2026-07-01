@@ -242,7 +242,8 @@ request::request(
   http::headers headers,
   std::vector<std::byte> body,
   route_params params,
-  http::connection_info connection)
+  http::connection_info connection,
+  std::vector<std::string> decoded_path_segments)
     : method_(method),
       target_(std::move(target)),
       path_(std::move(path)),
@@ -251,6 +252,7 @@ request::request(
       headers_(std::move(headers)),
       body_(std::move(body)),
       params_(std::move(params)),
+      decoded_path_segments_(std::move(decoded_path_segments)),
       connection_(std::move(connection)) {}
 
 std::string_view request::header(std::string_view name) const noexcept {

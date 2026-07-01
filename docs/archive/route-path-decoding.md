@@ -1,6 +1,6 @@
 # Route Path Decoding Proposal
 
-Status: Draft
+Status: Archived, implemented
 
 ## Context
 
@@ -20,9 +20,11 @@ separator before routing, otherwise `/files/a%2Fb` would be treated like
   method-aware `405`, `HEAD` fallback, automatic `OPTIONS`, and upgrade route
   matching.
 - Implemented: query parameters decode `%XX` escapes and treat `+` as a space.
-- Not implemented: configurable route path decoding.
-- Current behavior: route matching and captured route params use raw path
-  segments.
+- Implemented: route path matching defaults to percent-decoded segments, raw
+  matching is available as an opt-in, decoded segments are exposed on request
+  objects, and malformed path percent escapes are rejected.
+- Current behavior: `request::path()` remains raw; route params are decoded by
+  default and raw only when the router/server is configured for raw matching.
 
 ## Decision
 
@@ -34,7 +36,10 @@ Default route matching should use percent-decoded path segments:
 4. return decoded values from `req.params()`;
 5. never let an encoded slash create a new route segment.
 
-Applications that need strict raw matching should be able to opt into raw mode.
+The server should parse and validate path segments once per request, keeping
+both the raw segments and decoded segments. Applications that need strict raw
+matching should be able to opt into raw mode, but raw mode still benefits from
+the same validation and decoded segment storage.
 
 The default should be `percent_decoded_segments`, because that is the expected
 behavior for application routing and it matches the direction already described
@@ -90,7 +95,7 @@ With the default mode:
 - route pattern `/files/:name` does not treat `/files/a%2Fb` as
   `/files/a/b`;
 - `+` remains a literal plus sign in path segments;
-- invalid percent escapes are kept literally instead of rejecting the request.
+- invalid percent escapes reject the request with `400 Bad Request`.
 
 In raw mode:
 
@@ -98,11 +103,21 @@ In raw mode:
 - captured route parameters keep raw `%XX` sequences;
 - this is useful for proxy-like code, signature-sensitive routes, and
   applications that want to interpret path encoding themselves.
+- invalid percent escapes are still rejected by the HTTP server.
 
 `request::target()` remains the raw HTTP request target. `request::path()`
 should also remain the raw path component for now, to avoid mixing routing
-normalization with request inspection. A decoded path accessor can be proposed
-later if user code needs one.
+normalization with request inspection.
+
+Applications that need decoded path inspection should use segment-level access:
+
+```cpp
+std::span<const std::string> segments = req.decoded_path_segments();
+```
+
+For `/files/a%2Fb`, this returns `["files", "a/b"]`. A decoded whole-path
+string is intentionally not part of the first API because it would obscure the
+original segment boundaries.
 
 ## Implementation Plan
 
@@ -110,18 +125,20 @@ later if user code needs one.
 2. Add `server_options::route_path_matching(...)` and default it to
    `percent_decoded_segments`.
 3. Add a `router` constructor or option that stores the matching mode.
-4. Normalize route pattern segments according to the router mode when routes
+4. Normalize route pattern static segments according to the router mode when routes
    are registered.
-5. Normalize request path segments according to the router mode when matching.
-6. Keep percent-decoding segment-local:
+5. Parse request path segments once into raw and decoded segment vectors.
+6. Match using raw or decoded segments according to the router mode.
+7. Keep percent-decoding segment-local:
    - split on literal `/` first;
    - decode `%XX` inside each segment;
    - do not treat `+` specially;
-   - keep invalid percent escapes literally.
-7. Apply the same matching mode to upgrade routes by extending
+   - treat invalid percent escapes as invalid paths.
+8. Apply the same matching mode to upgrade routes by extending
    `detail::route_pattern_matches`.
-8. Pass the server option into both the normal router and upgrade matching.
-9. Update user and design documentation.
+9. Pass the server option into both the normal router and upgrade matching.
+10. Expose decoded path segments on `request` and `upgrade_request`.
+11. Update user and design documentation.
 
 ## Tests
 
@@ -133,7 +150,7 @@ Add router-level tests for:
 - encoded slash inside a parameter;
 - encoded slash inside a wildcard tail;
 - literal `+` in path segments;
-- invalid percent escape preserved literally;
+- invalid percent escape reported by `router::match`;
 - raw mode preserving current behavior;
 - `allowed_methods` using the configured matching mode.
 
@@ -142,6 +159,7 @@ Add integration tests for:
 - a normal HTTP route receiving a decoded parameter;
 - a route with `%2F` inside a parameter not changing segment boundaries;
 - `HEAD` fallback and automatic `OPTIONS` with decoded segment matching.
+- invalid percent escape returning `400 Bad Request`;
 
 If practical, add one WebSocket/upgrade route test to verify that upgrade route
 matching uses the same path decoding mode as regular routes.
@@ -152,8 +170,8 @@ matching uses the same path decoding mode as regular routes.
 - Dot-segment resolution such as `.` and `..`.
 - Unicode normalization.
 - Treating `+` as a space in paths.
-- Rejecting malformed percent escapes.
 - Changing `request::path()` to return a decoded path.
+- Adding a decoded whole-path string accessor.
 
 ## Documentation Updates
 

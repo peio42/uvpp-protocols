@@ -26,17 +26,11 @@ namespace body {
 
 struct none {};
 
-struct bytes {
-  std::size_t max_size = 0;
-};
+struct bytes {};
 
-struct text {
-  std::size_t max_size = 0;
-};
+struct text {};
 
-struct stream {
-  std::size_t max_size = 0;
-};
+struct stream {};
 
 } // namespace body
 
@@ -112,12 +106,14 @@ public:
     http::headers headers,
     std::vector<std::byte> body,
     route_params params,
-    http::connection_info connection);
+    http::connection_info connection,
+    std::vector<std::string> decoded_path_segments = {});
 
   [[nodiscard]] http::method method() const noexcept { return method_; }
   [[nodiscard]] std::string_view target() const noexcept { return target_; }
   [[nodiscard]] std::string_view path() const noexcept { return path_; }
   [[nodiscard]] std::string_view query() const noexcept { return query_; }
+  [[nodiscard]] std::string_view matched_pattern() const noexcept { return matched_pattern_; }
   [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const noexcept {
     return query_params_.first(name);
   }
@@ -136,6 +132,7 @@ public:
   [[nodiscard]] std::string_view body() const noexcept;
 
   [[nodiscard]] const route_params& params() const noexcept { return params_; }
+  [[nodiscard]] std::span<const std::string> decoded_path_segments() const noexcept { return decoded_path_segments_; }
   [[nodiscard]] const http::connection_info& connection() const noexcept { return connection_; }
 
 private:
@@ -146,10 +143,12 @@ private:
   std::string target_;
   std::string path_;
   std::string query_;
+  std::string_view matched_pattern_;
   http::query_params query_params_;
   http::headers headers_;
   std::vector<std::byte> body_;
   route_params params_;
+  std::vector<std::string> decoded_path_segments_;
   http::connection_info connection_;
 };
 

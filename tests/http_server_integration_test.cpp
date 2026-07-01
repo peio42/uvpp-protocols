@@ -2,8 +2,11 @@
 
 #include <array>
 #include <chrono>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include <uvpp/uv.hpp>
 #include <uvpp/protocols/http.hpp>
@@ -16,9 +19,13 @@ uv::buffer_view integration_alloc(uv::tcp&, std::size_t) {
 }
 
 template<class Configure>
-std::string perform_http_request(Configure configure, std::string request, std::string_view response_marker) {
+std::string perform_http_request(
+  uvp::http::server_options options,
+  Configure configure,
+  std::string request,
+  std::string_view response_marker) {
   uv::loop loop;
-  uvp::http::server server(loop);
+  uvp::http::server server(loop, options);
   configure(server);
 
   auto tcp_listener = uvp::io::tcp_listener{loop};
@@ -71,6 +78,80 @@ std::string perform_http_request(Configure configure, std::string request, std::
           });
           server.close();
         }
+      });
+    });
+  });
+
+  loop.run();
+
+  UVP_CHECK(!timed_out);
+  UVP_CHECK(client_closed);
+  loop.close();
+  return received;
+}
+
+template<class Configure>
+std::string perform_http_request(Configure configure, std::string request, std::string_view response_marker) {
+  return perform_http_request(uvp::http::server_options{}, std::move(configure), std::move(request), response_marker);
+}
+
+template<class Configure>
+std::string perform_http_request_until_close(
+  uvp::http::server_options options,
+  Configure configure,
+  std::string request) {
+  uv::loop loop;
+  uvp::http::server server(loop, options);
+  configure(server);
+
+  auto tcp_listener = uvp::io::tcp_listener{loop};
+  tcp_listener.bind("127.0.0.1", 0);
+  auto stream_listener = uvp::io::stream_listener{std::move(tcp_listener)};
+  const auto endpoint = stream_listener.local_endpoint();
+  const auto port = std::get<uvp::io::tcp_endpoint>(endpoint).port;
+  server.listen(std::move(stream_listener));
+
+  uv::tcp client(loop);
+  uv::connect_request connect_request;
+  uv::write_request write_request;
+  uv::timer timeout(loop);
+
+  std::string received;
+  bool client_closed = false;
+  bool timed_out = false;
+
+  timeout.start(std::chrono::seconds{2}, [&](uv::timer& timer) {
+    timed_out = true;
+    server.close();
+    if (!client_closed) {
+      client.close([&](uv::tcp&) {
+        client_closed = true;
+      });
+    }
+    timer.close();
+  });
+
+  client.connect(connect_request, uv::ipv4{"127.0.0.1", static_cast<int>(port)}, [&](uv::connect_request&, uv::result status) {
+    UVP_REQUIRE(status);
+
+    auto output = uv::buffer_view{request.data(), request.size()};
+    client.write(write_request, output, [&](uv::write_request&, uv::result write_status) {
+      UVP_REQUIRE(write_status);
+
+      client.read_start(integration_alloc, [&](uv::tcp& stream, uv::read_result read) {
+        if (read.eof()) {
+          stream.read_stop();
+          timeout.close();
+          stream.close([&](uv::tcp&) {
+            client_closed = true;
+          });
+          server.close();
+          return;
+        }
+        UVP_REQUIRE(read.ok());
+
+        const auto bytes = read.bytes();
+        received.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
       });
     });
   });
@@ -192,6 +273,73 @@ UVP_TEST_CASE("http server falls back from HEAD to GET without sending a body") 
   UVP_CHECK(received.find("\r\n\r\nhello ada") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server serializes custom numeric status without a reason phrase") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.get("/custom-status", [](uvp::http::request&, uvp::http::response& res) {
+        res.status(299).text("custom\n");
+      });
+    },
+    "GET /custom-status HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "custom\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 299 \r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\ncustom\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server routes on decoded path segments") {
+  std::vector<std::string> observed_segments;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/files/:name", [&](uvp::http::request& req, uvp::http::response& res) {
+        observed_segments.assign(req.decoded_path_segments().begin(), req.decoded_path_segments().end());
+        res.text(std::string{"file "} + std::string(req.params().get("name")) + "\n");
+      });
+    },
+    "GET /files/a%2Fb+c%20d HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "file a/b+c d\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nfile a/b+c d\n") != std::string::npos);
+  UVP_REQUIRE(observed_segments.size() == 2U);
+  UVP_CHECK_EQ(observed_segments[0], "files");
+  UVP_CHECK_EQ(observed_segments[1], "a/b+c d");
+}
+
+UVP_TEST_CASE("http server rejects invalid path percent encoding") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.get("/files/:name", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("should not run\n");
+      });
+    },
+    "GET /files/%zz HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "Bad Request\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nBad Request\n") != std::string::npos);
+  UVP_CHECK(received.find("should not run\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server rejects invalid upgrade route percent encoding") {
+  uv::loop loop;
+  uvp::http::server server(loop);
+
+  UVP_CHECK_THROWS(
+    server.upgrade("/ws/%zz", [](uvp::http::upgrade_request&) {}),
+    std::invalid_argument);
+}
+
 UVP_TEST_CASE("http server returns 405 and allow for a known path with another method") {
   const auto received = perform_http_request(
     [](uvp::http::server& server) {
@@ -232,4 +380,383 @@ UVP_TEST_CASE("http server answers automatic OPTIONS for a known path") {
   UVP_CHECK(received.find("HTTP/1.1 204 No Content\r\n") != std::string::npos);
   UVP_CHECK(received.find("allow: GET, HEAD, POST, OPTIONS\r\n") != std::string::npos);
   UVP_CHECK(received.find("content-length: 0\r\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server applies route group pre handlers") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      auto api = server.group("/api");
+      api.pre_handler([](uvp::http::request&, uvp::http::response& res) {
+        res.header("x-hook", "pre");
+      });
+      api.get("/health", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("ok\n");
+      });
+    },
+    "GET /api/health HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "ok\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("x-hook: pre\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nok\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server route group on_request can short circuit before handler") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      auto api = server.group("/api");
+      api.on_request([](uvp::http::request&, uvp::http::response& res) {
+        res.status(uvp::http::status::unauthorized).text("blocked\n");
+        return uvp::http::hook_result::stop;
+      });
+      api.post("/items", uvp::http::body::text{}, [](uvp::http::request&, uvp::http::response& res, std::string_view) {
+        res.text("handler\n");
+      });
+    },
+    "POST /api/items HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 7\r\n"
+    "\r\n"
+    "payload",
+    "blocked\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 401 Unauthorized\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nblocked\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server uses scoped not_found fallback") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.not_found([](uvp::http::request&, uvp::http::response& res) {
+        res.status(uvp::http::status::not_found).text("global missing\n");
+      });
+
+      auto api = server.group("/api");
+      api.not_found([](uvp::http::request& req, uvp::http::response& res) {
+        res.status(uvp::http::status::not_found).text(std::string{"api missing "} + std::string(req.path()) + "\n");
+      });
+    },
+    "GET /api/missing HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "api missing /api/missing\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 404 Not Found\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\napi missing /api/missing\n") != std::string::npos);
+  UVP_CHECK(received.find("global missing\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server on_exception handles application exceptions") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr error) {
+        try {
+          std::rethrow_exception(error);
+        } catch (const std::runtime_error& ex) {
+          res.status(uvp::http::status::internal_server_error).text(std::string{"caught "} + ex.what() + "\n");
+        }
+      });
+      server.get("/boom", [](uvp::http::request&, uvp::http::response&) {
+        throw std::runtime_error{"boom"};
+      });
+    },
+    "GET /boom HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "caught boom\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 500 Internal Server Error\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\ncaught boom\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server uses scoped on_exception for matched routes") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+        res.status(uvp::http::status::internal_server_error).text("global exception\n");
+      });
+
+      auto api = server.group("/api");
+      api.on_exception([](uvp::http::request&, uvp::http::response& res, std::exception_ptr) {
+        res.status(uvp::http::status::internal_server_error).text("api exception\n");
+      });
+      api.get("/boom", [](uvp::http::request&, uvp::http::response&) {
+        throw std::runtime_error{"api boom"};
+      });
+    },
+    "GET /api/boom HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "api exception\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 500 Internal Server Error\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\napi exception\n") != std::string::npos);
+  UVP_CHECK(received.find("global exception\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server resources register multiple methods on one endpoint") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.group("/api")
+        .resource("/items/:id")
+        .get([](uvp::http::request& req, uvp::http::response& res) {
+          res.text(std::string{"show "} + std::string(req.params().get("id")) + "\n");
+        })
+        .put(uvp::http::body::text{}, [](uvp::http::request& req, uvp::http::response& res, std::string_view body) {
+          res.text(std::string{"update "} + std::string(req.params().get("id")) + " " + std::string(body) + "\n");
+        });
+    },
+    "PUT /api/items/42 HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 3\r\n"
+    "\r\n"
+    "new",
+    "update 42 new\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nupdate 42 new\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server applies route options body limits") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::route_options{}.max_body_bytes(3),
+        uvp::http::body::text{},
+        [](uvp::http::request&, uvp::http::response& res, std::string_view) {
+          res.text("accepted\n");
+        });
+    },
+    "POST /upload HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 4\r\n"
+    "\r\n"
+    "tool",
+    "Payload Too Large\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nPayload Too Large\n") != std::string::npos);
+  UVP_CHECK(received.find("accepted\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server returns request timeout for incomplete headers") {
+  const auto received = perform_http_request_until_close(
+    uvp::http::server_options{}.header_timeout(std::chrono::milliseconds{20}),
+    [](uvp::http::server&) {},
+    "GET /slow HTTP/1.1\r\nHost");
+
+  UVP_CHECK(received.find("HTTP/1.1 408 Request Timeout\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nRequest Timeout\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server closes slow request bodies using route timeout") {
+  const auto received = perform_http_request_until_close(
+    uvp::http::server_options{}.body_timeout(std::chrono::seconds{1}),
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::route_options{}.body_timeout(std::chrono::milliseconds{20}),
+        uvp::http::body::text{},
+        [](uvp::http::request&, uvp::http::response& res, std::string_view) {
+          res.text("accepted\n");
+        });
+    },
+    "POST /upload HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Length: 4\r\n"
+    "\r\n");
+
+  UVP_CHECK(received.find("accepted\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server closes idle keep-alive connections") {
+  const auto received = perform_http_request_until_close(
+    uvp::http::server_options{}.idle_timeout(std::chrono::milliseconds{20}),
+    [](uvp::http::server& server) {
+      server.get("/hello", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("hello\n");
+      });
+    },
+    "GET /hello HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "\r\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("connection: keep-alive\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nhello\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server mounts an independently declared router") {
+  std::string observed_pattern;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      uvp::http::router api;
+      api.get("/items/:id", [&](uvp::http::request& req, uvp::http::response& res) {
+        observed_pattern = req.matched_pattern();
+        res.text(std::string{"item "} + std::string(req.params().get("id")) + "\n");
+      });
+
+      server.mount("/api/v1", std::move(api));
+    },
+    "GET /api/v1/items/42 HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "item 42\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nitem 42\n") != std::string::npos);
+  UVP_CHECK_EQ(observed_pattern, "/api/v1/items/:id");
+}
+
+UVP_TEST_CASE("http server runs response hooks with response snapshots") {
+  std::vector<std::string> events;
+  unsigned int observed_status = 0;
+  std::size_t observed_body_size = 0;
+  std::string observed_path;
+  std::string observed_pattern;
+  std::string observed_request_pattern;
+  uvp::http::response_outcome observed_outcome = uvp::http::response_outcome::error;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.on_response([&](const uvp::http::response_info& info) {
+        events.push_back("server");
+        observed_status = info.status;
+        observed_body_size = info.response_body_size;
+        observed_path = info.request.path;
+        observed_pattern = info.request.matched_pattern;
+        observed_outcome = info.outcome;
+      });
+
+      auto api = server.group("/api");
+      api.on_request([&](uvp::http::request& req, uvp::http::response&) {
+        observed_request_pattern = req.matched_pattern();
+      });
+      api.on_response([&](const uvp::http::response_info&) {
+        events.push_back("api");
+      });
+      api.get("/items/:id", [](uvp::http::request& req, uvp::http::response& res) {
+        res.text(std::string{"item "} + std::string(req.params().get("id")) + "\n");
+      });
+    },
+    "GET /api/items/42 HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "item 42\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_REQUIRE(events.size() == 2U);
+  UVP_CHECK_EQ(events[0], "api");
+  UVP_CHECK_EQ(events[1], "server");
+  UVP_CHECK_EQ(observed_status, 200U);
+  UVP_CHECK_EQ(observed_body_size, 8U);
+  UVP_CHECK_EQ(observed_path, "/api/items/42");
+  UVP_CHECK_EQ(observed_pattern, "/api/items/:id");
+  UVP_CHECK_EQ(observed_request_pattern, "/api/items/:id");
+  UVP_CHECK(observed_outcome == uvp::http::response_outcome::completed);
+}
+
+UVP_TEST_CASE("http server runs response hooks for short circuited requests") {
+  unsigned int observed_status = 0;
+  uvp::http::response_outcome observed_outcome = uvp::http::response_outcome::error;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      auto api = server.group("/api");
+      api.on_request([](uvp::http::request&, uvp::http::response& res) {
+        res.status(uvp::http::status::unauthorized).text("blocked\n");
+        return uvp::http::hook_result::stop;
+      });
+      api.on_response([&](const uvp::http::response_info& info) {
+        observed_status = info.status;
+        observed_outcome = info.outcome;
+      });
+      api.get("/secure", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("handler\n");
+      });
+    },
+    "GET /api/secure HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "blocked\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 401 Unauthorized\r\n") != std::string::npos);
+  UVP_CHECK_EQ(observed_status, 401U);
+  UVP_CHECK(observed_outcome == uvp::http::response_outcome::completed);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server runs response hooks for deferred responses") {
+  unsigned int observed_status = 0;
+  std::size_t observed_body_size = 0;
+  uvp::http::response_outcome observed_outcome = uvp::http::response_outcome::error;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.on_response([&](const uvp::http::response_info& info) {
+        observed_status = info.status;
+        observed_body_size = info.response_body_size;
+        observed_outcome = info.outcome;
+      });
+      server.get("/later", [](uvp::http::request&, uvp::http::response& res) {
+        auto reply = res.defer();
+        reply.status(uvp::http::status::created).text("later\n");
+      });
+    },
+    "GET /later HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "later\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 201 Created\r\n") != std::string::npos);
+  UVP_CHECK_EQ(observed_status, 201U);
+  UVP_CHECK_EQ(observed_body_size, 6U);
+  UVP_CHECK(observed_outcome == uvp::http::response_outcome::completed);
+}
+
+UVP_TEST_CASE("http server keeps response hook handles stable for deferred responses") {
+  std::size_t captured_hook_calls = 0;
+  std::size_t late_hook_calls = 0;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.on_response([&](const uvp::http::response_info&) {
+        ++captured_hook_calls;
+      });
+      server.get("/later", [&](uvp::http::request&, uvp::http::response& res) {
+        auto reply = res.defer();
+        for (int i = 0; i < 32; ++i) {
+          server.on_response([&](const uvp::http::response_info&) {
+            ++late_hook_calls;
+          });
+        }
+        reply.text("stable\n");
+      });
+    },
+    "GET /later HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "stable\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK_EQ(captured_hook_calls, 1U);
+  UVP_CHECK_EQ(late_hook_calls, 0U);
 }

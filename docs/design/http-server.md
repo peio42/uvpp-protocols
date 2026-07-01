@@ -102,7 +102,7 @@ public:
   server& not_found(Handler&& handler);
 
   template<class Handler>
-  server& on_error(Handler&& handler);
+  server& on_exception(Handler&& handler);
 
   void listen(std::string_view host, unsigned int port);
   void listen(uvp::io::stream_listener listener);
@@ -136,7 +136,8 @@ The route model supports:
 - named parameters: `/users/:id`;
 - wildcard tail segments: `/static/*path`;
 - method-specific handlers;
-- fallback `not_found` handler.
+- global and scoped fallback `not_found` handlers;
+- global and scoped application exception handlers.
 
 Route matching should operate on the decoded path component, not the raw target.
 The raw target remains available on `request`.
@@ -159,9 +160,25 @@ HTTP route registration validates patterns early:
 
 - named parameters must have a non-empty name;
 - wildcard tails must have a non-empty name and be the final segment;
+- percent escapes in route patterns must be valid;
 - duplicate method + pattern registrations are rejected;
 - conflicting parameter names at the same tree position, such as `/users/:id`
   and `/users/:name`, are rejected.
+
+Request paths are parsed into raw and percent-decoded segments once per
+request. The default matching mode uses decoded segments. Percent-decoding is
+segment-local: `%2F` decodes to `/` inside the segment value but never creates
+another segment. `+` remains a literal plus sign in path segments. Malformed
+percent escapes reject the request with `400 Bad Request`.
+
+Upgrade route patterns follow the same segment parser and are pre-parsed when
+registered, so upgrade matching does not re-parse every candidate pattern for
+each upgrade request.
+
+Servers can opt into raw route matching with
+`server_options::route_path_matching(route_path_matching::raw)`. Raw mode keeps
+captured route parameters raw, while still validating percent escapes and
+keeping decoded segments available for application inspection.
 
 The trie also drives method-aware HTTP behavior:
 
@@ -171,9 +188,12 @@ The trie also drives method-aware HTTP behavior:
 - `OPTIONS` is answered automatically for known paths when no explicit
   `OPTIONS` route is registered.
 
-Future route ergonomics should build on the same trie. Route groups and
-middleware are tracked in
-[route groups and hooks](../proposals/route-groups-and-hooks.md).
+Route groups, request hooks, response observers, scoped fallbacks, and
+mountable routers build on the same trie.
+
+Response observers are retained by stable handles once a response slot is
+created, so deferred and streaming responses can complete after later hook
+registrations without holding invalidated pointers into router storage.
 
 Handlers receive request and response references, plus a body argument when the
 body policy produces one:
@@ -183,7 +203,7 @@ using handler = std::function<void(request&, response&)>;
 using bytes_handler = std::function<void(request&, response&, std::span<const std::byte>)>;
 using text_handler = std::function<void(request&, response&, std::string_view)>;
 using stream_handler = std::function<void(request&, response&, request_body_stream&)>;
-using error_handler = std::function<void(request&, response&, std::exception_ptr)>;
+using exception_handler = std::function<void(request&, response&, std::exception_ptr)>;
 ```
 
 The implementation may use templates at registration time, but stored handlers
@@ -195,18 +215,17 @@ Routes declare a body policy explicitly:
 
 ```cpp
 srv.get("/health", body::none{}, handler);
-srv.post("/echo", body::bytes{.max_size = 64 * 1024}, handler);
-srv.post("/message", body::text{.max_size = 64 * 1024}, handler);
+srv.post("/echo", route_options{}.max_body_bytes(64 * 1024), body::bytes{}, handler);
+srv.post("/message", route_options{}.max_body_bytes(64 * 1024), body::text{}, handler);
 srv.post("/events", body::stream{}, handler);
 ```
 
 The body policy is part of the route contract:
 
 - `body::none{}` dispatches after request headers and rejects request bodies;
-- `body::bytes{}` buffers the body up to a configured limit, then dispatches
-  with `std::span<const std::byte>`;
-- `body::text{}` buffers the body up to a configured limit, then dispatches
-  with `std::string_view`;
+- `body::bytes{}` buffers the body, then dispatches with
+  `std::span<const std::byte>`;
+- `body::text{}` buffers the body, then dispatches with `std::string_view`;
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`.
 
@@ -214,6 +233,30 @@ Future typed policies such as JSON and multipart should use the same explicit
 route declaration shape. They are tracked in
 [typed JSON body policy](../proposals/typed-json-body-policy.md) and
 [multipart handling](../proposals/multipart-handling.md).
+
+Route-level options extend the body contract with operational metadata:
+
+```cpp
+srv.post(
+  "/upload",
+  route_options{}
+    .max_body_bytes(20 * 1024 * 1024)
+    .body_timeout(std::chrono::seconds{30}),
+  body::stream{},
+  handler);
+```
+
+Use `route_options::max_body_bytes(...)` when a route needs its own request
+body limit. Otherwise the server falls back to
+`server_options::max_body_bytes()`. Use
+`route_options::body_timeout(...)` when a route needs a body receive timeout
+different from `server_options::body_timeout()`.
+
+Configured body limits must be greater than zero. A route that does not accept a
+request body should use `body::none{}` instead of a zero byte limit. The current
+route-level implementation still uses an internal `0` value to mean "inherit the
+server default"; replacing that sentinel with an explicit unset state is tracked
+in [route body limit inheritance](../proposals/route-body-limit-inheritance.md).
 
 Convenience overloads infer the body policy from the handler signature when the
 mapping is unambiguous:
@@ -244,6 +287,7 @@ public:
   std::string_view target() const noexcept;
   std::string_view path() const noexcept;
   std::string_view query() const noexcept;
+  std::string_view matched_pattern() const noexcept;
   std::optional<std::string_view> query(std::string_view name) const noexcept;
   std::string_view query_or(std::string_view name, std::string_view fallback = {}) const noexcept;
   std::span<const std::string> query_all(std::string_view name) const noexcept;
@@ -256,6 +300,7 @@ public:
   std::string_view body() const noexcept;
 
   const route_params& params() const noexcept;
+  std::span<const std::string> decoded_path_segments() const noexcept;
   const connection_info& connection() const noexcept;
 };
 ```
@@ -265,6 +310,10 @@ Applications should copy values they need after the handler returns.
 Connection metadata is a snapshot of local and remote endpoints. Handlers that
 need to take over the transport should use the explicit upgrade path rather
 than `request`.
+
+`matched_pattern()` returns the canonical route pattern that matched the
+request, such as `/items/:id`. It is empty for fallback responses and other
+requests that did not match an application route.
 
 `query()` without arguments returns the raw query string exactly as received in
 the request target. Structured query access is provided by an immutable
@@ -547,23 +596,22 @@ Currently enforced options:
 
 - `max_header_bytes`: maximum accepted request header bytes;
 - `max_body_bytes`: default request body limit when a route does not override
-  it with a body policy limit;
+  it with `route_options::max_body_bytes(...)`; values must be greater than
+  zero;
+- `header_timeout`: maximum time spent waiting for complete request headers;
+- `body_timeout`: default request body receive timeout when a route does not
+  override it with `route_options::body_timeout(...)`;
+- `idle_timeout`: maximum keep-alive idle time after a response has been fully
+  written;
 - `max_pending_write_bytes`: maximum queued serialized response bytes per
   connection before write backpressure is reported;
 - `max_pending_responses_per_connection`: maximum open, deferred, streaming, or
   completed-but-not-written response slots per connection;
 - `keep_alive`: whether the server keeps HTTP/1.1 connections open when the
   request allows it;
-- `server_header`: whether the default `Server` response header is added.
-
-Public but not yet enforced timeout options:
-
-- `header_timeout`;
-- `body_timeout`;
-- `idle_timeout`.
-
-Timeout enforcement is tracked in
-[HTTP timeout enforcement](../proposals/http-timeout-enforcement.md).
+- `server_header`: whether the default `Server` response header is added;
+- `route_path_matching`: whether routing uses percent-decoded segments or raw
+  path segments.
 
 User-facing configuration should normally use the builder style defined in the
 API principles:
@@ -582,12 +630,11 @@ uvp::http::server srv(
 
 Future HTTP work is tracked outside stable design:
 
-- [Route groups and hooks](../proposals/route-groups-and-hooks.md)
-- [HTTP timeout enforcement](../proposals/http-timeout-enforcement.md)
 - [Typed JSON body policy](../proposals/typed-json-body-policy.md)
 - [Multipart handling](../proposals/multipart-handling.md)
 - [Server-Sent Events support](../proposals/sse-support.md)
 - [Static file helper](../proposals/static-file-helper.md)
 - [HTTP client](../proposals/http-client.md)
 - [HTTP TLS listener integration](../proposals/http-tls-listener-integration.md)
+- [Route body limit inheritance](../proposals/route-body-limit-inheritance.md)
 - [HTTP/2 support](../proposals/http2-support.md)
