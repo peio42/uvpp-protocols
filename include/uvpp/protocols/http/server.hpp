@@ -227,13 +227,11 @@ public:
 
   template<class Handler>
   server& upgrade(std::string_view pattern, Handler&& handler) {
-    upgrade_routes_.push_back(upgrade_route{
-      std::string(pattern),
+    return add_upgrade_route(
+      pattern,
       [handler = std::forward<Handler>(handler)](upgrade_request& req) mutable {
         (void)handler(req);
-      },
-    });
-    return *this;
+      });
   }
 
   void listen(std::string_view host, unsigned int port);
@@ -251,9 +249,10 @@ private:
   router::handler_type not_found_handler_;
   exception_handler_type exception_handler_;
   struct upgrade_route {
-    std::string pattern;
+    detail::route_path parsed_pattern;
     upgrade_handler_type handler;
   };
+  server& add_upgrade_route(std::string_view pattern, upgrade_handler_type handler);
   std::vector<upgrade_route> upgrade_routes_;
   struct impl;
   std::unique_ptr<impl> impl_;

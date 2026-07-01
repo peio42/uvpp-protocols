@@ -79,18 +79,17 @@ std::span<const std::string> selected_segments(
 } // namespace
 
 bool route_pattern_matches(
-  std::string_view pattern,
+  const route_path& pattern,
   const route_path& path,
   route_path_matching matching,
   route_params& params) {
-  const auto parsed_pattern = parse_route_path(pattern);
-  if (!parsed_pattern.valid || !path.valid) {
+  if (!pattern.valid || !path.valid) {
     return false;
   }
 
-  const auto pattern_segments = selected_segments(parsed_pattern, matching);
+  const auto pattern_segments = selected_segments(pattern, matching);
   const auto path_segments = selected_segments(path, matching);
-  const auto& raw_pattern_segments = parsed_pattern.raw_segments;
+  const auto& raw_pattern_segments = pattern.raw_segments;
 
   std::size_t path_index = 0;
   for (std::size_t pattern_index = 0; pattern_index < raw_pattern_segments.size(); ++pattern_index) {
@@ -123,6 +122,14 @@ bool route_pattern_matches(
   }
 
   return path_index == path_segments.size();
+}
+
+bool route_pattern_matches(
+  std::string_view pattern,
+  const route_path& path,
+  route_path_matching matching,
+  route_params& params) {
+  return route_pattern_matches(parse_route_path(pattern), path, matching, params);
 }
 
 } // namespace detail

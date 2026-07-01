@@ -800,7 +800,7 @@ struct server::impl {
       for (const auto& candidate : owner_.owner.upgrade_routes_) {
         params = {};
         if (detail::route_pattern_matches(
-              candidate.pattern,
+              candidate.parsed_pattern,
               parsed_path,
               owner_.owner.options_.route_path_matching(),
               params)) {
@@ -1302,6 +1302,19 @@ server::server(uv::loop& loop, server_options options)
 }
 
 server::~server() = default;
+
+server& server::add_upgrade_route(std::string_view pattern, upgrade_handler_type handler) {
+  auto parsed_pattern = detail::parse_route_path(pattern);
+  if (!parsed_pattern.valid) {
+    throw std::invalid_argument("HTTP upgrade route pattern contains invalid percent encoding");
+  }
+
+  upgrade_routes_.push_back(upgrade_route{
+    std::move(parsed_pattern),
+    std::move(handler),
+  });
+  return *this;
+}
 
 void server::listen(std::string_view host, unsigned int port) {
   auto listener = uvp::io::tcp_listener{*loop_};

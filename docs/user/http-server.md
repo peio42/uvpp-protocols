@@ -646,6 +646,9 @@ routes. The handler receives an `upgrade_request` with the parsed request
 metadata, route parameters, connection info, and any bytes already read after
 the upgrade boundary:
 
+Upgrade route patterns are validated and prepared when they are registered.
+They use the same segment-local percent-decoding rules as normal routes.
+
 ```cpp
 srv.upgrade("/raw/:name", [](uvp::http::upgrade_request& req) {
   auto name = req.params().get("name");

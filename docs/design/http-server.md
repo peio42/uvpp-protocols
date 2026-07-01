@@ -171,6 +171,10 @@ segment-local: `%2F` decodes to `/` inside the segment value but never creates
 another segment. `+` remains a literal plus sign in path segments. Malformed
 percent escapes reject the request with `400 Bad Request`.
 
+Upgrade route patterns follow the same segment parser and are pre-parsed when
+registered, so upgrade matching does not re-parse every candidate pattern for
+each upgrade request.
+
 Servers can opt into raw route matching with
 `server_options::route_path_matching(route_path_matching::raw)`. Raw mode keeps
 captured route parameters raw, while still validating percent escapes and

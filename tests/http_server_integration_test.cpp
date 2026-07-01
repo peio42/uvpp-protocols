@@ -331,6 +331,15 @@ UVP_TEST_CASE("http server rejects invalid path percent encoding") {
   UVP_CHECK(received.find("should not run\n") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server rejects invalid upgrade route percent encoding") {
+  uv::loop loop;
+  uvp::http::server server(loop);
+
+  UVP_CHECK_THROWS(
+    server.upgrade("/ws/%zz", [](uvp::http::upgrade_request&) {}),
+    std::invalid_argument);
+}
+
 UVP_TEST_CASE("http server returns 405 and allow for a known path with another method") {
   const auto received = perform_http_request(
     [](uvp::http::server& server) {
