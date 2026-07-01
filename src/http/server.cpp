@@ -182,7 +182,7 @@ struct server::impl {
   struct response_slot {
     response res;
     request_snapshot request;
-    std::vector<const response_hook_type*> on_response_hooks;
+    std::vector<response_hook_handle> on_response_hooks;
     bool completed = false;
     bool close_after = false;
     bool suppress_body = false;
@@ -736,7 +736,7 @@ struct server::impl {
     void configure_response_observation(
       response_slot& slot,
       const request& req,
-      std::vector<const response_hook_type*> hooks) {
+      std::vector<response_hook_handle> hooks) {
       slot.request = snapshot_request(req);
       slot.on_response_hooks = std::move(hooks);
     }

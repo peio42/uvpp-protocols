@@ -175,6 +175,11 @@ request can be destroyed. It intentionally excludes request body bytes and raw
 request headers at first; those can be added later only if there is a clear
 logging or metrics need and the copying cost remains explicit.
 
+The matched `on_response` chain is also captured when the response lifecycle is
+created. Implementations should retain stable hook handles for in-flight
+responses, so hooks registered later affect future responses without
+invalidating deferred or streaming responses that already captured their chain.
+
 `on_response` runs exactly once for every route handler that starts a
 response lifecycle:
 

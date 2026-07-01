@@ -187,6 +187,10 @@ The trie also drives method-aware HTTP behavior:
 Route groups, request hooks, response observers, scoped fallbacks, and
 mountable routers build on the same trie.
 
+Response observers are retained by stable handles once a response slot is
+created, so deferred and streaming responses can complete after later hook
+registrations without holding invalidated pointers into router storage.
+
 Handlers receive request and response references, plus a body argument when the
 body policy produces one:
 

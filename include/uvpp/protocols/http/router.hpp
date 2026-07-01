@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -54,6 +55,7 @@ struct response_info {
 
 using hook_type = std::function<hook_result(request&, response&)>;
 using response_hook_type = std::function<void(const response_info&)>;
+using response_hook_handle = std::shared_ptr<const response_hook_type>;
 using exception_handler_type = std::function<void(request&, response&, std::exception_ptr)>;
 
 struct route_options {
@@ -133,7 +135,7 @@ public:
     route_params params;
     std::vector<const hook_type*> on_request_hooks;
     std::vector<const hook_type*> pre_handler_hooks;
-    std::vector<const response_hook_type*> on_response_hooks;
+    std::vector<response_hook_handle> on_response_hooks;
     const exception_handler_type* exception_handler = nullptr;
 
     [[nodiscard]] bool ok() const noexcept { return handler != nullptr; }
@@ -387,7 +389,7 @@ private:
     std::array<std::optional<route_target>, method_count_> targets;
     std::vector<hook_type> on_request_hooks;
     std::vector<hook_type> pre_handler_hooks;
-    std::vector<response_hook_type> on_response_hooks;
+    std::vector<response_hook_handle> on_response_hooks;
     std::optional<handler_type> not_found_handler;
     std::optional<exception_handler_type> exception_handler;
   };
@@ -417,7 +419,7 @@ private:
     route_params& params,
     std::vector<const hook_type*>& on_request_hooks,
     std::vector<const hook_type*>& pre_handler_hooks,
-    std::vector<const response_hook_type*>& on_response_hooks,
+    std::vector<response_hook_handle>& on_response_hooks,
     const exception_handler_type*& exception_handler) const;
 
   std::vector<trie_node> nodes_{{}};

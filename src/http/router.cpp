@@ -221,7 +221,8 @@ router& router::add_pre_handler_hook(std::string_view prefix, hook_type hook) {
 }
 
 router& router::add_on_response_hook(std::string_view prefix, response_hook_type hook) {
-  nodes_[ensure_prefix_node(prefix)].on_response_hooks.push_back(std::move(hook));
+  nodes_[ensure_prefix_node(prefix)].on_response_hooks.push_back(
+    std::make_shared<response_hook_type>(std::move(hook)));
   return *this;
 }
 
@@ -434,7 +435,7 @@ const router::route_target* router::match_node(
   route_params& params,
   std::vector<const hook_type*>& on_request_hooks,
   std::vector<const hook_type*>& pre_handler_hooks,
-  std::vector<const response_hook_type*>& on_response_hooks,
+  std::vector<response_hook_handle>& on_response_hooks,
   const exception_handler_type*& exception_handler) const {
   const auto& node = nodes_[node_index];
   for (const auto& hook : node.on_request_hooks) {
@@ -444,7 +445,7 @@ const router::route_target* router::match_node(
     pre_handler_hooks.push_back(&hook);
   }
   for (const auto& hook : node.on_response_hooks) {
-    on_response_hooks.push_back(&hook);
+    on_response_hooks.push_back(hook);
   }
   if (node.exception_handler) {
     exception_handler = &*node.exception_handler;
@@ -471,7 +472,7 @@ const router::route_target* router::match_node(
         wildcard_pre_handler_hooks.push_back(&hook);
       }
       for (const auto& hook : wildcard_node.on_response_hooks) {
-        wildcard_on_response_hooks.push_back(&hook);
+        wildcard_on_response_hooks.push_back(hook);
       }
       if (wildcard_node.exception_handler) {
         wildcard_exception_handler = &*wildcard_node.exception_handler;
@@ -559,7 +560,7 @@ const router::route_target* router::match_node(
       wildcard_pre_handler_hooks.push_back(&hook);
     }
     for (const auto& hook : wildcard_node.on_response_hooks) {
-      wildcard_on_response_hooks.push_back(&hook);
+      wildcard_on_response_hooks.push_back(hook);
     }
     if (wildcard_node.exception_handler) {
       wildcard_exception_handler = &*wildcard_node.exception_handler;
@@ -598,7 +599,7 @@ router::match_result router::match(method method_value, const detail::route_path
   route_params params;
   std::vector<const hook_type*> on_request_hooks;
   std::vector<const hook_type*> pre_handler_hooks;
-  std::vector<const response_hook_type*> on_response_hooks;
+  std::vector<response_hook_handle> on_response_hooks;
   const exception_handler_type* exception_handler = nullptr;
   const auto* target = match_node(
     0,
@@ -702,7 +703,7 @@ std::vector<method> router::allowed_methods(const detail::route_path& path) cons
     auto params = route_params{};
     std::vector<const hook_type*> on_request_hooks;
     std::vector<const hook_type*> pre_handler_hooks;
-    std::vector<const response_hook_type*> on_response_hooks;
+    std::vector<response_hook_handle> on_response_hooks;
     const exception_handler_type* exception_handler = nullptr;
     const auto method_index = static_cast<std::size_t>(method_value);
     if (method_index < method_count_ &&

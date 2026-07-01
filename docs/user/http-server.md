@@ -200,6 +200,10 @@ response headers, logical response body size, and a `response_outcome`.
 Response hooks cannot mutate the response. They run leaf to root, so the most
 specific group observes first.
 
+The applicable response hooks are captured when the response lifecycle starts.
+Hooks registered later apply only to future responses; in-flight deferred and
+streaming responses keep stable handles to the hooks they captured.
+
 Groups can also define scoped fallbacks:
 
 ```cpp

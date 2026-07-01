@@ -721,3 +721,33 @@ UVP_TEST_CASE("http server runs response hooks for deferred responses") {
   UVP_CHECK_EQ(observed_body_size, 6U);
   UVP_CHECK(observed_outcome == uvp::http::response_outcome::completed);
 }
+
+UVP_TEST_CASE("http server keeps response hook handles stable for deferred responses") {
+  std::size_t captured_hook_calls = 0;
+  std::size_t late_hook_calls = 0;
+
+  const auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.on_response([&](const uvp::http::response_info&) {
+        ++captured_hook_calls;
+      });
+      server.get("/later", [&](uvp::http::request&, uvp::http::response& res) {
+        auto reply = res.defer();
+        for (int i = 0; i < 32; ++i) {
+          server.on_response([&](const uvp::http::response_info&) {
+            ++late_hook_calls;
+          });
+        }
+        reply.text("stable\n");
+      });
+    },
+    "GET /later HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "stable\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK_EQ(captured_hook_calls, 1U);
+  UVP_CHECK_EQ(late_hook_calls, 0U);
+}
