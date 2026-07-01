@@ -8,7 +8,8 @@ Use this map to load only the documentation needed for the task.
   as the source of truth for how the project currently works or is intended to
   work.
 - [`roadmap.md`](roadmap.md): concise decision summary for current and future
-  priorities.
+  priorities. Its `Current focus` section uses checklist lines to show which
+  proposals in the active milestone are implemented.
 - [`proposals/`](proposals/): active or tentative work plans. Ignore this
   directory unless working on the related task or discussing future changes.
   Detailed designs for unimplemented work live here, not in `design/`.
@@ -26,4 +27,7 @@ Workflow:
 3. Create a short ADR only for a structural decision worth preserving.
 4. Use the proposal as the implementation plan.
 5. Update `design/` and `user/` when behavior or public usage changes.
-6. Delete or archive the proposal when the work is complete.
+6. When a `Current focus` proposal is implemented, keep it listed in
+   `roadmap.md` and mark its checklist line with `[x]`.
+7. Replace the `Current focus` block and archive or delete completed proposals
+   only when starting the next milestone or step.

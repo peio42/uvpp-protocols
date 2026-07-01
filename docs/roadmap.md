@@ -8,10 +8,15 @@
 ## Current focus
 
 - Milestone 4: HTTP payload and streaming helpers
-  - [Typed JSON request bodies](proposals/typed-json-body-policy.md)
-  - [Multipart handling](proposals/multipart-handling.md)
-  - [Server-Sent Events helper](proposals/sse-support.md)
-  - [Static file helper](proposals/static-file-helper.md)
+  - [ ] [Typed JSON request bodies](proposals/typed-json-body-policy.md)
+  - [ ] [Multipart handling](proposals/multipart-handling.md)
+  - [ ] [Server-Sent Events helper](proposals/sse-support.md)
+  - [ ] [Static file helper](proposals/static-file-helper.md)
+
+Keep completed Current focus proposals listed until the milestone is closed.
+When a Current focus proposal is implemented, mark its line with `[x]` instead
+of removing it. Replace the whole Current focus block only when starting the
+next milestone or step.
 
 ## Next
 
