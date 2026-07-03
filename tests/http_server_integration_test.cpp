@@ -846,6 +846,120 @@ UVP_TEST_CASE("http server reports malformed multipart bodies to stream handlers
   UVP_CHECK(received.find("ok\n") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server maps multipart limit errors to payload too large") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"file\"; filename=\"big.txt\"\r\n"
+    "\r\n"
+    "abcdef\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{}.max_file_bytes(3),
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.stream();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              const auto status = error.code == uvp::http::make_error_code(uvp::http::errc::multipart_limit_exceeded)
+                ? uvp::http::status::payload_too_large
+                : uvp::http::status::bad_request;
+              res.status(status).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "multipart file is too large\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server collects multipart form-data bodies") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"title\"\r\n"
+    "\r\n"
+    "hello\r\n"
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"tag\"\r\n"
+    "\r\n"
+    "one\r\n"
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"tag\"\r\n"
+    "\r\n"
+    "two\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_form{},
+        [](uvp::http::request&, uvp::http::response& res, const uvp::http::multipart_form& form) {
+          const auto title = form.single_field("title");
+          UVP_REQUIRE(title);
+          const auto tags = form.fields("tag");
+          UVP_REQUIRE(tags.size() == 2U);
+          res.text(std::string{title.value().text()} + ":" + std::string{tags[0].text()} + "," + std::string{tags[1].text()} + "\n");
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "hello:one,two\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nhello:one,two\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server rejects multipart form files by default") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"file\"; filename=\"note.txt\"\r\n"
+    "\r\n"
+    "abc\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_form{},
+        [](uvp::http::request&, uvp::http::response& res, const uvp::http::multipart_form&) {
+          res.text("handler\n");
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "multipart files are not accepted\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
 UVP_TEST_CASE("http server returns request timeout for incomplete headers") {
   const auto received = perform_http_request_until_close(
     uvp::http::server_options{}.header_timeout(std::chrono::milliseconds{20}),

@@ -1,14 +1,18 @@
 # Multipart Handling Proposal
 
-Status: Partially implemented
+Status: Implemented for the Milestone 4 route-policy surface
 
 ## Current State
 
 - Implemented: request body streaming, bounded buffered body policies, internal
   multipart streaming parser, `body::multipart_stream`, streaming part APIs,
-  and multipart stream error reporting.
-- Not implemented: `body::multipart_form`, owning collected form model, form
-  memory limits, form file rules, and form integration tests.
+  `body::multipart_form`, owning collected form model, non-owning form views,
+  `multipart_stream_options`, `multipart_form_options`, `multipart_limits`,
+  multipart error reporting, size-limit status mapping, stream backpressure,
+  and multipart unit/integration tests.
+- Deferred: schema-level per-field/per-file rules, server-wide multipart
+  default inheritance, timeout-between-boundaries policy, and late
+  `req.form()` / `req.multipart_stream()` helper entrypoints.
 
 ## Scope
 
@@ -24,8 +28,9 @@ Implementation should land in two steps:
 
 1. `multipart_stream`: internal streaming parser, part callbacks, backpressure,
    multipart error reporting, and parser state-machine tests.
-2. `multipart_form`: bounded in-memory collection built on the same parser,
-   immutable form model, memory-safe defaults, and integration tests.
+2. `multipart_form`: bounded in-memory collection using the same internal
+   multipart syntax rules, immutable form model, memory-safe defaults, and
+   integration tests.
 
 Multipart response generation and generic non-form multipart variants can be
 added later if a concrete use case appears.
@@ -59,9 +64,11 @@ server read policy harder to see and would push content-type validation and
 buffering decisions into application code after the HTTP body has already
 started.
 
-Typed multipart policies should not be inferred from handler signatures. Like
-`body::json<T>`, multipart decoding is specific enough that the route should
-declare it explicitly.
+`multipart_form` may be inferred from a handler that accepts
+`const multipart_form&`, because it follows the buffered body path and can
+answer parse errors before handler entry. `multipart_stream` remains explicit:
+its response ownership and `on_error()` requirements are specific enough that
+the route should declare it.
 
 Route policies remain the primary API. Helper shapes such as `req.form()` or
 `req.multipart_stream()` may be used only as explicit multipart entrypoints
@@ -272,15 +279,12 @@ auto policy = uvp::http::body::multipart_form{}
   .max_total_bytes(16 * 1024 * 1024)
   .max_memory_bytes(8 * 1024 * 1024)
   .max_field_bytes(1024 * 1024)
-  .max_file_bytes(0)
-  .max_parts(64)
-  .repeated_fields(uvp::http::repeated_field_policy::collect);
+  .max_file_bytes(0);
 
 srv.post("/profile", policy, [](uvp::http::request&, uvp::http::response& res,
                                 const uvp::http::multipart_form& form) {
   auto display_name = form.first_field("display_name");
   auto tags = form.fields("tag");
-  auto avatar = form.first_file("avatar");
 
   res.status(204).end();
 });
@@ -299,7 +303,7 @@ class multipart_form {
 public:
   std::optional<multipart_field_view> first_field(std::string_view name) const;
   uvp::result<multipart_field_view> single_field(std::string_view name) const;
-  std::span<const multipart_field> fields(std::string_view name) const;
+  std::span<const multipart_field_view> fields(std::string_view name) const;
 
   std::optional<multipart_file_view> first_file(std::string_view name) const;
   uvp::result<multipart_file_view> single_file(std::string_view name) const;
@@ -392,10 +396,9 @@ behavior. The option set should cover:
 - repeated-field policy.
 
 Multipart limits are part of the HTTP API contract. They are configured through
-immutable option structs, inherited from server defaults to route defaults and
-finally to per-request multipart entrypoints. The low-level parser receives a
-snapshot of effective limits and does not own defaults. Limits cannot be
-changed after multipart parsing has started.
+immutable option structs on the route body policy and passed to the parser as a
+snapshot. The low-level parser receives effective limits and does not own
+defaults. Limits cannot be changed after multipart parsing has started.
 
 `multipart_stream` defaults are streaming-oriented: structural limits are
 enforced, text fields are limited to 1 MiB, and file and total body size limits
@@ -404,7 +407,9 @@ default.
 
 `multipart_form` defaults are memory-safe: files are rejected by default, fields
 are collected in memory with a 1 MiB per-field limit, an 8 MiB memory limit, and
-a 16 MiB total body limit.
+a 16 MiB total body limit. When a route does not set `route_options`
+`max_body_bytes`, `body::multipart_form{}` uses its total multipart limit as
+the route buffering limit.
 
 The server should reject:
 

@@ -102,6 +102,7 @@ if(UVPP_PROTOCOLS_BUILD_TESTS)
     tests/http_router_test.cpp
     tests/http_server_integration_test.cpp
     tests/io_test.cpp
+    tests/multipart_test.cpp
     tests/websocket_test.cpp)
   target_include_directories(uvpp_protocols_tests PRIVATE ${PROJECT_SOURCE_DIR})
   target_link_libraries(uvpp_protocols_tests PRIVATE uvpp::protocols uvpp::uvpp)

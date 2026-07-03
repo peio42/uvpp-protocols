@@ -14,6 +14,7 @@
 #include <uvpp/protocols/http/connection.hpp>
 #include <uvpp/protocols/http/headers.hpp>
 #include <uvpp/protocols/http/method.hpp>
+#include <uvpp/protocols/http/multipart_options.hpp>
 #include <uvpp/protocols/http/route_params.hpp>
 #include <uvpp/protocols/json.hpp>
 
@@ -33,7 +34,117 @@ struct text {};
 
 struct stream {};
 
-struct multipart_stream {};
+struct multipart_stream {
+  multipart_stream() = default;
+  explicit multipart_stream(http::multipart_stream_options options) noexcept
+      : options_(std::move(options)) {}
+
+  multipart_stream& options(http::multipart_stream_options value) & noexcept {
+    options_ = std::move(value);
+    return *this;
+  }
+
+  multipart_stream&& options(http::multipart_stream_options value) && noexcept {
+    options(std::move(value));
+    return std::move(*this);
+  }
+
+  multipart_stream& max_total_bytes(std::size_t value) & noexcept {
+    options_.max_total_bytes(value);
+    return *this;
+  }
+
+  multipart_stream&& max_total_bytes(std::size_t value) && noexcept {
+    max_total_bytes(value);
+    return std::move(*this);
+  }
+
+  multipart_stream& max_file_bytes(std::size_t value) & noexcept {
+    options_.max_file_bytes(value);
+    return *this;
+  }
+
+  multipart_stream&& max_file_bytes(std::size_t value) && noexcept {
+    max_file_bytes(value);
+    return std::move(*this);
+  }
+
+  multipart_stream& max_field_bytes(std::size_t value) & noexcept {
+    options_.max_field_bytes(value);
+    return *this;
+  }
+
+  multipart_stream&& max_field_bytes(std::size_t value) && noexcept {
+    max_field_bytes(value);
+    return std::move(*this);
+  }
+
+  [[nodiscard]] const http::multipart_stream_options& options() const noexcept { return options_; }
+
+private:
+  http::multipart_stream_options options_;
+};
+
+struct multipart_form {
+  multipart_form() = default;
+  explicit multipart_form(http::multipart_form_options options) noexcept
+      : options_(std::move(options)) {}
+
+  multipart_form& options(http::multipart_form_options value) & noexcept {
+    options_ = std::move(value);
+    return *this;
+  }
+
+  multipart_form&& options(http::multipart_form_options value) && noexcept {
+    options(std::move(value));
+    return std::move(*this);
+  }
+
+  multipart_form& max_total_bytes(std::size_t value) & noexcept {
+    options_.limits.max_total_bytes = value;
+    return *this;
+  }
+
+  multipart_form&& max_total_bytes(std::size_t value) && noexcept {
+    max_total_bytes(value);
+    return std::move(*this);
+  }
+
+  multipart_form& max_file_bytes(std::size_t value) & noexcept {
+    options_.limits.max_file_bytes = value;
+    return *this;
+  }
+
+  multipart_form&& max_file_bytes(std::size_t value) && noexcept {
+    max_file_bytes(value);
+    return std::move(*this);
+  }
+
+  multipart_form& max_field_bytes(std::size_t value) & noexcept {
+    options_.limits.max_field_bytes = value;
+    return *this;
+  }
+
+  multipart_form&& max_field_bytes(std::size_t value) && noexcept {
+    max_field_bytes(value);
+    return std::move(*this);
+  }
+
+  multipart_form& max_memory_bytes(std::size_t value) & noexcept {
+    options_.max_memory_bytes = value;
+    return *this;
+  }
+
+  multipart_form&& max_memory_bytes(std::size_t value) && noexcept {
+    max_memory_bytes(value);
+    return std::move(*this);
+  }
+
+  [[nodiscard]] const http::multipart_form_options& options() const noexcept { return options_; }
+
+private:
+  http::multipart_form_options options_;
+};
 
 template<class T = uvp::json>
 struct json {};

@@ -144,7 +144,10 @@ Do not adopt libcurl for the first HTTP server milestones.
 
 Multipart parsing for the first HTTP server milestone should use an internal
 private parser. The project should not add a fragile multipart dependency and
-must not implement multipart by buffering complete uploads before parsing.
+must not implement streaming uploads by buffering complete uploads before
+parsing. `body::multipart_form{}` is the bounded exception: it uses explicit
+total and memory limits, rejects files by default, and is intended for small
+HTML-style forms.
 
 The parser boundary is:
 

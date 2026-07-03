@@ -102,6 +102,7 @@ enum class body_mode {
   json,
   stream,
   multipart_stream,
+  multipart_form,
 };
 
 using route_handler_type = std::function<void(request&, response&, std::span<const std::byte>, request_body_stream*)>;
@@ -117,7 +118,9 @@ route_handler_type wrap_json_handler(Handler&& handler);
 template<class Handler>
 route_handler_type wrap_stream_handler(Handler&& handler);
 template<class Handler>
-route_handler_type wrap_multipart_stream_handler(Handler&& handler);
+route_handler_type wrap_multipart_stream_handler(Handler&& handler, multipart_stream_options options = {});
+template<class Handler>
+route_handler_type wrap_multipart_form_handler(Handler&& handler, multipart_form_options options = {});
 template<class Handler>
 constexpr auto infer_body_policy();
 template<class Handler>
@@ -247,18 +250,35 @@ public:
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, route_options options, body::multipart_stream policy, Handler&& handler) {
-    (void)policy;
     return add_route(
       method_value,
       pattern,
       detail::body_mode::multipart_stream,
       options.max_body_bytes(),
       options.body_timeout(),
-      detail::wrap_multipart_stream_handler(std::forward<Handler>(handler)));
+      detail::wrap_multipart_stream_handler(std::forward<Handler>(handler), policy.options()));
   }
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, body::multipart_stream policy, Handler&& handler) {
+    return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, route_options options, body::multipart_form policy, Handler&& handler) {
+    const auto body_limit =
+      options.max_body_bytes() == 0 ? policy.options().limits.max_total_bytes : options.max_body_bytes();
+    return add_route(
+      method_value,
+      pattern,
+      detail::body_mode::multipart_form,
+      body_limit,
+      options.body_timeout(),
+      detail::wrap_multipart_form_handler(std::forward<Handler>(handler), policy.options()));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, body::multipart_form policy, Handler&& handler) {
     return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
   }
 
@@ -983,18 +1003,21 @@ inline http::status multipart_error_status(const uvp::error& error) noexcept {
   if (error.code == make_error_code(errc::unsupported_media_type)) {
     return status::unsupported_media_type;
   }
+  if (error.code == make_error_code(errc::multipart_limit_exceeded)) {
+    return status::payload_too_large;
+  }
   return status::bad_request;
 }
 
 template<class Handler>
-router::handler_type wrap_multipart_stream_handler(Handler&& handler) {
+router::handler_type wrap_multipart_stream_handler(Handler&& handler, multipart_stream_options options) {
   using stored_handler = std::decay_t<Handler>;
-  return [handler = stored_handler(std::forward<Handler>(handler))](
+  return [handler = stored_handler(std::forward<Handler>(handler)), options = std::move(options)](
            request& req,
            response& res,
            std::span<const std::byte>,
            request_body_stream* body) mutable {
-    http::multipart_stream multipart{*body, req.header("content-type")};
+    http::multipart_stream multipart{*body, req.header("content-type"), options};
     if (!multipart.valid()) {
       res.status(multipart_error_status(multipart.error())).text(multipart.error().detail + "\n");
       return;
@@ -1004,6 +1027,24 @@ router::handler_type wrap_multipart_stream_handler(Handler&& handler) {
     if (!multipart.has_error_handler() && !res.ended() && !res.deferred() && !res.streaming()) {
       res.status(status::internal_server_error).text("multipart on_error handler required\n");
     }
+  };
+}
+
+template<class Handler>
+router::handler_type wrap_multipart_form_handler(Handler&& handler, multipart_form_options options) {
+  using stored_handler = std::decay_t<Handler>;
+  return [handler = stored_handler(std::forward<Handler>(handler)), options = std::move(options)](
+           request& req,
+           response& res,
+           std::span<const std::byte> body,
+           request_body_stream*) mutable {
+    auto form = parse_multipart_form(req.header("content-type"), body, options);
+    if (!form) {
+      res.status(multipart_error_status(form.error())).text(form.error().detail + "\n");
+      return;
+    }
+
+    handler(req, res, form.value());
   };
 }
 
@@ -1018,12 +1059,15 @@ constexpr auto infer_body_policy() {
     return body::text{};
   } else if constexpr (std::is_invocable_v<handler_type&, request&, response&, request_body_stream&>) {
     return body::stream{};
+  } else if constexpr (std::is_invocable_v<handler_type&, request&, response&, const multipart_form&>) {
+    return body::multipart_form{};
   } else {
     static_assert(std::is_invocable_v<handler_type&, request&, response&>,
       "HTTP route handler must accept (request&, response&), "
       "(request&, response&, std::span<const std::byte>), or "
       "(request&, response&, std::string_view), or "
-      "(request&, response&, request_body_stream&)");
+      "(request&, response&, request_body_stream&), or "
+      "(request&, response&, const multipart_form&)");
     return body::none{};
   }
 }

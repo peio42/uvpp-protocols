@@ -9,7 +9,7 @@
 
 - Milestone 4: HTTP payload and streaming helpers
   - [x] [Typed JSON request bodies](proposals/typed-json-body-policy.md)
-  - [ ] [Multipart handling](proposals/multipart-handling.md)
+  - [x] [Multipart handling](proposals/multipart-handling.md)
   - [ ] [Server-Sent Events helper](proposals/sse-support.md)
   - [ ] [Static file helper](proposals/static-file-helper.md)
 

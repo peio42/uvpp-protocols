@@ -1,11 +1,15 @@
 #include <uvpp/protocols/http/multipart.hpp>
 
+#include <uvpp/protocols/http/detail/multipart_parser.hpp>
+
 #include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 namespace uvp::http {
 
@@ -105,16 +109,148 @@ std::optional<std::string> parse_parameter_value(std::string_view value) {
   return std::string(value);
 }
 
+std::size_t find_unquoted(std::string_view value, char needle, std::size_t offset = 0) noexcept {
+  bool quoted = false;
+  bool escaped = false;
+  for (std::size_t index = offset; index < value.size(); ++index) {
+    const auto ch = value[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && ch == '\\') {
+      escaped = true;
+      continue;
+    }
+    if (ch == '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (!quoted && ch == needle) {
+      return index;
+    }
+  }
+  return std::string_view::npos;
+}
+
 bool valid_boundary(std::string_view boundary) noexcept {
   return !boundary.empty() && boundary.size() <= 70 && !contains_ctl(boundary);
 }
 
-uvp::result<std::string> boundary_from_content_type(std::string_view content_type) {
+std::size_t count_header_lines(std::string_view block) noexcept {
+  if (block.empty()) {
+    return 0;
+  }
+  std::size_t count = 1;
+  std::size_t offset = 0;
+  while ((offset = block.find("\r\n", offset)) != std::string_view::npos) {
+    ++count;
+    offset += 2;
+  }
+  return count;
+}
+
+struct parsed_part_headers {
+  detail::multipart_disposition disposition;
+  http::headers headers;
+};
+
+uvp::result<parsed_part_headers> parse_part_header_block(std::string_view block, const multipart_limits& limits) {
+  if (count_header_lines(block) > limits.max_part_headers) {
+    return make_error(errc::multipart_limit_exceeded, "multipart part has too many headers");
+  }
+
+  parsed_part_headers parsed;
+  std::optional<std::string> content_disposition;
+  bool saw_content_type = false;
+
+  std::size_t offset = 0;
+  while (offset < block.size()) {
+    const auto line_end = block.find("\r\n", offset);
+    const auto line = block.substr(
+      offset,
+      line_end == std::string_view::npos ? std::string_view::npos : line_end - offset);
+    if (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+      return make_error(errc::multipart_malformed_part_header, "folded part headers are not supported");
+    }
+
+    const auto colon = line.find(':');
+    if (colon == std::string_view::npos || colon == 0) {
+      return make_error(errc::multipart_malformed_part_header);
+    }
+    const auto name = trim_ows(line.substr(0, colon));
+    const auto value = trim_ows(line.substr(colon + 1));
+    if (name.empty() || contains_ctl(name)) {
+      return make_error(errc::multipart_malformed_part_header);
+    }
+    if (ascii_iequals(name, "content-disposition")) {
+      if (content_disposition) {
+        return make_error(errc::multipart_malformed_part_header, "duplicate content-disposition");
+      }
+      content_disposition = std::string(value);
+    } else if (ascii_iequals(name, "content-type")) {
+      if (saw_content_type) {
+        return make_error(errc::multipart_malformed_part_header, "duplicate content-type");
+      }
+      saw_content_type = true;
+    } else if (ascii_iequals(name, "content-transfer-encoding") &&
+               !ascii_iequals(value, "7bit") &&
+               !ascii_iequals(value, "8bit") &&
+               !ascii_iequals(value, "binary")) {
+      return make_error(errc::multipart_malformed_part_header, "unsupported content-transfer-encoding");
+    }
+    parsed.headers.add(name, value);
+
+    if (line_end == std::string_view::npos) {
+      break;
+    }
+    offset = line_end + 2;
+  }
+
+  if (!content_disposition) {
+    return make_error(errc::multipart_malformed_part_header, "missing content-disposition");
+  }
+
+  auto disposition = detail::parse_multipart_content_disposition(*content_disposition);
+  if (!disposition) {
+    return disposition.error();
+  }
+  if (disposition.value().name.size() > limits.max_field_name_bytes) {
+    return make_error(errc::multipart_limit_exceeded, "multipart field name is too large");
+  }
+  if (disposition.value().filename && disposition.value().filename->size() > limits.max_filename_bytes) {
+    return make_error(errc::multipart_limit_exceeded, "multipart filename is too large");
+  }
+
+  parsed.disposition = std::move(disposition).value();
+  return parsed;
+}
+
+std::string make_safe_filename(std::optional<std::string_view> filename) {
+  if (!filename) {
+    return {};
+  }
+  std::string out;
+  for (const auto ch : *filename) {
+    const auto byte = static_cast<unsigned char>(ch);
+    if (ch == '/' || ch == '\\' || ch == ':' || byte < 0x20 || byte == 0x7f) {
+      continue;
+    }
+    out.push_back(ch);
+  }
+  return out.empty() ? std::string{"upload"} : out;
+}
+
+} // namespace
+
+namespace detail {
+
+uvp::result<std::string> parse_multipart_boundary(std::string_view content_type) {
   if (content_type.empty()) {
     return make_error(errc::unsupported_media_type, "missing content-type");
   }
 
-  const auto separator = content_type.find(';');
+  const auto separator = find_unquoted(content_type, ';');
   const auto media_type = trim_ows(content_type.substr(0, separator));
   if (!ascii_iequals(media_type, "multipart/form-data")) {
     return make_error(errc::unsupported_media_type, "expected multipart/form-data");
@@ -124,7 +260,7 @@ uvp::result<std::string> boundary_from_content_type(std::string_view content_typ
   std::string boundary;
   std::size_t offset = separator == std::string_view::npos ? content_type.size() : separator + 1;
   while (offset < content_type.size()) {
-    const auto next = content_type.find(';', offset);
+    const auto next = find_unquoted(content_type, ';', offset);
     const auto raw_param = content_type.substr(
       offset,
       next == std::string_view::npos ? std::string_view::npos : next - offset);
@@ -166,13 +302,8 @@ std::span<const std::byte> as_bytes(std::string_view value) noexcept {
   return std::as_bytes(std::span{value.data(), value.size()});
 }
 
-struct disposition_info {
-  std::string name;
-  std::optional<std::string> filename;
-};
-
-uvp::result<disposition_info> parse_content_disposition(std::string_view value) {
-  const auto first_separator = value.find(';');
+uvp::result<multipart_disposition> parse_multipart_content_disposition(std::string_view value) {
+  const auto first_separator = find_unquoted(value, ';');
   const auto disposition = trim_ows(value.substr(0, first_separator));
   if (!ascii_iequals(disposition, "form-data")) {
     return make_error(errc::multipart_malformed_part_header, "content-disposition must be form-data");
@@ -180,10 +311,10 @@ uvp::result<disposition_info> parse_content_disposition(std::string_view value) 
 
   bool saw_name = false;
   bool saw_filename = false;
-  disposition_info info;
+  multipart_disposition info;
   std::size_t offset = first_separator == std::string_view::npos ? value.size() : first_separator + 1;
   while (offset < value.size()) {
-    const auto next = value.find(';', offset);
+    const auto next = find_unquoted(value, ';', offset);
     const auto raw_param = value.substr(
       offset,
       next == std::string_view::npos ? std::string_view::npos : next - offset);
@@ -227,9 +358,7 @@ uvp::result<disposition_info> parse_content_disposition(std::string_view value) 
   return info;
 }
 
-} // namespace
-
-namespace detail {
+struct multipart_stream_state;
 
 enum class multipart_part_mode {
   none,
@@ -242,9 +371,12 @@ struct multipart_part_state {
   std::string name;
   std::optional<std::string> filename;
   http::headers headers;
+  std::weak_ptr<multipart_stream_state> owner;
   multipart_part_mode mode = multipart_part_mode::none;
   bool ended = false;
   bool paused = false;
+  bool file = false;
+  std::size_t received_bytes = 0;
   std::function<void(std::span<const std::byte>)> on_data;
   std::function<void()> on_end;
   std::function<void(uvp::error)> on_error;
@@ -261,7 +393,8 @@ enum class multipart_parser_phase {
   failed,
 };
 
-struct multipart_stream_state {
+struct multipart_stream_state : std::enable_shared_from_this<multipart_stream_state> {
+  multipart_stream_options options;
   request_body_stream* body = nullptr;
   std::string boundary;
   std::string first_delimiter;
@@ -273,8 +406,32 @@ struct multipart_stream_state {
   std::function<void()> on_end;
   std::function<void(uvp::error)> on_error;
   uvp::error construction_error;
+  std::size_t received_total_bytes = 0;
+  std::size_t part_count = 0;
   bool valid = false;
   bool failed = false;
+  bool paused = false;
+
+  void pause() {
+    if (paused) {
+      return;
+    }
+    paused = true;
+    if (body) {
+      body->pause();
+    }
+  }
+
+  void resume() {
+    if (!paused) {
+      return;
+    }
+    paused = false;
+    parse();
+    if (!paused && body) {
+      body->resume();
+    }
+  }
 
   void fail(uvp::error error) {
     if (failed || phase == multipart_parser_phase::done) {
@@ -363,15 +520,36 @@ struct multipart_stream_state {
       return;
     }
 
-    auto disposition = parse_content_disposition(*content_disposition);
+    if (count_header_lines(block) > options.limits().max_part_headers) {
+      fail(make_error(errc::multipart_limit_exceeded, "multipart part has too many headers"));
+      return;
+    }
+
+    auto disposition = parse_multipart_content_disposition(*content_disposition);
     if (!disposition) {
       fail(disposition.error());
       return;
     }
+    if (disposition.value().name.size() > options.limits().max_field_name_bytes) {
+      fail(make_error(errc::multipart_limit_exceeded, "multipart field name is too large"));
+      return;
+    }
+    if (disposition.value().filename && disposition.value().filename->size() > options.limits().max_filename_bytes) {
+      fail(make_error(errc::multipart_limit_exceeded, "multipart filename is too large"));
+      return;
+    }
+
+    ++part_count;
+    if (part_count > options.limits().max_parts) {
+      fail(make_error(errc::multipart_limit_exceeded, "multipart has too many parts"));
+      return;
+    }
 
     current_part = std::make_shared<multipart_part_state>();
+    current_part->owner = shared_from_this();
     current_part->name = std::move(disposition.value().name);
     current_part->filename = std::move(disposition.value().filename);
+    current_part->file = current_part->filename.has_value();
     current_part->headers = std::move(parsed_headers);
 
     if (!on_part) {
@@ -389,7 +567,7 @@ struct multipart_stream_state {
   }
 
   void parse() {
-    while (!failed) {
+    while (!failed && !paused) {
       if (phase == multipart_parser_phase::first_boundary) {
         if (buffer.size() < first_delimiter.size() + 2) {
           return;
@@ -419,7 +597,7 @@ struct multipart_stream_state {
       if (phase == multipart_parser_phase::headers) {
         const auto header_end = buffer.find("\r\n\r\n");
         if (header_end == std::string::npos) {
-          if (buffer.size() > default_part_header_bytes) {
+          if (buffer.size() > options.limits().max_part_header_bytes) {
             fail(make_error(errc::multipart_limit_exceeded, "multipart part headers are too large"));
           }
           return;
@@ -453,6 +631,13 @@ struct multipart_stream_state {
         }
 
         emit_current_data(std::string_view(buffer.data(), delimiter));
+        if (paused) {
+          buffer.erase(0, delimiter);
+          return;
+        }
+        if (failed) {
+          return;
+        }
         end_current_part();
         buffer.erase(0, after + 2);
         if (suffix == "--") {
@@ -490,6 +675,336 @@ struct multipart_stream_state {
 
 } // namespace detail
 
+std::string_view multipart_part_view::name() const noexcept {
+  return part_ ? std::string_view(part_->name) : std::string_view{};
+}
+
+std::optional<std::string_view> multipart_part_view::filename() const noexcept {
+  if (!part_ || !part_->filename) {
+    return std::nullopt;
+  }
+  return std::string_view(*part_->filename);
+}
+
+std::string multipart_part_view::safe_filename() const {
+  return make_safe_filename(filename());
+}
+
+const http::headers& multipart_part_view::headers() const noexcept {
+  static const http::headers empty;
+  return part_ ? part_->headers : empty;
+}
+
+std::span<const std::byte> multipart_part_view::bytes() const noexcept {
+  if (!part_) {
+    return {};
+  }
+  return std::span<const std::byte>{part_->body.data(), part_->body.size()};
+}
+
+std::string_view multipart_part_view::text() const noexcept {
+  if (!part_ || part_->body.empty()) {
+    return {};
+  }
+  return std::string_view{reinterpret_cast<const char*>(part_->body.data()), part_->body.size()};
+}
+
+bool multipart_part_view::is_file() const noexcept {
+  return part_ && part_->filename.has_value();
+}
+
+std::string_view multipart_field_view::name() const noexcept {
+  return part_ ? std::string_view(part_->name) : std::string_view{};
+}
+
+const http::headers& multipart_field_view::headers() const noexcept {
+  static const http::headers empty;
+  return part_ ? part_->headers : empty;
+}
+
+std::span<const std::byte> multipart_field_view::bytes() const noexcept {
+  if (!part_) {
+    return {};
+  }
+  return std::span<const std::byte>{part_->body.data(), part_->body.size()};
+}
+
+std::string_view multipart_field_view::text() const noexcept {
+  if (!part_ || part_->body.empty()) {
+    return {};
+  }
+  return std::string_view{reinterpret_cast<const char*>(part_->body.data()), part_->body.size()};
+}
+
+std::string_view multipart_file_view::name() const noexcept {
+  return part_ ? std::string_view(part_->name) : std::string_view{};
+}
+
+std::string_view multipart_file_view::filename() const noexcept {
+  if (!part_ || !part_->filename) {
+    return {};
+  }
+  return *part_->filename;
+}
+
+std::string multipart_file_view::safe_filename() const {
+  return make_safe_filename(filename());
+}
+
+const http::headers& multipart_file_view::headers() const noexcept {
+  static const http::headers empty;
+  return part_ ? part_->headers : empty;
+}
+
+std::span<const std::byte> multipart_file_view::bytes() const noexcept {
+  if (!part_) {
+    return {};
+  }
+  return std::span<const std::byte>{part_->body.data(), part_->body.size()};
+}
+
+std::string_view multipart_file_view::text() const noexcept {
+  if (!part_ || part_->body.empty()) {
+    return {};
+  }
+  return std::string_view{reinterpret_cast<const char*>(part_->body.data()), part_->body.size()};
+}
+
+std::span<const multipart_part_view> multipart_form::parts() const noexcept {
+  return part_views_;
+}
+
+std::span<const multipart_field_view> multipart_form::fields(std::string_view name) const noexcept {
+  for (const auto& group : field_groups_) {
+    if (group.name == name) {
+      return std::span<const multipart_field_view>{field_views_.data() + group.offset, group.count};
+    }
+  }
+  return {};
+}
+
+std::span<const multipart_file_view> multipart_form::files(std::string_view name) const noexcept {
+  for (const auto& group : file_groups_) {
+    if (group.name == name) {
+      return std::span<const multipart_file_view>{file_views_.data() + group.offset, group.count};
+    }
+  }
+  return {};
+}
+
+std::optional<multipart_field_view> multipart_form::first_field(std::string_view name) const noexcept {
+  const auto values = fields(name);
+  if (values.empty()) {
+    return std::nullopt;
+  }
+  return values.front();
+}
+
+uvp::result<multipart_field_view> multipart_form::single_field(std::string_view name) const {
+  const auto values = fields(name);
+  if (values.empty()) {
+    return make_error(errc::multipart_malformed_body, "multipart field is missing");
+  }
+  if (values.size() > 1) {
+    return make_error(errc::multipart_malformed_body, "multipart field is repeated");
+  }
+  return values.front();
+}
+
+std::optional<multipart_file_view> multipart_form::first_file(std::string_view name) const noexcept {
+  const auto values = files(name);
+  if (values.empty()) {
+    return std::nullopt;
+  }
+  return values.front();
+}
+
+uvp::result<multipart_file_view> multipart_form::single_file(std::string_view name) const {
+  const auto values = files(name);
+  if (values.empty()) {
+    return make_error(errc::multipart_malformed_body, "multipart file is missing");
+  }
+  if (values.size() > 1) {
+    return make_error(errc::multipart_malformed_body, "multipart file is repeated");
+  }
+  return values.front();
+}
+
+bool multipart_form::empty() const noexcept {
+  return parts_.empty();
+}
+
+std::size_t multipart_form::size() const noexcept {
+  return parts_.size();
+}
+
+void multipart_form::rebuild_indexes() {
+  part_views_.clear();
+  field_views_.clear();
+  file_views_.clear();
+  field_groups_.clear();
+  file_groups_.clear();
+
+  part_views_.reserve(parts_.size());
+  std::vector<const detail::multipart_form_part*> fields;
+  std::vector<const detail::multipart_form_part*> files;
+  for (const auto& part : parts_) {
+    part_views_.push_back({});
+    part_views_.back().part_ = &part;
+    if (part.filename) {
+      files.push_back(&part);
+    } else {
+      fields.push_back(&part);
+    }
+  }
+
+  std::stable_sort(fields.begin(), fields.end(), [](const auto* lhs, const auto* rhs) {
+    return lhs->name < rhs->name;
+  });
+  field_views_.reserve(fields.size());
+  for (const auto* part : fields) {
+    if (field_groups_.empty() || field_groups_.back().name != part->name) {
+      field_groups_.push_back({part->name, field_views_.size(), 0});
+    }
+    field_views_.push_back({});
+    field_views_.back().part_ = part;
+    ++field_groups_.back().count;
+  }
+
+  std::stable_sort(files.begin(), files.end(), [](const auto* lhs, const auto* rhs) {
+    return lhs->name < rhs->name;
+  });
+  file_views_.reserve(files.size());
+  for (const auto* part : files) {
+    if (file_groups_.empty() || file_groups_.back().name != part->name) {
+      file_groups_.push_back({part->name, file_views_.size(), 0});
+    }
+    file_views_.push_back({});
+    file_views_.back().part_ = part;
+    ++file_groups_.back().count;
+  }
+}
+
+uvp::result<multipart_form> parse_multipart_form(
+  std::string_view content_type,
+  std::span<const std::byte> body,
+  const multipart_form_options& options) {
+  const auto& limits = options.limits;
+  if (limits.max_total_bytes != 0 && body.size() > limits.max_total_bytes) {
+    return make_error(errc::multipart_limit_exceeded, "multipart body is too large");
+  }
+
+  auto boundary = detail::parse_multipart_boundary(content_type);
+  if (!boundary) {
+    return boundary.error();
+  }
+
+  const std::string first_delimiter = "--" + boundary.value();
+  const std::string next_delimiter = "\r\n--" + boundary.value();
+  const std::string_view text{reinterpret_cast<const char*>(body.data()), body.size()};
+
+  if (text.rfind(first_delimiter, 0) != 0) {
+    return make_error(errc::multipart_malformed_body, "multipart body must start with boundary");
+  }
+
+  std::size_t offset = first_delimiter.size();
+  if (text.compare(offset, 2, "--") == 0) {
+    offset += 2;
+    if (text.compare(offset, 2, "\r\n") == 0) {
+      offset += 2;
+    }
+    if (offset != text.size()) {
+      return make_error(errc::multipart_malformed_body, "invalid multipart final delimiter");
+    }
+    return multipart_form{};
+  }
+  if (text.compare(offset, 2, "\r\n") != 0) {
+    return make_error(errc::multipart_malformed_body, "invalid multipart boundary delimiter");
+  }
+  offset += 2;
+
+  multipart_form form;
+  std::size_t memory_bytes = 0;
+
+  while (offset < text.size()) {
+    const auto header_end = text.find("\r\n\r\n", offset);
+    if (header_end == std::string_view::npos) {
+      return make_error(errc::multipart_unexpected_end);
+    }
+    const auto header_size = header_end - offset;
+    if (header_size > limits.max_part_header_bytes) {
+      return make_error(errc::multipart_limit_exceeded, "multipart part headers are too large");
+    }
+
+    auto headers = parse_part_header_block(text.substr(offset, header_size), limits);
+    if (!headers) {
+      return headers.error();
+    }
+    offset = header_end + 4;
+
+    const auto delimiter = text.find(next_delimiter, offset);
+    if (delimiter == std::string_view::npos) {
+      return make_error(errc::multipart_unexpected_end);
+    }
+    const auto payload = text.substr(offset, delimiter - offset);
+    const auto suffix_offset = delimiter + next_delimiter.size();
+    if (text.size() < suffix_offset + 2) {
+      return make_error(errc::multipart_unexpected_end);
+    }
+
+    const auto suffix = text.substr(suffix_offset, 2);
+    const bool final = suffix == "--";
+    if (!final && suffix != "\r\n") {
+      return make_error(errc::multipart_malformed_body, "invalid multipart delimiter suffix");
+    }
+
+    if (form.parts_.size() + 1 > limits.max_parts) {
+      return make_error(errc::multipart_limit_exceeded, "multipart has too many parts");
+    }
+
+    const auto file = headers.value().disposition.filename.has_value();
+    if (file) {
+      if (limits.max_file_bytes == 0) {
+        return make_error(errc::multipart_limit_exceeded, "multipart files are not accepted");
+      }
+      if (payload.size() > limits.max_file_bytes) {
+        return make_error(errc::multipart_limit_exceeded, "multipart file is too large");
+      }
+    } else if (payload.size() > limits.max_field_bytes) {
+      return make_error(errc::multipart_limit_exceeded, "multipart field is too large");
+    }
+
+    memory_bytes += payload.size();
+    if (options.max_memory_bytes != 0 && memory_bytes > options.max_memory_bytes) {
+      return make_error(errc::multipart_limit_exceeded, "multipart form memory limit exceeded");
+    }
+
+    detail::multipart_form_part part;
+    part.name = std::move(headers.value().disposition.name);
+    part.filename = std::move(headers.value().disposition.filename);
+    part.headers = std::move(headers.value().headers);
+    part.body.resize(payload.size());
+    if (!payload.empty()) {
+      std::memcpy(part.body.data(), payload.data(), payload.size());
+    }
+    form.parts_.push_back(std::move(part));
+
+    offset = suffix_offset + 2;
+    if (final) {
+      if (text.compare(offset, 2, "\r\n") == 0) {
+        offset += 2;
+      }
+      if (offset != text.size()) {
+        return make_error(errc::multipart_malformed_body, "invalid multipart final delimiter");
+      }
+      form.rebuild_indexes();
+      return std::move(form);
+    }
+  }
+
+  return make_error(errc::multipart_unexpected_end);
+}
+
 multipart_part_stream::multipart_part_stream(std::shared_ptr<detail::multipart_part_state> state) noexcept
     : state_(std::move(state)) {}
 
@@ -517,12 +1032,18 @@ multipart_part_stream& multipart_part_stream::on_error(std::function<void(uvp::e
 void multipart_part_stream::pause() {
   if (state_) {
     state_->paused = true;
+    if (auto owner = state_->owner.lock()) {
+      owner->pause();
+    }
   }
 }
 
 void multipart_part_stream::resume() {
   if (state_) {
     state_->paused = false;
+    if (auto owner = state_->owner.lock()) {
+      owner->resume();
+    }
   }
 }
 
@@ -591,6 +1112,12 @@ void multipart_part::text(std::size_t max_bytes, std::function<void(uvp::result<
   }
   state_->mode = detail::multipart_part_mode::text;
   state_->max_text_bytes = max_bytes;
+  if (auto owner = state_->owner.lock()) {
+    const auto route_limit = owner->options.limits().max_field_bytes;
+    if (route_limit != 0) {
+      state_->max_text_bytes = std::min(state_->max_text_bytes, route_limit);
+    }
+  }
   state_->on_text = std::move(callback);
 }
 
@@ -616,13 +1143,29 @@ void multipart_part::emit_data(std::span<const std::byte> chunk) {
   if (!state_ || chunk.empty()) {
     return;
   }
+  state_->received_bytes += chunk.size();
+  if (auto owner = state_->owner.lock()) {
+    const auto& limits = owner->options.limits();
+    if (state_->file && limits.max_file_bytes != 0 && state_->received_bytes > limits.max_file_bytes) {
+      owner->fail(make_error(errc::multipart_limit_exceeded, "multipart file is too large"));
+      return;
+    }
+    if (!state_->file && state_->received_bytes > limits.max_field_bytes) {
+      owner->fail(make_error(errc::multipart_limit_exceeded, "multipart field is too large"));
+      return;
+    }
+  }
   if (state_->mode == detail::multipart_part_mode::stream) {
     stream_.emit_data(chunk);
     return;
   }
   if (state_->mode == detail::multipart_part_mode::text) {
     if (state_->text_buffer.size() + chunk.size() > state_->max_text_bytes) {
-      emit_error(make_error(errc::multipart_limit_exceeded, "multipart field is too large"));
+      if (auto owner = state_->owner.lock()) {
+        owner->fail(make_error(errc::multipart_limit_exceeded, "multipart field is too large"));
+      } else {
+        emit_error(make_error(errc::multipart_limit_exceeded, "multipart field is too large"));
+      }
       return;
     }
     state_->text_buffer.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
@@ -657,8 +1200,15 @@ multipart_stream::multipart_stream()
     : state_(std::make_shared<detail::multipart_stream_state>()) {}
 
 multipart_stream::multipart_stream(request_body_stream& body, std::string_view content_type)
+    : multipart_stream(body, content_type, multipart_stream_options{}) {}
+
+multipart_stream::multipart_stream(
+  request_body_stream& body,
+  std::string_view content_type,
+  multipart_stream_options options)
     : state_(std::make_shared<detail::multipart_stream_state>()) {
-  auto boundary = boundary_from_content_type(content_type);
+  state_->options = std::move(options);
+  auto boundary = detail::parse_multipart_boundary(content_type);
   if (!boundary) {
     state_->construction_error = boundary.error();
     return;
@@ -672,6 +1222,12 @@ multipart_stream::multipart_stream(request_body_stream& body, std::string_view c
 
   auto state = state_;
   body.on_data([state](std::span<const std::byte> chunk) {
+    state->received_total_bytes += chunk.size();
+    const auto total_limit = state->options.limits().max_total_bytes;
+    if (total_limit != 0 && state->received_total_bytes > total_limit) {
+      state->fail(make_error(errc::multipart_limit_exceeded, "multipart body is too large"));
+      return;
+    }
     state->buffer.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
     state->parse();
   });

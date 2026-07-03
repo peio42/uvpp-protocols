@@ -45,12 +45,20 @@ Current public types:
 - `uvp::http::multipart_stream`
 - `uvp::http::multipart_part`
 - `uvp::http::multipart_part_stream`
+- `uvp::http::multipart_form`
+- `uvp::http::multipart_part_view`
+- `uvp::http::multipart_field_view`
+- `uvp::http::multipart_file_view`
+- `uvp::http::multipart_stream_options`
+- `uvp::http::multipart_form_options`
+- `uvp::http::multipart_limits`
 - `uvp::http::body::none`
 - `uvp::http::body::bytes`
 - `uvp::http::body::text`
 - `uvp::http::body::json`
 - `uvp::http::body::stream`
 - `uvp::http::body::multipart_stream`
+- `uvp::http::body::multipart_form`
 - `uvp::http::request_body_stream`
 
 The aggregate include should be:
@@ -224,7 +232,8 @@ srv.get("/health", body::none{}, handler);
 srv.post("/echo", route_options{}.max_body_bytes(64 * 1024), body::bytes{}, handler);
 srv.post("/message", route_options{}.max_body_bytes(64 * 1024), body::text{}, handler);
 srv.post("/json", route_options{}.max_body_bytes(64 * 1024), body::json<my_type>{}, handler);
-srv.post("/upload-form", body::multipart_stream{}, handler);
+srv.post("/upload-form", body::multipart_form{}, handler);
+srv.post("/upload-stream", body::multipart_stream{}.max_file_bytes(2 * 1024 * 1024), handler);
 srv.post("/events", body::stream{}, handler);
 ```
 
@@ -237,16 +246,21 @@ The body policy is part of the route contract:
 - `body::json<T>{}` buffers the body, validates a JSON content type, parses
   through `uvp::json`, converts with nlohmann `from_json`, then dispatches
   with `const T&`;
+- `body::multipart_form{}` buffers the body up to its total/memory limits,
+  validates `multipart/form-data`, collects fields and explicitly allowed small
+  files into `const multipart_form&`, then dispatches;
 - `body::multipart_stream{}` dispatches after request headers, validates
   `multipart/form-data`, then streams parsed parts through `multipart_stream&`;
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`.
 
-`body::json<>` dispatches with `const uvp::json&`. JSON and multipart request
-policies are not inferred from handler signatures; routes declare them
-explicitly because parsing and typed conversion are part of the route contract.
-Collected multipart form work is tracked in
-[multipart handling](../proposals/multipart-handling.md).
+`body::json<>` dispatches with `const uvp::json&`. JSON request policies are
+not inferred from handler signatures; multipart form routes can be inferred
+from `const multipart_form&`, but explicit `body::multipart_form{}` and
+`body::multipart_stream{}` declarations are preferred when limits matter.
+Multipart routes can carry `multipart_stream_options`,
+`multipart_form_options`, and `multipart_limits` to enforce structural, field,
+file, header, part, memory, and total body limits.
 
 Route-level options extend the body contract with operational metadata:
 

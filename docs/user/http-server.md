@@ -86,7 +86,11 @@ srv.post(
   handler);
 srv.post(
   "/upload-form",
-  uvp::http::body::multipart_stream{},
+  uvp::http::body::multipart_form{},
+  handler);
+srv.post(
+  "/upload-stream",
+  uvp::http::body::multipart_stream{}.max_file_bytes(2 * 1024 * 1024),
   handler);
 srv.post("/events", uvp::http::body::stream{}, handler);
 ```
@@ -100,6 +104,7 @@ receives.
 | `body::bytes{}` | After full body is buffered | `std::span<const std::byte>` |
 | `body::text{}` | After full body is buffered | `std::string_view` |
 | `body::json<T>{}` | After full body is buffered and decoded | `const T&` |
+| `body::multipart_form{}` | After full multipart body is parsed and bounded | `const multipart_form&` |
 | `body::multipart_stream{}` | After multipart headers are validated | `multipart_stream&` |
 | `body::stream{}` | After headers | `request_body_stream&` |
 
@@ -115,9 +120,10 @@ srv.post("/upload", [](uvp::http::request&, uvp::http::response&, uvp::http::req
 Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
 `body::stream{}` respectively.
 JSON is not inferred from handler signatures. Use `body::json<T>{}` explicitly
-when the route should parse and convert JSON. Multipart is not inferred either;
-use `body::multipart_stream{}` explicitly when the route should parse
-`multipart/form-data`. Use `route_options` for route-level limits.
+when the route should parse and convert JSON. Multipart form handlers can be
+inferred from `const multipart_form&`, but declaring `body::multipart_form{}`
+or `body::multipart_stream{}` explicitly keeps upload limits visible at the
+route. Use `route_options` for route-level limits.
 
 Route-level options can carry operational body settings next to the route
 declaration:
@@ -391,6 +397,56 @@ JSON routes accept `application/json`, structured suffixes such as
 `415 Unsupported Media Type`; malformed JSON returns `400 Bad Request`; typed
 conversion failures return `422 Unprocessable Content`.
 
+## Multipart Forms
+
+Use `body::multipart_form{}` for small `multipart/form-data` forms where every
+accepted part should be collected before the handler runs:
+
+```cpp
+srv.post("/profile",
+  uvp::http::body::multipart_form{},
+  [](uvp::http::request&, uvp::http::response& res, const uvp::http::multipart_form& form) {
+    auto display_name = form.single_field("display_name");
+    if (!display_name) {
+      res.status(422).text("missing display_name\n");
+      return;
+    }
+
+    auto tags = form.fields("tag");
+    save_profile(display_name.value().text(), tags);
+    res.status(204).end();
+  });
+```
+
+The default form policy rejects files, limits each field to 1 MiB, caps memory
+at 8 MiB, and caps the total multipart body at 16 MiB. Set a non-zero
+`max_file_bytes()` only for deliberately small file parts:
+
+```cpp
+srv.post("/avatar",
+  uvp::http::body::multipart_form{}.max_file_bytes(256 * 1024),
+  [](uvp::http::request&, uvp::http::response& res, const uvp::http::multipart_form& form) {
+    auto avatar = form.single_file("avatar");
+    if (!avatar) {
+      res.status(422).text("missing avatar\n");
+      return;
+    }
+    store_avatar(avatar.value().safe_filename(), avatar.value().bytes());
+    res.status(204).end();
+  });
+```
+
+`multipart_form` preserves original part order through `parts()` and keeps
+repeated names explicit through `fields(name)` / `files(name)`. Convenience
+accessors `first_field()`, `single_field()`, `first_file()`, and
+`single_file()` never collapse repeated values into a map entry. Field and file
+views are borrowed from the owning form and remain valid only while the form
+object remains alive and unmoved.
+
+Malformed multipart input returns `400 Bad Request`, body or part limits return
+`413 Payload Too Large`, and non-multipart content types return
+`415 Unsupported Media Type` before the handler is called.
+
 ## Multipart Streaming
 
 Use `body::multipart_stream{}` for `multipart/form-data` uploads that should
@@ -446,6 +502,11 @@ response. Each part must choose exactly one consumption path: `stream()`,
 Part names and filenames come from `Content-Disposition`. Repeated field names
 are allowed. `safe_filename()` strips path separators and control bytes, but
 applications should still apply their own storage policy.
+
+Use `body::multipart_stream{}` builder methods or
+`multipart_stream_options` / `multipart_limits` to enforce multipart-specific
+limits such as total body bytes, file bytes, field bytes, part header bytes,
+part header count, part count, field name length, and filename length.
 
 ## Streaming Request Bodies
 
