@@ -254,13 +254,16 @@ The body policy is part of the route contract:
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`.
 
-`body::json<>` dispatches with `const uvp::json&`. JSON request policies are
-not inferred from handler signatures; multipart form routes can be inferred
-from `const multipart_form&`, but explicit `body::multipart_form{}` and
-`body::multipart_stream{}` declarations are preferred when limits matter.
+`body::json<>` dispatches with `const uvp::json&`. JSON and multipart request
+policies are not inferred from handler signatures; routes declare
+`body::json<T>{}`, `body::multipart_form{}`, or `body::multipart_stream{}`
+explicitly because parsing, buffering, typed conversion, and upload limits are
+part of the route contract.
 Multipart routes can carry `multipart_stream_options`,
 `multipart_form_options`, and `multipart_limits` to enforce structural, field,
-file, header, part, memory, and total body limits.
+file, header, part, memory, and total body limits. `max_file_bytes = 0` is
+policy-specific: it means unlimited file bytes for `multipart_stream`, but
+reject file parts for `multipart_form`.
 
 Route-level options extend the body contract with operational metadata:
 
@@ -279,6 +282,12 @@ body limit. Otherwise the server falls back to
 `server_options::max_body_bytes()`. Use
 `route_options::body_timeout(...)` when a route needs a body receive timeout
 different from `server_options::body_timeout()`.
+
+For multipart routes, `route_options::max_body_bytes(...)` remains the
+strongest route-level body limit. If it is not set, a non-zero
+`multipart_stream_options::limits().max_total_bytes` or
+`multipart_form_options::limits.max_total_bytes` is also installed as the
+route HTTP body limit, so parser limits and transport read limits stay aligned.
 
 Configured body limits must be greater than zero. A route that does not accept a
 request body should use `body::none{}` instead of a zero byte limit. The current
@@ -384,6 +393,11 @@ public:
 
 The chunk span passed to `on_data` is borrowed and valid only while the callback
 is running. Applications must copy bytes they need to keep.
+
+For `body::multipart_stream{}`, once the handler receives `multipart_stream&`,
+multipart parser failures and HTTP body-limit failures are reported through
+`mp.on_error()`. The application owns the response from that point; the server
+does not synthesize a competing multipart error response after handler entry.
 
 `pause()` stops consuming additional body data after the current callback.
 `resume()` restarts reads. `on_end()` means the full request body has been

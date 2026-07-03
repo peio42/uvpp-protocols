@@ -493,6 +493,9 @@ struct server::impl {
         stop_timeout();
         if (is_streaming_body_mode(active.route.body)) {
           active.body_stream.emit_error(std::make_error_code(std::errc::message_size));
+          if (active.route.body == detail::body_mode::multipart_stream) {
+            return;
+          }
         }
         send_error(status::payload_too_large, false);
         return;

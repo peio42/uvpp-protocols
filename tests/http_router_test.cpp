@@ -144,11 +144,6 @@ UVP_TEST_CASE("http router infers body policies from handler signatures") {
   UVP_REQUIRE(stream_match);
   UVP_CHECK(stream_match.body == uvp::http::detail::body_mode::stream);
 
-  router.post("/form", [](uvp::http::request&, uvp::http::response&, const uvp::http::multipart_form&) {});
-  auto form_match = router.match(uvp::http::method::post, "/form");
-  UVP_REQUIRE(form_match);
-  UVP_CHECK(form_match.body == uvp::http::detail::body_mode::multipart_form);
-
   router.post("/empty", uvp::http::body::none{}, [](uvp::http::request&, uvp::http::response&) {});
   auto none_match = router.match(uvp::http::method::post, "/empty");
   UVP_REQUIRE(none_match);
@@ -165,6 +160,25 @@ UVP_TEST_CASE("http router stores explicit multipart stream body policies") {
   auto upload_match = router.match(uvp::http::method::post, "/upload");
   UVP_REQUIRE(upload_match);
   UVP_CHECK(upload_match.body == uvp::http::detail::body_mode::multipart_stream);
+
+  router.post(
+    "/limited-upload",
+    uvp::http::body::multipart_stream{}.max_total_bytes(123),
+    [](uvp::http::request&, uvp::http::response&, uvp::http::multipart_stream&) {});
+  auto limited_match = router.match(uvp::http::method::post, "/limited-upload");
+  UVP_REQUIRE(limited_match);
+  UVP_CHECK(limited_match.body == uvp::http::detail::body_mode::multipart_stream);
+  UVP_CHECK_EQ(limited_match.max_body_bytes, 123U);
+
+  router.post(
+    "/route-limited-upload",
+    uvp::http::route_options{}.max_body_bytes(456),
+    uvp::http::body::multipart_stream{}.max_total_bytes(123),
+    [](uvp::http::request&, uvp::http::response&, uvp::http::multipart_stream&) {});
+  auto route_limited_match = router.match(uvp::http::method::post, "/route-limited-upload");
+  UVP_REQUIRE(route_limited_match);
+  UVP_CHECK(route_limited_match.body == uvp::http::detail::body_mode::multipart_stream);
+  UVP_CHECK_EQ(route_limited_match.max_body_bytes, 456U);
 }
 
 UVP_TEST_CASE("http router stores explicit multipart form body policies") {

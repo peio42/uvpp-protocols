@@ -120,10 +120,10 @@ srv.post("/upload", [](uvp::http::request&, uvp::http::response&, uvp::http::req
 Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
 `body::stream{}` respectively.
 JSON is not inferred from handler signatures. Use `body::json<T>{}` explicitly
-when the route should parse and convert JSON. Multipart form handlers can be
-inferred from `const multipart_form&`, but declaring `body::multipart_form{}`
-or `body::multipart_stream{}` explicitly keeps upload limits visible at the
-route. Use `route_options` for route-level limits.
+when the route should parse and convert JSON. Multipart is not inferred either;
+use `body::multipart_form{}` or `body::multipart_stream{}` explicitly so
+buffering, parsing, file handling, and upload limits stay visible at the route.
+Use `route_options` for route-level limits.
 
 Route-level options can carry operational body settings next to the route
 declaration:
@@ -144,6 +144,12 @@ body limit. Otherwise the server falls back to
 `route_options::body_timeout(...)` when a route has a slower expected request
 body, such as an upload. Routes without an override use
 `server_options::body_timeout()`.
+
+Multipart policies are the bounded exception to the body-limit fallback:
+when `route_options::max_body_bytes(...)` is not set,
+`body::multipart_stream{}.max_total_bytes(...)` and
+`body::multipart_form{}.max_total_bytes(...)` also become the route HTTP body
+limit. A route-level `max_body_bytes(...)` always has priority.
 
 Body limits must be greater than zero. Use `body::none{}` for routes that should
 not receive a request body; do not use `max_body_bytes(0)` for that case.
@@ -420,7 +426,8 @@ srv.post("/profile",
 
 The default form policy rejects files, limits each field to 1 MiB, caps memory
 at 8 MiB, and caps the total multipart body at 16 MiB. Set a non-zero
-`max_file_bytes()` only for deliberately small file parts:
+`max_file_bytes()` only for deliberately small file parts. For
+`body::multipart_form{}`, `max_file_bytes(0)` means file parts are rejected:
 
 ```cpp
 srv.post("/avatar",
@@ -496,7 +503,9 @@ srv.post("/upload",
 `multipart_stream` validates `multipart/form-data` and its boundary before the
 handler is called. Once the handler receives the stream, parser errors are
 reported to `on_error`; the application is responsible for completing the
-response. Each part must choose exactly one consumption path: `stream()`,
+response. Route and server body-limit errors are also delivered through
+`on_error` after handler entry, rather than as automatic `413` responses. Each
+part must choose exactly one consumption path: `stream()`,
 `text(max_bytes, callback)`, or `discard()`.
 
 Part names and filenames come from `Content-Disposition`. Repeated field names
@@ -506,7 +515,9 @@ applications should still apply their own storage policy.
 Use `body::multipart_stream{}` builder methods or
 `multipart_stream_options` / `multipart_limits` to enforce multipart-specific
 limits such as total body bytes, file bytes, field bytes, part header bytes,
-part header count, part count, field name length, and filename length.
+part header count, part count, field name length, and filename length. For
+`body::multipart_stream{}`, `max_file_bytes(0)` means file bytes are unlimited
+by the multipart parser.
 
 ## Streaming Request Bodies
 

@@ -64,11 +64,12 @@ server read policy harder to see and would push content-type validation and
 buffering decisions into application code after the HTTP body has already
 started.
 
-`multipart_form` may be inferred from a handler that accepts
-`const multipart_form&`, because it follows the buffered body path and can
-answer parse errors before handler entry. `multipart_stream` remains explicit:
-its response ownership and `on_error()` requirements are specific enough that
-the route should declare it.
+Multipart policies are not inferred from handler signatures. `multipart_form`
+is buffered and can answer parse errors before handler entry, but it still
+activates multipart parsing, memory limits, file rules, and automatic error
+mapping. Keep that choice visible with an explicit `body::multipart_form{}`
+route policy. `multipart_stream` is also explicit because its response
+ownership and `on_error()` requirements are part of the route contract.
 
 Route policies remain the primary API. Helper shapes such as `req.form()` or
 `req.multipart_stream()` may be used only as explicit multipart entrypoints
@@ -133,7 +134,8 @@ response responsibility:
 1. Parsing before the handler, or a non-streaming helper such as `req.form()`,
    may produce a default HTTP error response.
 2. In multipart streaming, once the handler has received
-   `multipart_stream&`, parser errors are delivered to the application.
+   `multipart_stream&`, parser errors and body-limit errors are delivered to
+   the application.
 3. After `res.defer()`, the application owns completion and must respond.
 4. After response writing starts, no automatic HTTP error response is possible.
 5. In streaming mode, missing `mp.on_error()` is an application programming
@@ -144,6 +146,11 @@ For `multipart_form`, the framework can answer by default unless a form
 `on_error()` hook is configured. For `multipart_stream`, `on_error()` is
 mandatory because parsing continues after control has entered the application
 handler.
+
+`route_options::max_body_bytes(...)` and server default body limits remain HTTP
+transport limits, but for `multipart_stream` they are reported through
+`mp.on_error()` after handler entry. The server does not synthesize a competing
+`413 Payload Too Large` once the application owns the response.
 
 ## Streaming API
 
@@ -403,13 +410,17 @@ defaults. Limits cannot be changed after multipart parsing has started.
 `multipart_stream` defaults are streaming-oriented: structural limits are
 enforced, text fields are limited to 1 MiB, and file and total body size limits
 are application-configurable. Parser errors are delivered to the application by
-default.
+default. When a route does not set `route_options::max_body_bytes(...)`, a
+non-zero `body::multipart_stream{}.max_total_bytes(...)` is also used as the
+route HTTP body limit. In `multipart_stream`, `max_file_bytes = 0` means file
+bytes are unlimited by the multipart parser.
 
 `multipart_form` defaults are memory-safe: files are rejected by default, fields
 are collected in memory with a 1 MiB per-field limit, an 8 MiB memory limit, and
 a 16 MiB total body limit. When a route does not set `route_options`
 `max_body_bytes`, `body::multipart_form{}` uses its total multipart limit as
-the route buffering limit.
+the route buffering limit. In `multipart_form`, `max_file_bytes = 0` means file
+parts are rejected; set a non-zero value to allow small file parts.
 
 The server should reject:
 

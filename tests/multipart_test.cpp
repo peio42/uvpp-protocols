@@ -141,3 +141,21 @@ UVP_TEST_CASE("multipart form rejects field memory limits") {
   UVP_CHECK(!form);
   UVP_CHECK(form.error().code == uvp::http::make_error_code(uvp::http::errc::multipart_limit_exceeded));
 }
+
+UVP_TEST_CASE("multipart form ignores delimiter-like data with invalid suffix") {
+  const std::string_view body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "alpha\r\n"
+    "--AaB03x_NOT_A_BOUNDARY\r\n"
+    "omega\r\n"
+    "--AaB03x--\r\n";
+
+  auto form = uvp::http::parse_multipart_form("multipart/form-data; boundary=AaB03x", as_bytes(body));
+
+  UVP_REQUIRE(form);
+  auto field = form.value().single_field("field");
+  UVP_REQUIRE(field);
+  UVP_CHECK_EQ(field.value().text(), "alpha\r\n--AaB03x_NOT_A_BOUNDARY\r\nomega");
+}

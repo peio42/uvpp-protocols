@@ -250,11 +250,13 @@ public:
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, route_options options, body::multipart_stream policy, Handler&& handler) {
+    const auto body_limit =
+      options.max_body_bytes() == 0 ? policy.options().limits().max_total_bytes : options.max_body_bytes();
     return add_route(
       method_value,
       pattern,
       detail::body_mode::multipart_stream,
-      options.max_body_bytes(),
+      body_limit,
       options.body_timeout(),
       detail::wrap_multipart_stream_handler(std::forward<Handler>(handler), policy.options()));
   }
@@ -1059,15 +1061,13 @@ constexpr auto infer_body_policy() {
     return body::text{};
   } else if constexpr (std::is_invocable_v<handler_type&, request&, response&, request_body_stream&>) {
     return body::stream{};
-  } else if constexpr (std::is_invocable_v<handler_type&, request&, response&, const multipart_form&>) {
-    return body::multipart_form{};
   } else {
     static_assert(std::is_invocable_v<handler_type&, request&, response&>,
       "HTTP route handler must accept (request&, response&), "
       "(request&, response&, std::span<const std::byte>), or "
       "(request&, response&, std::string_view), or "
-      "(request&, response&, request_body_stream&), or "
-      "(request&, response&, const multipart_form&)");
+      "(request&, response&, request_body_stream&). "
+      "Use an explicit body policy for JSON and multipart routes.");
     return body::none{};
   }
 }

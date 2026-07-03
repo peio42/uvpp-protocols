@@ -846,6 +846,52 @@ UVP_TEST_CASE("http server reports malformed multipart bodies to stream handlers
   UVP_CHECK(received.find("ok\n") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server streams delimiter-like multipart data with invalid suffix") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "alpha\r\n"
+    "--AaB03x_NOT_A_BOUNDARY\r\n"
+    "omega\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          auto field = std::make_shared<std::string>();
+          multipart
+            .on_part([field](uvp::http::multipart_part& part) {
+              part.stream()
+                .on_data([field](std::span<const std::byte> chunk) {
+                  field->append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+                });
+            })
+            .on_end([&res, field] {
+              res.text(*field + "\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "alpha\r\n--AaB03x_NOT_A_BOUNDARY\r\nomega\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("invalid multipart delimiter suffix") == std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nalpha\r\n--AaB03x_NOT_A_BOUNDARY\r\nomega\n") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server maps multipart limit errors to payload too large") {
   const std::string body =
     "--AaB03x\r\n"
@@ -885,6 +931,48 @@ UVP_TEST_CASE("http server maps multipart limit errors to payload too large") {
     "multipart file is too large\n");
 
   UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server leaves multipart stream route body limit responses to handlers") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "abcdef\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::route_options{}.max_body_bytes(24),
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.discard();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              UVP_CHECK(error.code == std::make_error_code(std::errc::message_size));
+              res.status(uvp::http::status::unprocessable_content).text("application-owned body limit\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "application-owned body limit\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 422 Unprocessable Content\r\n") != std::string::npos);
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") == std::string::npos);
   UVP_CHECK(received.find("ok\n") == std::string::npos);
 }
 

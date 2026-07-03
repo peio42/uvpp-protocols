@@ -7,6 +7,9 @@ namespace uvp::http {
 
 struct multipart_limits {
   std::size_t max_total_bytes = 0;
+  // Interpretation depends on the policy:
+  // - multipart_stream: 0 means unlimited file bytes.
+  // - multipart_form: 0 means reject file parts.
   std::size_t max_file_bytes = 0;
   std::size_t max_field_bytes = 1024 * 1024;
   std::size_t max_part_header_bytes = 16 * 1024;

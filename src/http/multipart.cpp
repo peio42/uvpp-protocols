@@ -150,6 +150,44 @@ std::size_t count_header_lines(std::string_view block) noexcept {
   return count;
 }
 
+enum class delimiter_search_state {
+  found,
+  not_found,
+  need_more,
+};
+
+struct delimiter_search_result {
+  delimiter_search_state state = delimiter_search_state::not_found;
+  std::size_t position = std::string_view::npos;
+  std::string_view suffix;
+};
+
+delimiter_search_result find_next_multipart_delimiter(
+  std::string_view buffer,
+  std::string_view delimiter,
+  std::size_t offset = 0) noexcept {
+  auto search = offset;
+  while (search < buffer.size()) {
+    const auto position = buffer.find(delimiter, search);
+    if (position == std::string_view::npos) {
+      return {};
+    }
+
+    const auto suffix_offset = position + delimiter.size();
+    if (buffer.size() < suffix_offset + 2) {
+      return {delimiter_search_state::need_more, position, {}};
+    }
+
+    const auto suffix = buffer.substr(suffix_offset, 2);
+    if (suffix == "\r\n" || suffix == "--") {
+      return {delimiter_search_state::found, position, suffix};
+    }
+
+    search = position + 1;
+  }
+  return {};
+}
+
 struct parsed_part_headers {
   detail::multipart_disposition disposition;
   http::headers headers;
@@ -609,30 +647,44 @@ struct multipart_stream_state : std::enable_shared_from_this<multipart_stream_st
       }
 
       if (phase == multipart_parser_phase::body) {
-        const auto delimiter = buffer.find(next_delimiter);
-        if (delimiter == std::string::npos) {
+        const auto delimiter = find_next_multipart_delimiter(buffer, next_delimiter);
+        if (delimiter.state == delimiter_search_state::need_more) {
+          if (delimiter.position > 0) {
+            emit_current_data(std::string_view(buffer.data(), delimiter.position));
+            if (paused) {
+              buffer.erase(0, delimiter.position);
+              return;
+            }
+            if (failed) {
+              return;
+            }
+            buffer.erase(0, delimiter.position);
+          }
+          return;
+        }
+        if (delimiter.state == delimiter_search_state::not_found) {
           const auto keep = next_delimiter.size();
           if (buffer.size() > keep) {
             const auto emit_size = buffer.size() - keep;
             emit_current_data(std::string_view(buffer.data(), emit_size));
+            if (paused) {
+              buffer.erase(0, emit_size);
+              return;
+            }
+            if (failed) {
+              return;
+            }
             buffer.erase(0, emit_size);
           }
           return;
         }
 
-        const auto after = delimiter + next_delimiter.size();
-        if (buffer.size() < after + 2) {
-          return;
-        }
-        const auto suffix = buffer.substr(after, 2);
-        if (suffix != "\r\n" && suffix != "--") {
-          fail(make_error(errc::multipart_malformed_body, "invalid multipart delimiter suffix"));
-          return;
-        }
+        const auto after = delimiter.position + next_delimiter.size();
+        const auto suffix = delimiter.suffix;
 
-        emit_current_data(std::string_view(buffer.data(), delimiter));
+        emit_current_data(std::string_view(buffer.data(), delimiter.position));
         if (paused) {
-          buffer.erase(0, delimiter);
+          buffer.erase(0, delimiter.position);
           return;
         }
         if (failed) {
@@ -942,21 +994,14 @@ uvp::result<multipart_form> parse_multipart_form(
     }
     offset = header_end + 4;
 
-    const auto delimiter = text.find(next_delimiter, offset);
-    if (delimiter == std::string_view::npos) {
+    const auto delimiter = find_next_multipart_delimiter(text, next_delimiter, offset);
+    if (delimiter.state != delimiter_search_state::found) {
       return make_error(errc::multipart_unexpected_end);
     }
-    const auto payload = text.substr(offset, delimiter - offset);
-    const auto suffix_offset = delimiter + next_delimiter.size();
-    if (text.size() < suffix_offset + 2) {
-      return make_error(errc::multipart_unexpected_end);
-    }
-
-    const auto suffix = text.substr(suffix_offset, 2);
+    const auto payload = text.substr(offset, delimiter.position - offset);
+    const auto suffix_offset = delimiter.position + next_delimiter.size();
+    const auto suffix = delimiter.suffix;
     const bool final = suffix == "--";
-    if (!final && suffix != "\r\n") {
-      return make_error(errc::multipart_malformed_body, "invalid multipart delimiter suffix");
-    }
 
     if (form.parts_.size() + 1 > limits.max_parts) {
       return make_error(errc::multipart_limit_exceeded, "multipart has too many parts");

@@ -37,6 +37,7 @@ next milestone or step.
   - [Route-level hooks](proposals/route-level-hooks.md)
   - [Route options body mode](proposals/route-options-body-mode.md)
   - [Route options parameter constraints](proposals/route-options-parameter-constraints.md)
+  - [Stream body error ownership](proposals/stream-body-error-ownership.md)
 
 - Protocol client modules
   - [SMTP client](proposals/smtp-support.md)
