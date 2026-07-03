@@ -2,8 +2,11 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -103,6 +106,91 @@ std::string perform_http_request(
 template<class Configure>
 std::string perform_http_request(Configure configure, std::string request, std::string_view response_marker) {
   return perform_http_request(uvp::http::server_options{}, std::move(configure), std::move(request), response_marker);
+}
+
+template<class Configure>
+std::string perform_http_request_chunks(
+  Configure configure,
+  std::vector<std::string> request_chunks,
+  std::string_view response_marker) {
+  uv::loop loop;
+  uvp::http::server server(loop);
+  if constexpr (std::is_invocable_v<Configure&, uvp::http::server&, uv::loop&>) {
+    configure(server, loop);
+  } else {
+    configure(server);
+  }
+
+  auto tcp_listener = uvp::io::tcp_listener{loop};
+  tcp_listener.bind("127.0.0.1", 0);
+  auto stream_listener = uvp::io::stream_listener{std::move(tcp_listener)};
+  const auto endpoint = stream_listener.local_endpoint();
+  const auto port = std::get<uvp::io::tcp_endpoint>(endpoint).port;
+  server.listen(std::move(stream_listener));
+
+  uv::tcp client(loop);
+  uv::connect_request connect_request;
+  std::vector<uv::write_request> write_requests(request_chunks.size());
+  uv::timer timeout(loop);
+
+  std::string received;
+  std::size_t next_write = 0;
+  bool client_closed = false;
+  bool timed_out = false;
+
+  timeout.start(std::chrono::seconds{2}, [&](uv::timer& timer) {
+    timed_out = true;
+    server.close();
+    if (!client_closed) {
+      client.close([&](uv::tcp&) {
+        client_closed = true;
+      });
+    }
+    timer.close();
+  });
+
+  client.connect(connect_request, uv::ipv4{"127.0.0.1", static_cast<int>(port)}, [&](uv::connect_request&, uv::result status) {
+    UVP_REQUIRE(status);
+
+    client.read_start(integration_alloc, [&](uv::tcp& stream, uv::read_result read) {
+      if (read.eof()) {
+        return;
+      }
+      UVP_REQUIRE(read.ok());
+
+      const auto bytes = read.bytes();
+      received.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+      if (received.find(response_marker) != std::string::npos) {
+        stream.read_stop();
+        timeout.close();
+        stream.close([&](uv::tcp&) {
+          client_closed = true;
+        });
+        server.close();
+      }
+    });
+
+    auto write_next = std::make_shared<std::function<void()>>();
+    *write_next = [&, write_next] {
+      if (next_write >= request_chunks.size()) {
+        return;
+      }
+      const auto index = next_write++;
+      auto output = uv::buffer_view{request_chunks[index].data(), request_chunks[index].size()};
+      client.write(write_requests[index], output, [&, write_next](uv::write_request&, uv::result write_status) {
+        UVP_REQUIRE(write_status);
+        (*write_next)();
+      });
+    };
+    (*write_next)();
+  });
+
+  loop.run();
+
+  UVP_CHECK(!timed_out);
+  UVP_CHECK(client_closed);
+  loop.close();
+  return received;
 }
 
 template<class Configure>
@@ -782,6 +870,115 @@ UVP_TEST_CASE("http server streams multipart form-data parts") {
   UVP_CHECK(received.find("\r\n\r\nhello:..note.txt:abc123\n") != std::string::npos);
 }
 
+UVP_TEST_CASE("http server streams multipart boundaries fragmented across writes") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "abcdef\r\n"
+    "--AaB03x--\r\n";
+  const std::string head =
+    "POST /upload HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+    "Content-Length: " + std::to_string(body.size()) + "\r\n"
+    "\r\n";
+
+  const auto received = perform_http_request_chunks(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          auto field = std::make_shared<std::string>();
+          multipart
+            .on_part([field](uvp::http::multipart_part& part) {
+              part.stream()
+                .on_data([field](std::span<const std::byte> chunk) {
+                  field->append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+                });
+            })
+            .on_end([&res, field] {
+              res.text(*field + "\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    {
+      head + "--Aa",
+      "B03x\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\nabc",
+      "def\r\n--Aa",
+      "B03x--\r\n",
+    },
+    "abcdef\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nabcdef\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server supports multipart pause resume in the middle of a part") {
+  const std::string payload = std::string(40, 'x') + std::string(40, 'y');
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n" +
+    payload +
+    "\r\n"
+    "--AaB03x--\r\n";
+  const std::string head =
+    "POST /upload HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+    "Content-Length: " + std::to_string(body.size()) + "\r\n"
+    "\r\n";
+
+  const auto received = perform_http_request_chunks(
+    [](uvp::http::server& server, uv::loop& loop) {
+      auto resume_timer = std::make_shared<uv::timer>(loop);
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [resume_timer](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          auto size = std::make_shared<std::size_t>(0);
+          auto paused_once = std::make_shared<bool>(false);
+          multipart
+            .on_part([resume_timer, size, paused_once](uvp::http::multipart_part& part) {
+              auto stream = std::make_shared<uvp::http::multipart_part_stream>(part.stream());
+              stream->on_data([resume_timer, stream, size, paused_once](std::span<const std::byte> chunk) {
+                *size += chunk.size();
+                if (!*paused_once) {
+                  *paused_once = true;
+                  stream->pause();
+                  resume_timer->start(std::chrono::milliseconds{1}, [stream](uv::timer& timer) {
+                    stream->resume();
+                    timer.close();
+                  });
+                }
+              });
+            })
+            .on_end([&res, size, paused_once] {
+              UVP_CHECK(*paused_once);
+              res.text(std::to_string(*size) + "\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    {
+      head + "--AaB03x\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n" + payload.substr(0, 40),
+      payload.substr(40) + "\r\n--AaB03x--\r\n",
+    },
+    "80\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\n80\n") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server rejects multipart stream routes with non multipart content types") {
   const std::string body = "not multipart";
   const auto received = perform_http_request(
@@ -843,6 +1040,129 @@ UVP_TEST_CASE("http server reports malformed multipart bodies to stream handlers
     "duplicate content-disposition\n");
 
   UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server reports missing multipart content disposition to stream handlers") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Type: text/plain\r\n"
+    "\r\n"
+    "bad\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.discard();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "missing content-disposition\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server reports unsupported multipart transfer encoding to stream handlers") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "Content-Transfer-Encoding: base64\r\n"
+    "\r\n"
+    "dmFsdWU=\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.discard();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "unsupported content-transfer-encoding\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server reports multipart stream part header byte limits") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "value\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      uvp::http::multipart_limits limits;
+      limits.max_part_header_bytes = 8;
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{uvp::http::multipart_stream_options{}.limits(limits)},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.discard();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              const auto status = error.code == uvp::http::make_error_code(uvp::http::errc::multipart_limit_exceeded)
+                ? uvp::http::status::payload_too_large
+                : uvp::http::status::bad_request;
+              res.status(status).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "multipart part headers are too large\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
   UVP_CHECK(received.find("ok\n") == std::string::npos);
 }
 
@@ -974,6 +1294,90 @@ UVP_TEST_CASE("http server leaves multipart stream route body limit responses to
   UVP_CHECK(received.find("HTTP/1.1 422 Unprocessable Content\r\n") != std::string::npos);
   UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") == std::string::npos);
   UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server applies multipart stream parser total limits independently from route limits") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "abcdef\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::route_options{}.max_body_bytes(1024),
+        uvp::http::body::multipart_stream{}.max_total_bytes(24),
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.discard();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              const auto status = error.code == uvp::http::make_error_code(uvp::http::errc::multipart_limit_exceeded)
+                ? uvp::http::status::payload_too_large
+                : uvp::http::status::bad_request;
+              res.status(status).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "multipart body is too large\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server uses multipart stream total limits instead of server body default") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "abcdef\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    uvp::http::server_options{}.max_body_bytes(24),
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{}.max_total_bytes(1024),
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.discard();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "ok\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("HTTP/1.1 413 Payload Too Large\r\n") == std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nok\n") != std::string::npos);
 }
 
 UVP_TEST_CASE("http server collects multipart form-data bodies") {

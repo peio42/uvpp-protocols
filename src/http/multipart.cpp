@@ -640,6 +640,10 @@ struct multipart_stream_state : std::enable_shared_from_this<multipart_stream_st
           }
           return;
         }
+        if (header_end > options.limits().max_part_header_bytes) {
+          fail(make_error(errc::multipart_limit_exceeded, "multipart part headers are too large"));
+          return;
+        }
         auto block = buffer.substr(0, header_end);
         buffer.erase(0, header_end + 4);
         parse_part_headers(std::move(block));

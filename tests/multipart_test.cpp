@@ -159,3 +159,122 @@ UVP_TEST_CASE("multipart form ignores delimiter-like data with invalid suffix") 
   UVP_REQUIRE(field);
   UVP_CHECK_EQ(field.value().text(), "alpha\r\n--AaB03x_NOT_A_BOUNDARY\r\nomega");
 }
+
+UVP_TEST_CASE("multipart form enforces part header count limit") {
+  const std::string_view body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "Content-Type: text/plain\r\n"
+    "\r\n"
+    "value\r\n"
+    "--AaB03x--\r\n";
+  uvp::http::multipart_form_options options;
+  options.limits.max_part_headers = 1;
+
+  auto form = uvp::http::parse_multipart_form("multipart/form-data; boundary=AaB03x", as_bytes(body), options);
+
+  UVP_CHECK(!form);
+  UVP_CHECK(form.error().code == uvp::http::make_error_code(uvp::http::errc::multipart_limit_exceeded));
+}
+
+UVP_TEST_CASE("multipart form enforces part header byte limit") {
+  const std::string_view body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "value\r\n"
+    "--AaB03x--\r\n";
+  uvp::http::multipart_form_options options;
+  options.limits.max_part_header_bytes = 8;
+
+  auto form = uvp::http::parse_multipart_form("multipart/form-data; boundary=AaB03x", as_bytes(body), options);
+
+  UVP_CHECK(!form);
+  UVP_CHECK(form.error().code == uvp::http::make_error_code(uvp::http::errc::multipart_limit_exceeded));
+}
+
+UVP_TEST_CASE("multipart form rejects missing content disposition") {
+  const std::string_view body =
+    "--AaB03x\r\n"
+    "Content-Type: text/plain\r\n"
+    "\r\n"
+    "value\r\n"
+    "--AaB03x--\r\n";
+
+  auto form = uvp::http::parse_multipart_form("multipart/form-data; boundary=AaB03x", as_bytes(body));
+
+  UVP_CHECK(!form);
+  UVP_CHECK(form.error().code == uvp::http::make_error_code(uvp::http::errc::multipart_malformed_part_header));
+}
+
+UVP_TEST_CASE("multipart form rejects non form-data content disposition") {
+  const std::string_view body =
+    "--AaB03x\r\n"
+    "Content-Disposition: attachment; name=\"field\"\r\n"
+    "\r\n"
+    "value\r\n"
+    "--AaB03x--\r\n";
+
+  auto form = uvp::http::parse_multipart_form("multipart/form-data; boundary=AaB03x", as_bytes(body));
+
+  UVP_CHECK(!form);
+  UVP_CHECK(form.error().code == uvp::http::make_error_code(uvp::http::errc::multipart_malformed_part_header));
+}
+
+UVP_TEST_CASE("multipart form rejects unsupported content transfer encoding") {
+  const std::string_view body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "Content-Transfer-Encoding: base64\r\n"
+    "\r\n"
+    "dmFsdWU=\r\n"
+    "--AaB03x--\r\n";
+
+  auto form = uvp::http::parse_multipart_form("multipart/form-data; boundary=AaB03x", as_bytes(body));
+
+  UVP_CHECK(!form);
+  UVP_CHECK(form.error().code == uvp::http::make_error_code(uvp::http::errc::multipart_malformed_part_header));
+}
+
+UVP_TEST_CASE("multipart form treats empty filename as a file part") {
+  const std::string_view body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"file\"; filename=\"\"\r\n"
+    "\r\n"
+    "abc\r\n"
+    "--AaB03x--\r\n";
+  uvp::http::multipart_form_options options;
+  options.limits.max_file_bytes = 8;
+
+  auto form = uvp::http::parse_multipart_form("multipart/form-data; boundary=AaB03x", as_bytes(body), options);
+
+  UVP_REQUIRE(form);
+  UVP_REQUIRE(form.value().parts().size() == 1U);
+  UVP_CHECK(form.value().parts()[0].is_file());
+  const auto file = form.value().single_file("file");
+  UVP_REQUIRE(file);
+  UVP_CHECK_EQ(file.value().filename(), "");
+  UVP_CHECK_EQ(file.value().safe_filename(), "upload");
+  UVP_CHECK_EQ(file.value().text(), "abc");
+}
+
+UVP_TEST_CASE("multipart form preserves file content with crlf and near boundary prefixes") {
+  const std::string_view body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"file\"; filename=\"data.bin\"\r\n"
+    "\r\n"
+    "abc\r\n"
+    "--AaB03\r\n"
+    "--AaB03x_NOT_A_BOUNDARY\r\n"
+    "xyz\r\n"
+    "--AaB03x--\r\n";
+  uvp::http::multipart_form_options options;
+  options.limits.max_file_bytes = 128;
+
+  auto form = uvp::http::parse_multipart_form("multipart/form-data; boundary=AaB03x", as_bytes(body), options);
+
+  UVP_REQUIRE(form);
+  auto file = form.value().single_file("file");
+  UVP_REQUIRE(file);
+  UVP_CHECK_EQ(file.value().text(), "abc\r\n--AaB03\r\n--AaB03x_NOT_A_BOUNDARY\r\nxyz");
+}
