@@ -150,6 +150,18 @@ UVP_TEST_CASE("http router infers body policies from handler signatures") {
   UVP_CHECK(none_match.body == uvp::http::detail::body_mode::none);
 }
 
+UVP_TEST_CASE("http router stores explicit multipart stream body policies") {
+  uvp::http::router router;
+  router.post(
+    "/upload",
+    uvp::http::body::multipart_stream{},
+    [](uvp::http::request&, uvp::http::response&, uvp::http::multipart_stream&) {});
+
+  auto upload_match = router.match(uvp::http::method::post, "/upload");
+  UVP_REQUIRE(upload_match);
+  UVP_CHECK(upload_match.body == uvp::http::detail::body_mode::multipart_stream);
+}
+
 UVP_TEST_CASE("http router stores explicit json body policies") {
   uvp::http::router router;
   router.post(

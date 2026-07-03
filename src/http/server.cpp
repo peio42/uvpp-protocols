@@ -167,6 +167,10 @@ std::span<const std::byte> as_bytes(std::string& value) noexcept {
   return std::as_bytes(std::span{value.data(), value.size()});
 }
 
+bool is_streaming_body_mode(detail::body_mode mode) noexcept {
+  return mode == detail::body_mode::stream || mode == detail::body_mode::multipart_stream;
+}
+
 } // namespace
 
 struct server::impl {
@@ -404,7 +408,7 @@ struct server::impl {
       active_request_->parsed_path = parsed_path;
       active_request_->req = std::move(req);
 
-      if (!active_request_->route || active_request_->route.body != detail::body_mode::stream) {
+      if (!active_request_->route || !is_streaming_body_mode(active_request_->route.body)) {
         if (active_request_->route && active_request_->route.body == detail::body_mode::none && request_has_body(message)) {
           active_request_->rejected = true;
           send_error(status::bad_request, false);
@@ -487,14 +491,14 @@ struct server::impl {
       if (active.route && active.received_body_bytes > route_body_limit(active.route)) {
         active.rejected = true;
         stop_timeout();
-        if (active.route.body == detail::body_mode::stream) {
+        if (is_streaming_body_mode(active.route.body)) {
           active.body_stream.emit_error(std::make_error_code(std::errc::message_size));
         }
         send_error(status::payload_too_large, false);
         return;
       }
 
-      if (active.route && active.route.body == detail::body_mode::stream) {
+      if (active.route && is_streaming_body_mode(active.route.body)) {
         active.body_stream.emit_data(std::as_bytes(std::span{chunk.data(), chunk.size()}));
         if (active.body_stream.paused()) {
           body_processing_paused_ = true;
@@ -514,7 +518,7 @@ struct server::impl {
         return;
       }
 
-      if (active->route && active->route.body == detail::body_mode::stream) {
+      if (active->route && is_streaming_body_mode(active->route.body)) {
         active->body_stream.emit_end();
         return;
       }
@@ -1181,7 +1185,7 @@ struct server::impl {
       case timeout_phase::body: {
         const auto error = std::make_error_code(std::errc::timed_out);
         timeout_closing_ = true;
-        if (active_request_ && active_request_->route && active_request_->route.body == detail::body_mode::stream) {
+        if (active_request_ && active_request_->route && is_streaming_body_mode(active_request_->route.body)) {
           active_request_->body_stream.emit_error(error);
         }
         notify_stream_errors(error);

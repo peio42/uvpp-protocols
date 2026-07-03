@@ -84,6 +84,10 @@ srv.post(
   uvp::http::route_options{}.max_body_bytes(64 * 1024),
   uvp::http::body::json<my_type>{},
   handler);
+srv.post(
+  "/upload-form",
+  uvp::http::body::multipart_stream{},
+  handler);
 srv.post("/events", uvp::http::body::stream{}, handler);
 ```
 
@@ -96,6 +100,7 @@ receives.
 | `body::bytes{}` | After full body is buffered | `std::span<const std::byte>` |
 | `body::text{}` | After full body is buffered | `std::string_view` |
 | `body::json<T>{}` | After full body is buffered and decoded | `const T&` |
+| `body::multipart_stream{}` | After multipart headers are validated | `multipart_stream&` |
 | `body::stream{}` | After headers | `request_body_stream&` |
 
 Short route overloads infer the body policy from the handler signature:
@@ -110,9 +115,9 @@ srv.post("/upload", [](uvp::http::request&, uvp::http::response&, uvp::http::req
 Those infer `body::none{}`, `body::bytes{}`, `body::text{}`, and
 `body::stream{}` respectively.
 JSON is not inferred from handler signatures. Use `body::json<T>{}` explicitly
-when the route should parse and convert JSON. Use `route_options` for
-route-level limits, and use the explicit policy form when future typed policies
-such as multipart matter at the declaration site.
+when the route should parse and convert JSON. Multipart is not inferred either;
+use `body::multipart_stream{}` explicitly when the route should parse
+`multipart/form-data`. Use `route_options` for route-level limits.
 
 Route-level options can carry operational body settings next to the route
 declaration:
@@ -385,6 +390,62 @@ JSON routes accept `application/json`, structured suffixes such as
 `application/json; charset=utf-8`. Missing or non-JSON `Content-Type` returns
 `415 Unsupported Media Type`; malformed JSON returns `400 Bad Request`; typed
 conversion failures return `422 Unprocessable Content`.
+
+## Multipart Streaming
+
+Use `body::multipart_stream{}` for `multipart/form-data` uploads that should
+stream files or large fields without buffering the whole request:
+
+```cpp
+srv.post("/upload",
+  uvp::http::body::multipart_stream{},
+  [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+    multipart
+      .on_part([](uvp::http::multipart_part& part) {
+        if (part.filename()) {
+          auto sink = open_upload_sink(part.safe_filename());
+          part.stream()
+            .on_data([sink](std::span<const std::byte> chunk) mutable {
+              sink.write(chunk);
+            })
+            .on_end([sink]() mutable {
+              sink.close();
+            })
+            .on_error([sink](uvp::error) mutable {
+              sink.abort();
+            });
+          return;
+        }
+
+        if (part.name() == "title") {
+          part.text(1024 * 1024, [](uvp::result<std::string> value) {
+            if (value) {
+              store_title(value.value());
+            }
+          });
+          return;
+        }
+
+        part.discard();
+      })
+      .on_end([&res] {
+        res.status(201).text("uploaded\n");
+      })
+      .on_error([&res](uvp::error error) {
+        res.status(400).text(error.detail + "\n");
+      });
+  });
+```
+
+`multipart_stream` validates `multipart/form-data` and its boundary before the
+handler is called. Once the handler receives the stream, parser errors are
+reported to `on_error`; the application is responsible for completing the
+response. Each part must choose exactly one consumption path: `stream()`,
+`text(max_bytes, callback)`, or `discard()`.
+
+Part names and filenames come from `Content-Disposition`. Repeated field names
+are allowed. `safe_filename()` strips path separators and control bytes, but
+applications should still apply their own storage policy.
 
 ## Streaming Request Bodies
 

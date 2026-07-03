@@ -33,6 +33,8 @@ struct text {};
 
 struct stream {};
 
+struct multipart_stream {};
+
 template<class T = uvp::json>
 struct json {};
 

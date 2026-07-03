@@ -39,12 +39,18 @@ Current public types:
 - `uvp::http::headers`
 - `uvp::http::method`
 - `uvp::http::status`
+- `uvp::http::errc`
 - `uvp::http::route_params`
 - `uvp::http::query_params`
+- `uvp::http::multipart_stream`
+- `uvp::http::multipart_part`
+- `uvp::http::multipart_part_stream`
 - `uvp::http::body::none`
 - `uvp::http::body::bytes`
 - `uvp::http::body::text`
+- `uvp::http::body::json`
 - `uvp::http::body::stream`
+- `uvp::http::body::multipart_stream`
 - `uvp::http::request_body_stream`
 
 The aggregate include should be:
@@ -218,6 +224,7 @@ srv.get("/health", body::none{}, handler);
 srv.post("/echo", route_options{}.max_body_bytes(64 * 1024), body::bytes{}, handler);
 srv.post("/message", route_options{}.max_body_bytes(64 * 1024), body::text{}, handler);
 srv.post("/json", route_options{}.max_body_bytes(64 * 1024), body::json<my_type>{}, handler);
+srv.post("/upload-form", body::multipart_stream{}, handler);
 srv.post("/events", body::stream{}, handler);
 ```
 
@@ -230,14 +237,15 @@ The body policy is part of the route contract:
 - `body::json<T>{}` buffers the body, validates a JSON content type, parses
   through `uvp::json`, converts with nlohmann `from_json`, then dispatches
   with `const T&`;
+- `body::multipart_stream{}` dispatches after request headers, validates
+  `multipart/form-data`, then streams parsed parts through `multipart_stream&`;
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`.
 
-`body::json<>` dispatches with `const uvp::json&`. JSON request policies are
-not inferred from handler signatures; routes declare them explicitly because
-parsing and typed conversion are part of the route contract. Future typed
-policies such as multipart should use the same explicit route declaration
-shape. Multipart work is tracked in
+`body::json<>` dispatches with `const uvp::json&`. JSON and multipart request
+policies are not inferred from handler signatures; routes declare them
+explicitly because parsing and typed conversion are part of the route contract.
+Collected multipart form work is tracked in
 [multipart handling](../proposals/multipart-handling.md).
 
 Route-level options extend the body contract with operational metadata:
@@ -275,7 +283,8 @@ srv.post("/events", stream_handler); // equivalent to body::stream{}
 ```
 
 Inference stops at `body::none{}`, `body::bytes{}`, `body::text{}`, and
-`body::stream{}`. Typed policies should be declared explicitly.
+`body::stream{}`. Typed or parser-backed policies should be declared
+explicitly.
 
 ## Request
 

@@ -195,7 +195,8 @@ Planning and review material:
 The current implementation includes HTTP route ergonomics, chunked responses,
 request body policies, request body streaming, the generic HTTP upgrade hook,
 server-side WebSocket handshake/framing, WebSocket sessions, byte-stream
-adaptation, typed JSON request bodies, runnable examples, and focused tests.
+adaptation, typed JSON request bodies, multipart request streaming, runnable
+examples, and focused tests.
 
 ## License
 

@@ -719,6 +719,133 @@ UVP_TEST_CASE("http server applies route body limits before json parsing") {
   UVP_CHECK(received.find("handler\n") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server streams multipart form-data parts") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"title\"\r\n"
+    "\r\n"
+    "hello\r\n"
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"file\"; filename=\"../note.txt\"\r\n"
+    "Content-Type: text/plain\r\n"
+    "\r\n"
+    "abc123\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          auto title = std::make_shared<std::string>();
+          auto file_name = std::make_shared<std::string>();
+          auto file_body = std::make_shared<std::string>();
+
+          multipart
+            .on_part([title, file_name, file_body](uvp::http::multipart_part& part) {
+              if (part.name() == "title") {
+                part.text(1024, [title](uvp::result<std::string> value) {
+                  UVP_REQUIRE(value);
+                  *title = std::move(value).value();
+                });
+                return;
+              }
+              if (part.name() == "file") {
+                *file_name = part.safe_filename();
+                part.stream()
+                  .on_data([file_body](std::span<const std::byte> chunk) {
+                    file_body->append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+                  });
+                return;
+              }
+              part.discard();
+            })
+            .on_end([&res, title, file_name, file_body] {
+              res.text(*title + ":" + *file_name + ":" + *file_body + "\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=\"AaB03x\"\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "hello:..note.txt:abc123\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nhello:..note.txt:abc123\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server rejects multipart stream routes with non multipart content types") {
+  const std::string body = "not multipart";
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream&) {
+          res.text("handler\n");
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: text/plain\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "expected multipart/form-data\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 415 Unsupported Media Type\r\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server reports malformed multipart bodies to stream handlers") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"a\"\r\n"
+    "Content-Disposition: form-data; name=\"b\"\r\n"
+    "\r\n"
+    "bad\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.discard();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "duplicate content-disposition\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
 UVP_TEST_CASE("http server returns request timeout for incomplete headers") {
   const auto received = perform_http_request_until_close(
     uvp::http::server_options{}.header_timeout(std::chrono::milliseconds{20}),

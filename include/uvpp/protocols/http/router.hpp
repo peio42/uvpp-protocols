@@ -19,6 +19,7 @@
 
 #include <uvpp/protocols/http/detail/route_path.hpp>
 #include <uvpp/protocols/http/method.hpp>
+#include <uvpp/protocols/http/multipart.hpp>
 #include <uvpp/protocols/http/request.hpp>
 #include <uvpp/protocols/http/response.hpp>
 #include <uvpp/protocols/http/route_params.hpp>
@@ -100,6 +101,7 @@ enum class body_mode {
   text,
   json,
   stream,
+  multipart_stream,
 };
 
 using route_handler_type = std::function<void(request&, response&, std::span<const std::byte>, request_body_stream*)>;
@@ -114,6 +116,8 @@ template<class T, class Handler>
 route_handler_type wrap_json_handler(Handler&& handler);
 template<class Handler>
 route_handler_type wrap_stream_handler(Handler&& handler);
+template<class Handler>
+route_handler_type wrap_multipart_stream_handler(Handler&& handler);
 template<class Handler>
 constexpr auto infer_body_policy();
 template<class Handler>
@@ -238,6 +242,23 @@ public:
 
   template<class Handler>
   router& route(method method_value, std::string_view pattern, body::stream policy, Handler&& handler) {
+    return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, route_options options, body::multipart_stream policy, Handler&& handler) {
+    (void)policy;
+    return add_route(
+      method_value,
+      pattern,
+      detail::body_mode::multipart_stream,
+      options.max_body_bytes(),
+      options.body_timeout(),
+      detail::wrap_multipart_stream_handler(std::forward<Handler>(handler)));
+  }
+
+  template<class Handler>
+  router& route(method method_value, std::string_view pattern, body::multipart_stream policy, Handler&& handler) {
     return route(method_value, pattern, route_options{}, policy, std::forward<Handler>(handler));
   }
 
@@ -955,6 +976,34 @@ router::handler_type wrap_stream_handler(Handler&& handler) {
            std::span<const std::byte>,
            request_body_stream* body) mutable {
     handler(req, res, *body);
+  };
+}
+
+inline http::status multipart_error_status(const uvp::error& error) noexcept {
+  if (error.code == make_error_code(errc::unsupported_media_type)) {
+    return status::unsupported_media_type;
+  }
+  return status::bad_request;
+}
+
+template<class Handler>
+router::handler_type wrap_multipart_stream_handler(Handler&& handler) {
+  using stored_handler = std::decay_t<Handler>;
+  return [handler = stored_handler(std::forward<Handler>(handler))](
+           request& req,
+           response& res,
+           std::span<const std::byte>,
+           request_body_stream* body) mutable {
+    http::multipart_stream multipart{*body, req.header("content-type")};
+    if (!multipart.valid()) {
+      res.status(multipart_error_status(multipart.error())).text(multipart.error().detail + "\n");
+      return;
+    }
+
+    handler(req, res, multipart);
+    if (!multipart.has_error_handler() && !res.ended() && !res.deferred() && !res.streaming()) {
+      res.status(status::internal_server_error).text("multipart on_error handler required\n");
+    }
   };
 }
 

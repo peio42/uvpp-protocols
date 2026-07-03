@@ -38,8 +38,10 @@ target_sources(
   PRIVATE
     src/io/transport.cpp
     src/http/detail/http1_state_machine.cpp
+    src/http/error.cpp
     src/http/headers.cpp
     src/http/method.cpp
+    src/http/multipart.cpp
     src/http/request.cpp
     src/http/response.cpp
     src/http/route_path.cpp
