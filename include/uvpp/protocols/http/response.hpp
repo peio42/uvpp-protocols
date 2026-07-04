@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -20,7 +21,19 @@ struct response_state;
 } // namespace detail
 
 class deferred_response;
+class sse_stream;
 class streaming_response;
+
+struct sse_event {
+  std::string_view event;
+  std::string_view id;
+  std::string_view data;
+};
+
+struct sse_options {
+  bool no_cache = true;
+  bool x_accel_buffering_no = true;
+};
 
 class stream_write_result {
 public:
@@ -60,6 +73,7 @@ public:
   void end();
   [[nodiscard]] deferred_response defer();
   [[nodiscard]] streaming_response stream();
+  [[nodiscard]] sse_stream sse(sse_options options = {});
 
   [[nodiscard]] unsigned int status_code() const noexcept;
   [[nodiscard]] const http::headers& headers() const noexcept;
@@ -165,6 +179,36 @@ private:
   [[nodiscard]] std::shared_ptr<detail::response_state> lock_active() const noexcept;
 
   std::weak_ptr<detail::response_state> state_;
+};
+
+class sse_stream {
+public:
+  sse_stream() = default;
+  ~sse_stream() = default;
+
+  sse_stream(sse_stream&&) noexcept = default;
+  sse_stream& operator=(sse_stream&&) noexcept = default;
+
+  sse_stream(const sse_stream&) = delete;
+  sse_stream& operator=(const sse_stream&) = delete;
+
+  [[nodiscard]] bool active() const noexcept;
+
+  sse_stream& on_cancel(std::function<void()> callback);
+  sse_stream& on_drain(std::function<void()> callback);
+  sse_stream& on_error(std::function<void(std::error_code)> callback);
+
+  [[nodiscard]] stream_write_result retry(std::chrono::milliseconds value);
+  [[nodiscard]] stream_write_result send(const sse_event& event);
+  [[nodiscard]] stream_write_result comment(std::string_view value);
+  void close();
+
+private:
+  friend class response;
+
+  explicit sse_stream(streaming_response stream) noexcept;
+
+  streaming_response stream_;
 };
 
 } // namespace uvp::http

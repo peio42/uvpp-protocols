@@ -1,8 +1,10 @@
 #include <uvpp/protocols/http/response.hpp>
 
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -64,6 +66,83 @@ struct response_state {
 };
 
 } // namespace detail
+
+namespace {
+
+std::error_code invalid_argument_error() {
+  return std::make_error_code(std::errc::invalid_argument);
+}
+
+stream_write_result invalid_sse_argument() noexcept {
+  return stream_write_result::rejected(invalid_argument_error());
+}
+
+bool contains_invalid_sse_field_byte(std::string_view value) noexcept {
+  for (char ch : value) {
+    if (ch == '\r' || ch == '\n' || ch == '\0') {
+      return true;
+    }
+  }
+  return false;
+}
+
+void append_sse_field_line(std::string& out, std::string_view field, std::string_view value) {
+  out += field;
+  out += ':';
+  if (!value.empty()) {
+    out += ' ';
+    out.append(value);
+  }
+  out += '\n';
+}
+
+void append_sse_comment_line(std::string& out, std::string_view value) {
+  out += ':';
+  if (!value.empty()) {
+    out += ' ';
+    out.append(value);
+  }
+  out += '\n';
+}
+
+template<class AppendLine>
+void append_split_sse_lines(std::string& out, std::string_view value, AppendLine append_line) {
+  std::size_t offset = 0;
+  while (offset < value.size()) {
+    auto line_end = offset;
+    while (line_end < value.size() && value[line_end] != '\r' && value[line_end] != '\n') {
+      ++line_end;
+    }
+
+    append_line(out, value.substr(offset, line_end - offset));
+
+    if (line_end == value.size()) {
+      return;
+    }
+
+    if (value[line_end] == '\r' && line_end + 1 < value.size() && value[line_end + 1] == '\n') {
+      offset = line_end + 2;
+    } else {
+      offset = line_end + 1;
+    }
+  }
+
+  append_line(out, {});
+}
+
+void append_sse_data_lines(std::string& out, std::string_view data) {
+  append_split_sse_lines(out, data, [](std::string& target, std::string_view line) {
+    append_sse_field_line(target, "data", line);
+  });
+}
+
+void append_sse_comment_lines(std::string& out, std::string_view comment) {
+  append_split_sse_lines(out, comment, [](std::string& target, std::string_view line) {
+    append_sse_comment_line(target, line);
+  });
+}
+
+} // namespace
 
 stream_write_result::stream_write_result(bool accepted, bool should_continue, std::error_code error) noexcept
     : accepted_(accepted), should_continue_(should_continue), error_(std::move(error)) {}
@@ -195,6 +274,18 @@ streaming_response response::stream() {
   }
   current.streaming = true;
   return streaming_response{state_};
+}
+
+sse_stream response::sse(sse_options options) {
+  auto out = stream();
+  out.type("text/event-stream; charset=utf-8");
+  if (options.no_cache) {
+    out.header("cache-control", "no-cache");
+  }
+  if (options.x_accel_buffering_no) {
+    out.header("x-accel-buffering", "no");
+  }
+  return sse_stream{std::move(out)};
 }
 
 unsigned int response::status_code() const noexcept {
@@ -460,6 +551,68 @@ void streaming_response::end() {
   if (state->on_stream_end) {
     state->on_stream_end();
   }
+}
+
+sse_stream::sse_stream(streaming_response stream) noexcept
+    : stream_(std::move(stream)) {}
+
+bool sse_stream::active() const noexcept {
+  return stream_.active();
+}
+
+sse_stream& sse_stream::on_cancel(std::function<void()> callback) {
+  stream_.on_cancel(std::move(callback));
+  return *this;
+}
+
+sse_stream& sse_stream::on_drain(std::function<void()> callback) {
+  stream_.on_drain(std::move(callback));
+  return *this;
+}
+
+sse_stream& sse_stream::on_error(std::function<void(std::error_code)> callback) {
+  stream_.on_error(std::move(callback));
+  return *this;
+}
+
+stream_write_result sse_stream::retry(std::chrono::milliseconds value) {
+  if (value.count() <= 0) {
+    return invalid_sse_argument();
+  }
+
+  std::string frame;
+  frame += "retry: ";
+  frame += std::to_string(value.count());
+  frame += "\n\n";
+  return stream_.write(std::move(frame));
+}
+
+stream_write_result sse_stream::send(const sse_event& event) {
+  if (contains_invalid_sse_field_byte(event.event) || contains_invalid_sse_field_byte(event.id)) {
+    return invalid_sse_argument();
+  }
+
+  std::string frame;
+  if (!event.event.empty()) {
+    append_sse_field_line(frame, "event", event.event);
+  }
+  if (!event.id.empty()) {
+    append_sse_field_line(frame, "id", event.id);
+  }
+  append_sse_data_lines(frame, event.data);
+  frame += '\n';
+  return stream_.write(std::move(frame));
+}
+
+stream_write_result sse_stream::comment(std::string_view value) {
+  std::string frame;
+  append_sse_comment_lines(frame, value);
+  frame += '\n';
+  return stream_.write(std::move(frame));
+}
+
+void sse_stream::close() {
+  stream_.end();
 }
 
 } // namespace uvp::http

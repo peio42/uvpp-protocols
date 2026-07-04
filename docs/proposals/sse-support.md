@@ -1,12 +1,14 @@
 # Server-Sent Events Support Proposal
 
-Status: Draft, not implemented
+Status: Implemented for the initial helper; automatic heartbeat scheduling is
+tracked separately.
 
 ## Current State
 
-- Implemented: HTTP streaming responses with drain, cancel, and error hooks.
-- Not implemented: `response::sse()`, `sse_stream`, SSE formatting, headers,
-  retry frames, comments, and automatic heartbeat support.
+- Implemented: `response::sse()`, `sse_stream`, SSE formatting, headers, retry
+  frames, manual comments, and HTTP streaming integration with drain, cancel,
+  and error hooks.
+- Not implemented: automatic heartbeat support.
 
 ## Scope
 

@@ -742,6 +742,46 @@ changing status or headers is invalid. A `false` result means the chunk was
 accepted but the pending write queue reached backpressure; resume from
 `on_drain`.
 
+## Server-Sent Events
+
+Use `sse()` for browser `EventSource` responses. It claims the response in the
+same way as `stream()`, sets the SSE response headers, and writes formatted SSE
+frames over the existing HTTP streaming path:
+
+```cpp
+srv.get("/events",
+  uvp::http::body::none{},
+  [](uvp::http::request& req, uvp::http::response& res) {
+    auto sse = res.sse();
+
+    auto last_id = req.header("Last-Event-ID");
+    (void)last_id;
+
+    sse.on_cancel([] {
+      // Stop application-owned producers for this stream.
+    });
+
+    sse.retry(std::chrono::seconds{5});
+    sse.comment("ping");
+    sse.send(uvp::http::sse_event{
+      .event = "ready",
+      .id = "1",
+      .data = R"({"ok":true})",
+    });
+  });
+```
+
+`sse_stream` is a move-only handle like `streaming_response`. Store it in
+application-owned state when events will be published after the handler returns.
+Destroying the handle does not close the response. Use `close()` to end the SSE
+stream normally.
+
+`send()` emits `event:`, `id:`, and one `data:` line per data line. `comment()`
+writes comment frames for manual heartbeats. `retry()` writes the browser
+reconnect delay in milliseconds. All writes return `stream_write_result`, so
+applications should stop publishing when a frame is accepted with backpressure
+and resume from `on_drain`.
+
 ## Route Parameters
 
 Named parameters and wildcard tails are available through `req.params()`:

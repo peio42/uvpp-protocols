@@ -397,6 +397,43 @@ UVP_TEST_CASE("http server serializes custom numeric status without a reason phr
   UVP_CHECK(received.find("\r\n\r\ncustom\n") != std::string::npos);
 }
 
+UVP_TEST_CASE("http server sends server sent events over chunked streaming") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.get("/events", [](uvp::http::request&, uvp::http::response& res) {
+        auto sse = res.sse();
+        (void)sse.send(uvp::http::sse_event{
+          .event = "bad\nevent",
+          .data = "ignored",
+        });
+        (void)sse.retry(std::chrono::seconds{5});
+        (void)sse.comment("ping\n");
+        (void)sse.send(uvp::http::sse_event{
+          .event = "ready",
+          .id = "1",
+          .data = "alpha\r\nbeta\n",
+        });
+        sse.close();
+      });
+    },
+    "GET /events HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "0\r\n\r\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("content-type: text/event-stream; charset=utf-8\r\n") != std::string::npos);
+  UVP_CHECK(received.find("cache-control: no-cache\r\n") != std::string::npos);
+  UVP_CHECK(received.find("x-accel-buffering: no\r\n") != std::string::npos);
+  UVP_CHECK(received.find("transfer-encoding: chunked\r\n") != std::string::npos);
+  UVP_CHECK(received.find("retry: 5000\n\n") != std::string::npos);
+  UVP_CHECK(received.find(": ping\n:\n\n") != std::string::npos);
+  UVP_CHECK(
+    received.find("event: ready\nid: 1\ndata: alpha\ndata: beta\ndata:\n\n") != std::string::npos);
+  UVP_CHECK(received.find("ignored") == std::string::npos);
+}
+
 UVP_TEST_CASE("http server routes on decoded path segments") {
   std::vector<std::string> observed_segments;
 

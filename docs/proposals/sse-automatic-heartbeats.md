@@ -20,13 +20,13 @@ the formatting helper needs.
 If implemented, automatic heartbeats should be opt-in through `sse_options`:
 
 ```cpp
-auto sse = res.sse(uvp::http::sse_options{}
-  .heartbeat(std::chrono::seconds{15})
-  .heartbeat_comment("ping"));
+auto sse = res.sse(uvp::http::sse_options{
+  .heartbeat = std::chrono::seconds{15},
+  .heartbeat_comment = "ping",
+});
 ```
 
-The exact setter style should match the finalized `sse_options` style. A zero
-heartbeat interval should disable automatic scheduling.
+A zero heartbeat interval should disable automatic scheduling.
 
 ## Design Requirements
 
