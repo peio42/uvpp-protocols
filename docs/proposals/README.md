@@ -15,6 +15,7 @@ the `Current focus` block.
 - [Typed JSON body policy](typed-json-body-policy.md)
 - [Multipart handling](multipart-handling.md)
 - [Server-Sent Events support](sse-support.md)
+- [SSE automatic heartbeat scheduling](sse-automatic-heartbeats.md)
 - [TLS support](tls-support.md)
 - [HTTP TLS listener integration](http-tls-listener-integration.md)
 - [HTTP client](http-client.md)
