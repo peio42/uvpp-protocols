@@ -11,7 +11,7 @@
   - [x] [Typed JSON request bodies](proposals/typed-json-body-policy.md)
   - [x] [Multipart handling](proposals/multipart-handling.md)
   - [x] [Server-Sent Events helper](proposals/sse-support.md)
-  - [ ] [Static file helper](proposals/static-file-helper.md)
+  - [x] [Static file helper](proposals/static-file-helper.md)
 
 Keep completed Current focus proposals listed until the milestone is closed.
 When a Current focus proposal is implemented, mark its line with `[x]` instead

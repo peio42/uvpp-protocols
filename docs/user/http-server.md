@@ -782,6 +782,40 @@ reconnect delay in milliseconds. All writes return `stream_write_result`, so
 applications should stop publishing when a frame is accepted with backpressure
 and resume from `on_drain`.
 
+## Static Files
+
+Use `static_files()` to serve regular files below an explicit directory root:
+
+```cpp
+srv.get(
+  "/assets/*path",
+  uvp::http::static_files("./public")
+    .cache_control("public, max-age=3600"));
+```
+
+The route should end with a named wildcard. The helper uses the wildcard tail as
+path components, rejects traversal attempts and encoded path separators, rejects
+hidden files by default, and serves `index.html` for directory requests by
+default. Rejected paths return `404 Not Found`.
+
+Successful responses include a detected `Content-Type`, `Content-Length`,
+`Last-Modified`, weak `ETag`, `Cache-Control: no-cache` by default, and
+`X-Content-Type-Options: nosniff`. `HEAD` requests fall back to the GET route
+and return the same metadata without a body. Conditional `If-None-Match` and
+`If-Modified-Since` requests can return `304 Not Modified`.
+
+Options use the same fluent style as other HTTP helpers:
+
+```cpp
+srv.get(
+  "/downloads/*file",
+  uvp::http::static_files("./downloads")
+    .path_param("file")
+    .no_index_file()
+    .hidden_files(uvp::http::hidden_file_policy::allow_well_known)
+    .cache_control("private, max-age=0"));
+```
+
 ## Route Parameters
 
 Named parameters and wildcard tails are available through `req.params()`:

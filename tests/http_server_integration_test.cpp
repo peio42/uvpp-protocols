@@ -2,6 +2,8 @@
 
 #include <array>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -33,6 +35,42 @@ void from_json(const uvp::json& value, json_widget& widget) {
 void from_json(const uvp::json& value, json_throwing_widget& widget) {
   widget.name = value.at("name").get<std::string>();
   throw std::runtime_error("domain validation failed");
+}
+
+class temporary_directory {
+public:
+  temporary_directory() {
+    const auto base = std::filesystem::temp_directory_path();
+    for (auto attempt = 0; attempt < 100; ++attempt) {
+      path_ = base / ("uvpp-protocols-static-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()) +
+        "-" + std::to_string(attempt));
+      std::error_code ec;
+      if (std::filesystem::create_directory(path_, ec)) {
+        return;
+      }
+    }
+    throw std::runtime_error("failed to create temporary directory");
+  }
+
+  ~temporary_directory() {
+    std::error_code ec;
+    std::filesystem::remove_all(path_, ec);
+  }
+
+  temporary_directory(const temporary_directory&) = delete;
+  temporary_directory& operator=(const temporary_directory&) = delete;
+
+  [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
+
+private:
+  std::filesystem::path path_;
+};
+
+void write_file(const std::filesystem::path& path, std::string_view body) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream out(path, std::ios::binary);
+  out << body;
 }
 
 uv::buffer_view integration_alloc(uv::tcp&, std::size_t) {
@@ -359,6 +397,168 @@ UVP_TEST_CASE("http server handles a real tcp request") {
   UVP_CHECK(received.find("\r\n\r\nhello ada") != std::string::npos);
 
   loop.close();
+}
+
+UVP_TEST_CASE("http server serves static files with metadata") {
+  temporary_directory root;
+  write_file(root.path() / "app.js", "console.log('ok');\n");
+
+  auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()).cache_control("public, max-age=60"));
+    },
+    "GET /assets/app.js HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nconsole.log('ok');\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("content-type: text/javascript; charset=utf-8\r\n") != std::string::npos);
+  UVP_CHECK(received.find("content-length: 19\r\n") != std::string::npos);
+  UVP_CHECK(received.find("cache-control: public, max-age=60\r\n") != std::string::npos);
+  UVP_CHECK(received.find("etag: W/\"") != std::string::npos);
+  UVP_CHECK(received.find("last-modified: ") != std::string::npos);
+  UVP_CHECK(received.find("x-content-type-options: nosniff\r\n") != std::string::npos);
+  UVP_CHECK(received.find("transfer-encoding: chunked\r\n") == std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nconsole.log('ok');\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server serves static index files and head metadata") {
+  temporary_directory root;
+  write_file(root.path() / "index.html", "<h1>Home</h1>\n");
+
+  auto get_received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "GET /assets HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\n<h1>Home</h1>\n");
+
+  UVP_CHECK(get_received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(get_received.find("content-type: text/html; charset=utf-8\r\n") != std::string::npos);
+  UVP_CHECK(get_received.find("content-length: 14\r\n") != std::string::npos);
+
+  auto head_received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "HEAD /assets HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\n");
+
+  UVP_CHECK(head_received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(head_received.find("content-length: 14\r\n") != std::string::npos);
+  UVP_CHECK(head_received.find("<h1>Home</h1>") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server rejects unsafe static paths") {
+  temporary_directory root;
+  write_file(root.path() / "public.txt", "public\n");
+  write_file(root.path() / ".secret", "secret\n");
+
+  auto traversal = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "GET /assets/../uvpp-protocols-outside-secret.txt HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nNot Found\n");
+
+  UVP_CHECK(traversal.find("HTTP/1.1 404 Not Found\r\n") != std::string::npos);
+  UVP_CHECK(traversal.find("outside") == std::string::npos);
+
+  auto encoded_slash = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "GET /assets/a%2Fb.txt HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nNot Found\n");
+
+  UVP_CHECK(encoded_slash.find("HTTP/1.1 404 Not Found\r\n") != std::string::npos);
+
+  auto hidden = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "GET /assets/.secret HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nNot Found\n");
+
+  UVP_CHECK(hidden.find("HTTP/1.1 404 Not Found\r\n") != std::string::npos);
+  UVP_CHECK(hidden.find("secret") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server supports static file conditional etags") {
+  temporary_directory root;
+  write_file(root.path() / "data.json", "{\"ok\":true}\n");
+
+  auto first = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "GET /assets/data.json HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\n{\"ok\":true}\n");
+
+  const auto etag_name = std::string{"etag: "};
+  const auto etag_begin = first.find(etag_name);
+  UVP_REQUIRE(etag_begin != std::string::npos);
+  const auto etag_value_begin = etag_begin + etag_name.size();
+  const auto etag_end = first.find("\r\n", etag_value_begin);
+  UVP_REQUIRE(etag_end != std::string::npos);
+  const auto etag = first.substr(etag_value_begin, etag_end - etag_value_begin);
+  const auto modified_name = std::string{"last-modified: "};
+  const auto modified_begin = first.find(modified_name);
+  UVP_REQUIRE(modified_begin != std::string::npos);
+  const auto modified_value_begin = modified_begin + modified_name.size();
+  const auto modified_end = first.find("\r\n", modified_value_begin);
+  UVP_REQUIRE(modified_end != std::string::npos);
+  const auto modified = first.substr(modified_value_begin, modified_end - modified_value_begin);
+
+  auto second = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "GET /assets/data.json HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "If-None-Match: " + etag + "\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\n");
+
+  UVP_CHECK(second.find("HTTP/1.1 304 Not Modified\r\n") != std::string::npos);
+  UVP_CHECK(second.find("etag: " + etag + "\r\n") != std::string::npos);
+  UVP_CHECK(second.find("{\"ok\":true}") == std::string::npos);
+
+  auto third = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()).etag(false));
+    },
+    "GET /assets/data.json HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "If-Modified-Since: " + modified + "\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\n");
+
+  UVP_CHECK(third.find("HTTP/1.1 304 Not Modified\r\n") != std::string::npos);
+  UVP_CHECK(third.find("etag: ") == std::string::npos);
+  UVP_CHECK(third.find("{\"ok\":true}") == std::string::npos);
 }
 
 UVP_TEST_CASE("http server falls back from HEAD to GET without sending a body") {

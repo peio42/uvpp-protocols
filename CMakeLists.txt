@@ -49,6 +49,7 @@ target_sources(
     src/http/router.cpp
     src/http/server.cpp
     src/http/server_options.cpp
+    src/http/static_files.cpp
     src/http/status.cpp
     src/http/upgrade.cpp
     src/websocket/detail/handshake.cpp

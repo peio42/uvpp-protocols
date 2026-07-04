@@ -1,6 +1,6 @@
 # Static File Helper Proposal
 
-Status: Draft
+Status: Implemented for the initial route helper
 
 ## Context
 
@@ -18,9 +18,11 @@ existing router, hooks, response ownership model, and HEAD fallback behavior.
 
 - Implemented: wildcard routes, decoded path segments, response headers,
   buffered responses, streaming responses, HEAD requests falling back to GET
-  routes, route hooks, and response hooks.
-- Not implemented: a first-class static file helper, filesystem path
-  confinement, content-type mapping, cache validators, or static-file tests.
+  routes, route hooks, response hooks, `static_files()`, filesystem path
+  confinement, extension content-type mapping, cache validators, and
+  static-file integration tests.
+- Deferred: range requests, precompressed variants, a public MIME registry,
+  a public virtual filesystem interface, and a non-blocking filesystem backend.
 
 ## Scope
 

@@ -192,6 +192,7 @@ struct server::impl {
     bool suppress_body = false;
     bool streaming = false;
     bool stream_headers_queued = false;
+    bool stream_chunked = true;
     bool stream_backpressured = false;
     bool stream_ended = false;
     bool response_hooks_ran = false;
@@ -990,6 +991,7 @@ struct server::impl {
       }
 
       if (!slot.stream_headers_queued) {
+        slot.stream_chunked = !slot.res.headers().contains("content-length");
         slot.res.commit_headers();
         queue_stream_write(
           slot,
@@ -997,14 +999,14 @@ struct server::impl {
             slot.res,
             !slot.close_after,
             owner_.owner.options_,
-            true,
+            slot.stream_chunked,
             slot.suppress_body));
         slot.stream_headers_queued = true;
       }
 
       if (!slot.suppress_body && !payload.empty()) {
         slot.stream_body_bytes += payload.size();
-        queue_stream_write(slot, serialize_chunk(std::move(payload)));
+        queue_stream_write(slot, slot.stream_chunked ? serialize_chunk(std::move(payload)) : std::move(payload));
       }
 
       flush_response_slots();
@@ -1024,6 +1026,7 @@ struct server::impl {
       slot.streaming = true;
       slot.stream_ended = true;
       if (!slot.stream_headers_queued) {
+        slot.stream_chunked = !slot.res.headers().contains("content-length");
         slot.res.commit_headers();
         queue_stream_write(
           slot,
@@ -1031,13 +1034,13 @@ struct server::impl {
             slot.res,
             !slot.close_after,
             owner_.owner.options_,
-            true,
+            slot.stream_chunked,
             slot.suppress_body),
           slot.suppress_body && slot.close_after);
         slot.stream_headers_queued = true;
       }
 
-      if (!slot.suppress_body) {
+      if (!slot.suppress_body && slot.stream_chunked) {
         queue_stream_write(slot, "0\r\n\r\n", slot.close_after);
       }
       slot.res.complete_stream();
