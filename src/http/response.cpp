@@ -77,6 +77,8 @@ stream_write_result invalid_sse_argument() noexcept {
   return stream_write_result::rejected(invalid_argument_error());
 }
 
+constexpr auto max_sse_retry_delay = std::chrono::hours{24 * 365};
+
 bool contains_invalid_sse_field_byte(std::string_view value) noexcept {
   for (char ch : value) {
     if (ch == '\r' || ch == '\n' || ch == '\0') {
@@ -637,7 +639,7 @@ sse_stream& sse_stream::on_error(std::function<void(std::error_code)> callback) 
 }
 
 stream_write_result sse_stream::retry(std::chrono::milliseconds value) {
-  if (value.count() <= 0) {
+  if (value.count() <= 0 || value > max_sse_retry_delay) {
     return invalid_sse_argument();
   }
 

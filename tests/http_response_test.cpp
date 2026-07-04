@@ -180,6 +180,10 @@ UVP_TEST_CASE("http sse response rejects invalid frames before writing") {
   const auto bad_retry = sse.retry(std::chrono::milliseconds{0});
   UVP_CHECK(!bad_retry.accepted());
   UVP_CHECK(bad_retry.error() == std::make_error_code(std::errc::invalid_argument));
+
+  const auto huge_retry = sse.retry(std::chrono::milliseconds::max());
+  UVP_CHECK(!huge_retry.accepted());
+  UVP_CHECK(huge_retry.error() == std::make_error_code(std::errc::invalid_argument));
 }
 
 UVP_TEST_CASE("http stream write result reports accepted backpressure and rejection") {

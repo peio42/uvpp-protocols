@@ -641,6 +641,13 @@ UVP_TEST_CASE("http server sends server sent events over chunked streaming") {
         });
         (void)sse.retry(std::chrono::seconds{5});
         (void)sse.comment("ping\n");
+        (void)sse.send(uvp::http::sse_event{});
+        (void)sse.send(uvp::http::sse_event{
+          .data = "tail\r",
+        });
+        (void)sse.send(uvp::http::sse_event{
+          .data = "\nhead",
+        });
         (void)sse.send(uvp::http::sse_event{
           .event = "ready",
           .id = "1",
@@ -662,6 +669,9 @@ UVP_TEST_CASE("http server sends server sent events over chunked streaming") {
   UVP_CHECK(received.find("transfer-encoding: chunked\r\n") != std::string::npos);
   UVP_CHECK(received.find("retry: 5000\n\n") != std::string::npos);
   UVP_CHECK(received.find(": ping\n:\n\n") != std::string::npos);
+  UVP_CHECK(received.find("data:\n\n") != std::string::npos);
+  UVP_CHECK(received.find("data: tail\ndata:\n\n") != std::string::npos);
+  UVP_CHECK(received.find("data:\ndata: head\n\n") != std::string::npos);
   UVP_CHECK(
     received.find("event: ready\nid: 1\ndata: alpha\ndata: beta\ndata:\n\n") != std::string::npos);
   UVP_CHECK(received.find("ignored") == std::string::npos);

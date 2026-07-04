@@ -142,7 +142,7 @@ bool is_safe_component(std::string_view value) noexcept {
 std::vector<std::string> pattern_segments(std::string_view pattern) {
   std::vector<std::string> segments;
   std::size_t offset = 0;
-  while (offset <= pattern.size()) {
+  while (offset < pattern.size()) {
     const auto next = pattern.find('/', offset);
     const auto end = next == std::string_view::npos ? pattern.size() : next;
     if (end > offset) {
@@ -780,7 +780,11 @@ void static_file_handler::operator()(request& req, response& res) const {
 
     target = resolve_existing_target(root_, indexed_components, options_.symlinks(), ec);
     if (!target) {
-      not_found(res);
+      if (ec == std::errc::permission_denied) {
+        internal_error(res);
+      } else {
+        not_found(res);
+      }
       return;
     }
     status_value = std::filesystem::status(*target, ec);

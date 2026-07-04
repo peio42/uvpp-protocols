@@ -793,7 +793,9 @@ stream normally.
 writes comment frames for manual heartbeats. `retry()` writes the browser
 reconnect delay in milliseconds. All writes return `stream_write_result`, so
 applications should stop publishing when a frame is accepted with backpressure
-and resume from `on_drain`.
+and resume from `on_drain`. Event `data` is passed through as bytes other than
+line splitting; applications are responsible for sending valid UTF-8 for the
+declared `text/event-stream; charset=utf-8` response.
 
 ## Static Files
 
@@ -811,11 +813,22 @@ path components, rejects traversal attempts and encoded path separators, rejects
 hidden files by default, and serves `index.html` for directory requests by
 default. Rejected paths return `404 Not Found`.
 
+Symlinks are followed only when their canonical target remains under the static
+root, and `.symlinks(uvp::http::symlink_policy::reject)` rejects symlinks in
+the selected path. This is path confinement for ordinary application-owned
+directories, not a filesystem sandbox. If untrusted users or another process can
+mutate the served tree concurrently, enforce the real security boundary in your
+filesystem/backend layer, for example with platform-specific open-by-directory
+APIs and no-follow checks.
+
 Successful responses include a detected `Content-Type`, `Content-Length`,
 `Last-Modified`, weak `ETag`, `Cache-Control: no-cache` by default, and
 `X-Content-Type-Options: nosniff`. `HEAD` requests fall back to the GET route
 and return the same metadata without a body. Conditional `If-None-Match` and
-`If-Modified-Since` requests can return `304 Not Modified`.
+`If-Modified-Since` requests can return `304 Not Modified`. The default ETag is
+weak and metadata-derived, so it is suitable for cache validation but does not
+prove byte-for-byte identity across filesystems with coarse modification-time
+precision or rapid file replacement.
 
 Options use the same fluent style as other HTTP helpers:
 
@@ -826,6 +839,7 @@ srv.get(
     .path_param("file")
     .no_index_file()
     .hidden_files(uvp::http::hidden_file_policy::allow_well_known)
+    .symlinks(uvp::http::symlink_policy::reject)
     .cache_control("private, max-age=0"));
 ```
 

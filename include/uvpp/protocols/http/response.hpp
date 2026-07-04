@@ -27,6 +27,7 @@ class streaming_response;
 struct sse_event {
   std::string_view event;
   std::string_view id;
+  // Data bytes are split into SSE data lines as-is; callers own UTF-8 validity.
   std::string_view data;
 };
 
