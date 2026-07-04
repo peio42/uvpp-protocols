@@ -139,13 +139,16 @@ response responsibility:
 3. After `res.defer()`, the application owns completion and must respond.
 4. After response writing starts, no automatic HTTP error response is possible.
 5. In streaming mode, missing `mp.on_error()` is an application programming
-   error. The implementation should log explicit detail and close the
-   connection in a controlled way.
+   error. The handler must install it before returning, including when it calls
+   `res.defer()`. If the response is not ended or already claimed for
+   streaming, the framework fails the request with `500 Internal Server Error`
+   and a diagnostic message. Once response streaming has been claimed, no
+   automatic HTTP error response is possible.
 
 For `multipart_form`, the framework can answer by default unless a form
 `on_error()` hook is configured. For `multipart_stream`, `on_error()` is
 mandatory because parsing continues after control has entered the application
-handler.
+handler; `res.defer()` does not relax this requirement.
 
 `route_options::max_body_bytes(...)` and server default body limits remain HTTP
 transport limits, but for `multipart_stream` they are reported through
@@ -254,6 +257,11 @@ If a callback returns without selecting a consumption path and the policy is
 `reject`, the stream should fail with a multipart error. If the policy is
 `discard`, the parser may drain the part while still enforcing total upload,
 part, timeout, and file limits.
+
+Selecting more than one consumption path for the same part is an application
+programming error. The parser reports it through `mp.on_error()` instead of
+silently ignoring the second call. If the already selected path is `text()`, the
+text callback receives an error result as well.
 
 ## Backpressure
 

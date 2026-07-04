@@ -500,82 +500,12 @@ struct multipart_stream_state : std::enable_shared_from_this<multipart_stream_st
   }
 
   void parse_part_headers(std::string block) {
-    http::headers parsed_headers;
-    std::optional<std::string> content_disposition;
-    bool saw_content_type = false;
-
-    std::size_t offset = 0;
-    while (offset < block.size()) {
-      const auto line_end = block.find("\r\n", offset);
-      const auto line = std::string_view(block).substr(
-        offset,
-        line_end == std::string::npos ? std::string_view::npos : line_end - offset);
-      if (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
-        fail(make_error(errc::multipart_malformed_part_header, "folded part headers are not supported"));
-        return;
-      }
-
-      const auto colon = line.find(':');
-      if (colon == std::string_view::npos || colon == 0) {
-        fail(make_error(errc::multipart_malformed_part_header));
-        return;
-      }
-      const auto name = trim_ows(line.substr(0, colon));
-      const auto value = trim_ows(line.substr(colon + 1));
-      if (name.empty() || contains_ctl(name)) {
-        fail(make_error(errc::multipart_malformed_part_header));
-        return;
-      }
-      if (ascii_iequals(name, "content-disposition")) {
-        if (content_disposition) {
-          fail(make_error(errc::multipart_malformed_part_header, "duplicate content-disposition"));
-          return;
-        }
-        content_disposition = std::string(value);
-      } else if (ascii_iequals(name, "content-type")) {
-        if (saw_content_type) {
-          fail(make_error(errc::multipart_malformed_part_header, "duplicate content-type"));
-          return;
-        }
-        saw_content_type = true;
-      } else if (ascii_iequals(name, "content-transfer-encoding") &&
-                 !ascii_iequals(value, "7bit") &&
-                 !ascii_iequals(value, "8bit") &&
-                 !ascii_iequals(value, "binary")) {
-        fail(make_error(errc::multipart_malformed_part_header, "unsupported content-transfer-encoding"));
-        return;
-      }
-      parsed_headers.add(name, value);
-
-      if (line_end == std::string::npos) {
-        break;
-      }
-      offset = line_end + 2;
-    }
-
-    if (!content_disposition) {
-      fail(make_error(errc::multipart_malformed_part_header, "missing content-disposition"));
+    auto parsed = parse_part_header_block(block, options.limits());
+    if (!parsed) {
+      fail(std::move(parsed).error());
       return;
     }
-
-    if (count_header_lines(block) > options.limits().max_part_headers) {
-      fail(make_error(errc::multipart_limit_exceeded, "multipart part has too many headers"));
-      return;
-    }
-
-    auto disposition = parse_multipart_content_disposition(*content_disposition);
-    if (!disposition) {
-      fail(disposition.error());
-      return;
-    }
-    if (disposition.value().name.size() > options.limits().max_field_name_bytes) {
-      fail(make_error(errc::multipart_limit_exceeded, "multipart field name is too large"));
-      return;
-    }
-    if (disposition.value().filename && disposition.value().filename->size() > options.limits().max_filename_bytes) {
-      fail(make_error(errc::multipart_limit_exceeded, "multipart filename is too large"));
-      return;
-    }
+    auto part_headers = std::move(parsed).value();
 
     ++part_count;
     if (part_count > options.limits().max_parts) {
@@ -585,10 +515,10 @@ struct multipart_stream_state : std::enable_shared_from_this<multipart_stream_st
 
     current_part = std::make_shared<multipart_part_state>();
     current_part->owner = shared_from_this();
-    current_part->name = std::move(disposition.value().name);
-    current_part->filename = std::move(disposition.value().filename);
+    current_part->name = std::move(part_headers.disposition.name);
+    current_part->filename = std::move(part_headers.disposition.filename);
     current_part->file = current_part->filename.has_value();
-    current_part->headers = std::move(parsed_headers);
+    current_part->headers = std::move(part_headers.headers);
 
     if (!on_part) {
       fail(make_error(errc::multipart_malformed_body, "multipart part has no handler"));
@@ -597,6 +527,9 @@ struct multipart_stream_state : std::enable_shared_from_this<multipart_stream_st
 
     multipart_part part{current_part};
     on_part(part);
+    if (failed) {
+      return;
+    }
     if (!part.consumed()) {
       fail(make_error(errc::multipart_malformed_body, "multipart part was not consumed"));
       return;
@@ -1148,15 +1081,48 @@ const http::headers& multipart_part::headers() const noexcept {
   return state_ ? state_->headers : empty;
 }
 
-multipart_part_stream& multipart_part::stream() {
-  if (state_ && state_->mode == detail::multipart_part_mode::none) {
-    state_->mode = detail::multipart_part_mode::stream;
+namespace {
+
+uvp::error multipart_part_consumer_error() {
+  return make_error(errc::multipart_malformed_body, "multipart part consumer already selected");
+}
+
+void fail_part_consumer_selection(const std::shared_ptr<detail::multipart_part_state>& state) {
+  if (!state) {
+    return;
   }
+  if (auto owner = state->owner.lock()) {
+    owner->fail(multipart_part_consumer_error());
+  }
+}
+
+} // namespace
+
+multipart_part_stream& multipart_part::stream() {
+  if (!state_) {
+    return stream_;
+  }
+  if (state_->mode != detail::multipart_part_mode::none) {
+    fail_part_consumer_selection(state_);
+    return stream_;
+  }
+  state_->mode = detail::multipart_part_mode::stream;
   return stream_;
 }
 
 void multipart_part::text(std::size_t max_bytes, std::function<void(uvp::result<std::string>)> callback) {
-  if (!state_ || state_->mode != detail::multipart_part_mode::none) {
+  if (!state_) {
+    if (callback) {
+      callback(multipart_part_consumer_error());
+    }
+    return;
+  }
+  if (state_->mode != detail::multipart_part_mode::none) {
+    auto error = multipart_part_consumer_error();
+    fail_part_consumer_selection(state_);
+    if (callback) {
+      callback(std::move(error));
+    }
     return;
   }
   state_->mode = detail::multipart_part_mode::text;
@@ -1171,9 +1137,14 @@ void multipart_part::text(std::size_t max_bytes, std::function<void(uvp::result<
 }
 
 void multipart_part::discard() {
-  if (state_ && state_->mode == detail::multipart_part_mode::none) {
-    state_->mode = detail::multipart_part_mode::discard;
+  if (!state_) {
+    return;
   }
+  if (state_->mode != detail::multipart_part_mode::none) {
+    fail_part_consumer_selection(state_);
+    return;
+  }
+  state_->mode = detail::multipart_part_mode::discard;
 }
 
 void multipart_part::pause() {

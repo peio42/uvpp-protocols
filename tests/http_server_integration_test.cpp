@@ -21,9 +21,18 @@ struct json_widget {
   int count = 0;
 };
 
+struct json_throwing_widget {
+  std::string name;
+};
+
 void from_json(const uvp::json& value, json_widget& widget) {
   widget.name = value.at("name").get<std::string>();
   widget.count = value.at("count").get<int>();
+}
+
+void from_json(const uvp::json& value, json_throwing_widget& widget) {
+  widget.name = value.at("name").get<std::string>();
+  throw std::runtime_error("domain validation failed");
 }
 
 uv::buffer_view integration_alloc(uv::tcp&, std::size_t) {
@@ -781,6 +790,31 @@ UVP_TEST_CASE("http server rejects json conversion failures") {
   UVP_CHECK(received.find("handler\n") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server maps standard typed json exceptions to unprocessable content") {
+  const std::string body = R"({"name":"bolt"})";
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/widgets",
+        uvp::http::body::json<json_throwing_widget>{},
+        [](uvp::http::request&, uvp::http::response& res, const json_throwing_widget&) {
+          res.text("handler\n");
+        });
+    },
+    std::string{
+      "POST /widgets HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: application/json\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "invalid json body\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 422 Unprocessable Content\r\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\ninvalid json body\n") != std::string::npos);
+  UVP_CHECK(received.find("handler\n") == std::string::npos);
+}
+
 UVP_TEST_CASE("http server applies route body limits before json parsing") {
   const std::string body = R"({"x":1})";
   const auto received = perform_http_request(
@@ -1038,6 +1072,122 @@ UVP_TEST_CASE("http server reports malformed multipart bodies to stream handlers
       "Content-Length: "} + std::to_string(body.size()) + "\r\n"
       "\r\n" + body,
     "duplicate content-disposition\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server rejects deferred multipart streams without error handlers") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "value\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream&) {
+          [[maybe_unused]] auto reply = res.defer();
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "multipart on_error handler required\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 500 Internal Server Error\r\n") != std::string::npos);
+}
+
+UVP_TEST_CASE("http server reports duplicate multipart part consumers") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "value\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          auto text_error_seen = std::make_shared<bool>(false);
+          multipart
+            .on_part([text_error_seen](uvp::http::multipart_part& part) {
+              part.text(1024, [text_error_seen](uvp::result<std::string> value) {
+                if (!value) {
+                  *text_error_seen = true;
+                }
+              });
+              part.discard();
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res, text_error_seen](uvp::error error) {
+              UVP_CHECK(*text_error_seen);
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "multipart part consumer already selected\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+  UVP_CHECK(received.find("ok\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server reports stream after multipart text consumer") {
+  const std::string body =
+    "--AaB03x\r\n"
+    "Content-Disposition: form-data; name=\"field\"\r\n"
+    "\r\n"
+    "value\r\n"
+    "--AaB03x--\r\n";
+
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.post(
+        "/upload",
+        uvp::http::body::multipart_stream{},
+        [](uvp::http::request&, uvp::http::response& res, uvp::http::multipart_stream& multipart) {
+          multipart
+            .on_part([](uvp::http::multipart_part& part) {
+              part.text(1024, [](uvp::result<std::string>) {});
+              part.stream()
+                .on_data([](std::span<const std::byte>) {});
+            })
+            .on_end([&res] {
+              res.text("ok\n");
+            })
+            .on_error([&res](uvp::error error) {
+              res.status(uvp::http::status::bad_request).text(error.detail + "\n");
+            });
+        });
+    },
+    std::string{
+      "POST /upload HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "Connection: close\r\n"
+      "Content-Type: multipart/form-data; boundary=AaB03x\r\n"
+      "Content-Length: "} + std::to_string(body.size()) + "\r\n"
+      "\r\n" + body,
+    "multipart part consumer already selected\n");
 
   UVP_CHECK(received.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
   UVP_CHECK(received.find("ok\n") == std::string::npos);

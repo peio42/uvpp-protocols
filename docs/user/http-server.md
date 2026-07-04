@@ -401,7 +401,8 @@ JSON routes accept `application/json`, structured suffixes such as
 `application/problem+json`, and media type parameters such as
 `application/json; charset=utf-8`. Missing or non-JSON `Content-Type` returns
 `415 Unsupported Media Type`; malformed JSON returns `400 Bad Request`; typed
-conversion failures return `422 Unprocessable Content`.
+conversion failures, including standard exceptions from `from_json`, return
+`422 Unprocessable Content`.
 
 ## Multipart Forms
 
@@ -506,7 +507,16 @@ reported to `on_error`; the application is responsible for completing the
 response. Route and server body-limit errors are also delivered through
 `on_error` after handler entry, rather than as automatic `413` responses. Each
 part must choose exactly one consumption path: `stream()`,
-`text(max_bytes, callback)`, or `discard()`.
+`text(max_bytes, callback)`, or `discard()`. Selecting a second consumption path
+is reported through `multipart.on_error(...)`; if the first path was `text()`,
+its callback also receives an error result.
+
+`multipart.on_error(...)` must be configured before the handler returns,
+including handlers that call `res.defer()`. If a multipart streaming handler
+returns without an error handler and the response is not ended or already
+claimed for streaming, the framework fails the request with
+`500 Internal Server Error` and the diagnostic
+`multipart on_error handler required`.
 
 Part names and filenames come from `Content-Disposition`. Repeated field names
 are allowed. `safe_filename()` strips path separators and control bytes, but

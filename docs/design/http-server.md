@@ -398,6 +398,12 @@ For `body::multipart_stream{}`, once the handler receives `multipart_stream&`,
 multipart parser failures and HTTP body-limit failures are reported through
 `mp.on_error()`. The application owns the response from that point; the server
 does not synthesize a competing multipart error response after handler entry.
+The handler must install `mp.on_error()` before returning, even when it calls
+`res.defer()`. If it does not and the response is not ended or already claimed
+for streaming, the route fails immediately with `500 Internal Server Error`.
+Each multipart part must select exactly one consumer. A second call to
+`stream()`, `text(...)`, or `discard()` is reported as a multipart error instead
+of being ignored.
 
 `pause()` stops consuming additional body data after the current callback.
 `resume()` restarts reads. `on_end()` means the full request body has been

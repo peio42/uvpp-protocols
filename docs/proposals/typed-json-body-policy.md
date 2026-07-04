@@ -112,7 +112,7 @@ The framework generates the response before the handler runs:
 | --- | --- | --- |
 | Missing or non-JSON `Content-Type` | `415 Unsupported Media Type` | `unsupported media type\n` |
 | Malformed JSON, including an empty body | `400 Bad Request` | `invalid json\n` |
-| `from_json` / `get<T>()` conversion failure | `422 Unprocessable Content` | `invalid json body\n` |
+| `from_json` / `get<T>()` conversion failure, including standard exceptions | `422 Unprocessable Content` | `invalid json body\n` |
 
 The handler should not be invoked for these failures. Response hooks should
 still observe the generated response because the route matched and a response

@@ -980,7 +980,7 @@ router::handler_type wrap_json_handler(Handler&& handler) {
       std::optional<decoded_type> decoded;
       try {
         decoded.emplace(parsed.get<decoded_type>());
-      } catch (const uvp::json::exception&) {
+      } catch (const std::exception&) {
         res.status(status::unprocessable_content).text("invalid json body\n");
         return;
       }
@@ -1026,7 +1026,7 @@ router::handler_type wrap_multipart_stream_handler(Handler&& handler, multipart_
     }
 
     handler(req, res, multipart);
-    if (!multipart.has_error_handler() && !res.ended() && !res.deferred() && !res.streaming()) {
+    if (!multipart.has_error_handler() && !res.ended() && !res.streaming()) {
       res.status(status::internal_server_error).text("multipart on_error handler required\n");
     }
   };
