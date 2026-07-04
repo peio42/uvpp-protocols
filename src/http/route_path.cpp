@@ -1,23 +1,12 @@
 #include <uvpp/protocols/http/detail/route_path.hpp>
 
+#include "detail/url_encoding.hpp"
+
 #include <utility>
 
 namespace uvp::http::detail {
 
 namespace {
-
-int hex_value(char value) noexcept {
-  if (value >= '0' && value <= '9') {
-    return value - '0';
-  }
-  if (value >= 'a' && value <= 'f') {
-    return value - 'a' + 10;
-  }
-  if (value >= 'A' && value <= 'F') {
-    return value - 'A' + 10;
-  }
-  return -1;
-}
 
 bool decode_path_segment(std::string_view segment, std::string& decoded) {
   decoded.clear();

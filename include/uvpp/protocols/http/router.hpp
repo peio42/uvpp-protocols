@@ -74,8 +74,8 @@ struct route_options {
   [[nodiscard]] std::size_t max_body_bytes() const noexcept { return max_body_bytes_; }
 
   route_options& body_timeout(std::chrono::milliseconds value) & {
-    if (value.count() <= 0) {
-      throw std::invalid_argument("body_timeout must be greater than zero");
+    if (value.count() < 0) {
+      throw std::invalid_argument("body_timeout must not be negative");
     }
     body_timeout_ = value;
     return *this;
@@ -87,6 +87,16 @@ struct route_options {
   }
 
   [[nodiscard]] std::chrono::milliseconds body_timeout() const noexcept { return body_timeout_; }
+
+  route_options& inherit_body_timeout() & noexcept {
+    body_timeout_ = std::chrono::milliseconds{0};
+    return *this;
+  }
+
+  route_options&& inherit_body_timeout() && noexcept {
+    inherit_body_timeout();
+    return std::move(*this);
+  }
 
 private:
   std::size_t max_body_bytes_ = 0;

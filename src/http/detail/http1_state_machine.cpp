@@ -56,10 +56,17 @@ public:
     events_.clear();
     pending_header_field_.clear();
     pending_header_value_.clear();
+    header_bytes_ = 0;
+    header_count_ = 0;
+    limit_error_.clear();
     last_header_part_ = header_part::none;
 
     llhttp_reset(&parser_);
     parser_.data = this;
+  }
+
+  void limits(http1_limits value) {
+    limits_ = value;
   }
 
   http1_parse_result parse(std::string_view bytes) {
@@ -80,6 +87,9 @@ public:
       return {http1_parse_result::status::upgrade, {}, parsed_bytes};
     }
 
+    if (!limit_error_.empty()) {
+      return {http1_parse_result::status::error, limit_error_, 0};
+    }
     return {http1_parse_result::status::error, error_message(err), 0};
   }
 
@@ -107,6 +117,9 @@ private:
     self.current_ = http1_message{};
     self.pending_header_field_.clear();
     self.pending_header_value_.clear();
+    self.header_bytes_ = 0;
+    self.header_count_ = 0;
+    self.limit_error_.clear();
     self.last_header_part_ = header_part::none;
     return HPE_OK;
   }
@@ -120,7 +133,12 @@ private:
   static int on_header_field(llhttp_t* parser, const char* at, std::size_t length) {
     auto& self = impl::self(parser);
     if (self.last_header_part_ == header_part::value) {
-      self.commit_pending_header();
+      if (!self.commit_pending_header()) {
+        return HPE_USER;
+      }
+    }
+    if (!self.reserve_header_bytes(length)) {
+      return HPE_USER;
     }
     self.pending_header_field_.append(at, length);
     self.last_header_part_ = header_part::field;
@@ -129,6 +147,9 @@ private:
 
   static int on_header_value(llhttp_t* parser, const char* at, std::size_t length) {
     auto& self = impl::self(parser);
+    if (!self.reserve_header_bytes(length)) {
+      return HPE_USER;
+    }
     self.pending_header_value_.append(at, length);
     self.last_header_part_ = header_part::value;
     return HPE_OK;
@@ -136,7 +157,9 @@ private:
 
   static int on_headers_complete(llhttp_t* parser) {
     auto& self = impl::self(parser);
-    self.commit_pending_header();
+    if (!self.commit_pending_header()) {
+      return HPE_USER;
+    }
     self.current_.method = map_method(static_cast<llhttp_method_t>(llhttp_get_method(parser)));
     self.current_.http_major = static_cast<unsigned int>(llhttp_get_http_major(parser));
     self.current_.http_minor = static_cast<unsigned int>(llhttp_get_http_minor(parser));
@@ -157,7 +180,9 @@ private:
 
   static int on_message_complete(llhttp_t* parser) {
     auto& self = impl::self(parser);
-    self.commit_pending_header();
+    if (!self.commit_pending_header()) {
+      return HPE_USER;
+    }
     self.current_.keep_alive = llhttp_should_keep_alive(parser) != 0;
     self.events_.push_back(http1_event::complete(self.current_));
     self.completed_messages_.push_back(std::move(self.current_));
@@ -172,20 +197,39 @@ private:
   llhttp_t parser_{};
   llhttp_settings_t settings_{};
 
-  void commit_pending_header() {
+  bool reserve_header_bytes(std::size_t length) {
+    if (length > limits_.max_header_bytes || header_bytes_ > limits_.max_header_bytes - length) {
+      limit_error_ = "request headers are too large";
+      return false;
+    }
+    header_bytes_ += length;
+    return true;
+  }
+
+  bool commit_pending_header() {
     if (!pending_header_field_.empty()) {
+      if (header_count_ >= limits_.max_header_count) {
+        limit_error_ = "request has too many headers";
+        return false;
+      }
       current_.headers.add(pending_header_field_, pending_header_value_);
+      ++header_count_;
       pending_header_field_.clear();
       pending_header_value_.clear();
     }
     last_header_part_ = header_part::none;
+    return true;
   }
 
+  http1_limits limits_;
   http1_message current_;
   std::vector<http1_message> completed_messages_;
   std::vector<http1_event> events_;
   std::string pending_header_field_;
   std::string pending_header_value_;
+  std::size_t header_bytes_ = 0;
+  std::size_t header_count_ = 0;
+  std::string limit_error_;
   header_part last_header_part_ = header_part::none;
 };
 
@@ -200,6 +244,10 @@ http1_state_machine& http1_state_machine::operator=(http1_state_machine&&) noexc
 
 void http1_state_machine::reset() {
   impl_->reset();
+}
+
+void http1_state_machine::limits(http1_limits value) {
+  impl_->limits(value);
 }
 
 http1_parse_result http1_state_machine::parse(std::string_view bytes) {

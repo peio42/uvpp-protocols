@@ -83,6 +83,33 @@ UVP_TEST_CASE("http1 parser reports malformed requests") {
   UVP_CHECK(!result.error.empty());
 }
 
+UVP_TEST_CASE("http1 parser enforces request header limits") {
+  {
+    uvp::http::detail::http1_state_machine parser;
+    parser.limits(uvp::http::detail::http1_limits{15, 128});
+    const auto result = parser.parse(
+      "GET / HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "\r\n");
+
+    UVP_CHECK(result.code == uvp::http::detail::http1_parse_result::status::error);
+    UVP_CHECK_EQ(result.error, "request headers are too large");
+  }
+
+  {
+    uvp::http::detail::http1_state_machine parser;
+    parser.limits(uvp::http::detail::http1_limits{16 * 1024, 1});
+    const auto result = parser.parse(
+      "GET / HTTP/1.1\r\n"
+      "Host: example.test\r\n"
+      "X-Test: ok\r\n"
+      "\r\n");
+
+    UVP_CHECK(result.code == uvp::http::detail::http1_parse_result::status::error);
+    UVP_CHECK_EQ(result.error, "request has too many headers");
+  }
+}
+
 UVP_TEST_CASE("http1 parser reports websocket upgrade pause") {
   uvp::http::detail::http1_state_machine parser;
   const auto result = parser.parse(

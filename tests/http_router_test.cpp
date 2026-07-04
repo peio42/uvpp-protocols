@@ -245,6 +245,31 @@ UVP_TEST_CASE("http router stores route options body limits") {
   UVP_CHECK(resource_match.body == uvp::http::detail::body_mode::text);
   UVP_CHECK_EQ(resource_match.max_body_bytes, 24U);
   UVP_CHECK(resource_match.body_timeout == std::chrono::milliseconds{500});
+
+  router.post(
+    "/default-timeout",
+    uvp::http::route_options{}
+      .body_timeout(std::chrono::milliseconds{25})
+      .inherit_body_timeout(),
+    uvp::http::body::text{},
+    [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+
+  auto inherited_match = router.match(uvp::http::method::post, "/default-timeout");
+  UVP_REQUIRE(inherited_match);
+  UVP_CHECK(inherited_match.body_timeout == std::chrono::milliseconds{0});
+
+  router.post(
+    "/zero-timeout",
+    uvp::http::route_options{}.body_timeout(std::chrono::milliseconds{0}),
+    uvp::http::body::text{},
+    [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+
+  auto zero_match = router.match(uvp::http::method::post, "/zero-timeout");
+  UVP_REQUIRE(zero_match);
+  UVP_CHECK(zero_match.body_timeout == std::chrono::milliseconds{0});
+  UVP_CHECK_THROWS(
+    uvp::http::route_options{}.body_timeout(std::chrono::milliseconds{-1}),
+    std::invalid_argument);
 }
 
 UVP_TEST_CASE("http router exposes explicit convenience methods for every common verb") {

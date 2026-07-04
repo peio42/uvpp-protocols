@@ -398,9 +398,7 @@ deferred_response& deferred_response::on_cancel(std::function<void()> callback) 
 }
 
 deferred_response& deferred_response::status(unsigned int code) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.status(code);
-  }
+  (void)try_status(code);
   return *this;
 }
 
@@ -409,9 +407,7 @@ deferred_response& deferred_response::status(http::status value) {
 }
 
 deferred_response& deferred_response::header(std::string_view name, std::string_view value) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.header(name, value);
-  }
+  (void)try_header(name, value);
   return *this;
 }
 
@@ -419,46 +415,111 @@ deferred_response& deferred_response::type(std::string_view content_type) {
   return header("content-type", content_type);
 }
 
-void deferred_response::text(std::string_view body) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.text(body);
+bool deferred_response::try_status(unsigned int code) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
   }
+  response{std::move(state)}.status(code);
+  return true;
+}
+
+bool deferred_response::try_status(http::status value) {
+  return try_status(static_cast<unsigned int>(value));
+}
+
+bool deferred_response::try_header(std::string_view name, std::string_view value) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.header(name, value);
+  return true;
+}
+
+bool deferred_response::try_type(std::string_view content_type) {
+  return try_header("content-type", content_type);
+}
+
+void deferred_response::text(std::string_view body) {
+  (void)try_text(body);
 }
 
 void deferred_response::json(const char* serialized_json) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.json(serialized_json);
-  }
+  (void)try_json(serialized_json);
 }
 
 void deferred_response::json(const std::string& serialized_json) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.json(serialized_json);
-  }
+  (void)try_json(serialized_json);
 }
 
 void deferred_response::json(std::string_view serialized_json) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.json(serialized_json);
-  }
+  (void)try_json(serialized_json);
 }
 
 void deferred_response::json(const uvp::json& value) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.json(value);
-  }
+  (void)try_json(value);
 }
 
 void deferred_response::bytes(std::span<const std::byte> body) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.bytes(body);
-  }
+  (void)try_bytes(body);
 }
 
 void deferred_response::end() {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.end();
+  (void)try_end();
+}
+
+bool deferred_response::try_text(std::string_view body) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
   }
+  response{std::move(state)}.text(body);
+  return true;
+}
+
+bool deferred_response::try_json(const char* serialized_json) {
+  return try_json(std::string_view{serialized_json});
+}
+
+bool deferred_response::try_json(const std::string& serialized_json) {
+  return try_json(std::string_view{serialized_json});
+}
+
+bool deferred_response::try_json(std::string_view serialized_json) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.json(serialized_json);
+  return true;
+}
+
+bool deferred_response::try_json(const uvp::json& value) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.json(value);
+  return true;
+}
+
+bool deferred_response::try_bytes(std::span<const std::byte> body) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.bytes(body);
+  return true;
+}
+
+bool deferred_response::try_end() {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.end();
+  return true;
 }
 
 streaming_response::streaming_response(std::weak_ptr<detail::response_state> state) noexcept

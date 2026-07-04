@@ -227,6 +227,7 @@ public:
     std::vector<std::string> decoded_path_segments = {});
 
   [[nodiscard]] http::method method() const noexcept { return method_; }
+  // Returned views borrow storage owned by this request object.
   [[nodiscard]] std::string_view target() const noexcept { return target_; }
   [[nodiscard]] std::string_view path() const noexcept { return path_; }
   [[nodiscard]] std::string_view query() const noexcept { return query_; }
@@ -245,6 +246,7 @@ public:
   [[nodiscard]] const http::headers& headers() const noexcept { return headers_; }
   [[nodiscard]] std::string_view header(std::string_view name) const noexcept;
 
+  // Returned body views borrow storage owned by this request object.
   [[nodiscard]] std::span<const std::byte> body_bytes() const noexcept;
   [[nodiscard]] std::string_view body() const noexcept;
 

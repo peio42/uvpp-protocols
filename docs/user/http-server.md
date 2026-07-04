@@ -143,7 +143,10 @@ body limit. Otherwise the server falls back to
 `server_options::max_body_bytes()`. Use
 `route_options::body_timeout(...)` when a route has a slower expected request
 body, such as an upload. Routes without an override use
-`server_options::body_timeout()`.
+`server_options::body_timeout()`. Use
+`route_options::inherit_body_timeout()` when a builder should explicitly reset
+the route to that inherited default; passing `0ms` to `body_timeout(...)` has
+the same effect.
 
 Multipart policies are the bounded exception to the body-limit fallback:
 when `route_options::max_body_bytes(...)` is not set,
@@ -154,10 +157,16 @@ limit. A route-level `max_body_bytes(...)` always has priority.
 Body limits must be greater than zero. Use `body::none{}` for routes that should
 not receive a request body; do not use `max_body_bytes(0)` for that case.
 
-`server_options::header_timeout(...)` applies while waiting for complete
-request headers. `server_options::idle_timeout(...)` applies while a
-keep-alive connection is open without an active request. Those two settings
-are connection-level policies, so they are not route options.
+`server_options::max_header_bytes(...)` and
+`server_options::max_header_count(...)` bound untrusted request headers before
+the request is dispatched. Header storage preserves insertion order and uses
+linear scans, which keeps the common small-header path simple while relying on
+those parser limits for adversarial inputs.
+
+`server_options::header_timeout(...)` applies while waiting for complete request
+headers. `server_options::idle_timeout(...)` applies while a keep-alive
+connection is open without an active request. Those two settings are
+connection-level policies, so they are not route options.
 
 ## Method Handling
 
@@ -187,7 +196,7 @@ api.pre_handler([](uvp::http::request&, uvp::http::response& res) {
 });
 
 api.on_response([](const uvp::http::response_info& info) {
-  // Observe status, response size, outcome, and a copied request snapshot.
+  // Observe status, response body size, outcome, and a copied request snapshot.
   record_request(info.request.path, info.status, info.response_body_size);
 });
 
@@ -645,12 +654,16 @@ srv.get("/report",
     });
 
     start_report([reply = std::move(reply)](std::string report) mutable {
-      if (reply.active()) {
-        reply.type("text/plain").text(report);
+      if (reply.try_type("text/plain")) {
+        reply.text(report);
       }
     });
   });
 ```
+
+The fluent `deferred_response` methods are best-effort once the owning
+connection can disappear. Use `active()` for a coarse check, or the `try_*`
+methods when application code must know whether an operation was applied.
 
 ## Chunked Response Streaming
 

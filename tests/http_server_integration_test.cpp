@@ -399,6 +399,39 @@ UVP_TEST_CASE("http server handles a real tcp request") {
   loop.close();
 }
 
+UVP_TEST_CASE("http server rejects requests exceeding header limits") {
+  const auto too_many = perform_http_request(
+    uvp::http::server_options{}.max_header_count(1),
+    [](uvp::http::server& server) {
+      server.get("/", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("ok\n");
+      });
+    },
+    "GET / HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "X-Test: ok\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "HTTP/1.1 400 Bad Request\r\n");
+
+  UVP_CHECK(too_many.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+
+  const auto too_large = perform_http_request(
+    uvp::http::server_options{}.max_header_bytes(15),
+    [](uvp::http::server& server) {
+      server.get("/", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("ok\n");
+      });
+    },
+    "GET / HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "HTTP/1.1 400 Bad Request\r\n");
+
+  UVP_CHECK(too_large.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server serves static files with metadata") {
   temporary_directory root;
   write_file(root.path() / "app.js", "console.log('ok');\n");

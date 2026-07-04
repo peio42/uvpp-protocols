@@ -205,7 +205,12 @@ struct server::impl {
     session(impl& owner, uvp::io::byte_stream stream)
         : owner_(owner),
           stream_(std::move(stream)),
-          timeout_timer_(owner.owner.loop()) {}
+          timeout_timer_(owner.owner.loop()) {
+      parser_.limits(detail::http1_limits{
+        owner_.owner.options_.max_header_bytes(),
+        owner_.owner.options_.max_header_count(),
+      });
+    }
 
     void start() {
       start_timeout(timeout_phase::header, owner_.owner.options_.header_timeout());

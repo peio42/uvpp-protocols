@@ -75,6 +75,25 @@ UVP_TEST_CASE("http deferred response completes the owner response") {
   UVP_CHECK(!cancelled);
 }
 
+UVP_TEST_CASE("http deferred response try methods report inactive handles") {
+  uvp::http::response response;
+  auto reply = response.defer();
+
+  UVP_CHECK(reply.try_status(uvp::http::status::created));
+  UVP_CHECK(reply.try_header("x-test", "before"));
+  UVP_CHECK(reply.try_text("done"));
+
+  UVP_CHECK(!reply.active());
+  UVP_CHECK(!reply.try_header("x-test", "after"));
+  UVP_CHECK(!reply.try_text("ignored"));
+  UVP_CHECK(!reply.try_end());
+  reply.header("x-test", "after").text("ignored");
+
+  UVP_CHECK_EQ(response.status_code(), static_cast<unsigned int>(uvp::http::status::created));
+  UVP_CHECK_EQ(response.headers().get("x-test"), "before");
+  UVP_CHECK_EQ(response.body(), "done");
+}
+
 UVP_TEST_CASE("http response prevents mixing buffered and streaming modes") {
   uvp::http::response response;
   auto stream = response.stream();
