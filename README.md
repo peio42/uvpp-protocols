@@ -9,7 +9,8 @@ common protocols such as HTTP, WebSocket, TLS, SMTP, and MQTT.
 
 This repository is in its early implementation milestones. The first modules
 are an HTTP/1.1 server built on uvpp, libuv, `llhttp`, and `nlohmann/json`,
-plus server-side WebSocket sessions on top of HTTP upgrade routes.
+server-side WebSocket sessions on top of HTTP upgrade routes, and TLS stream
+and listener adapters backed by OpenSSL.
 
 ## Build
 
@@ -105,12 +106,15 @@ Available:
 
 - `uvp::http`: HTTP/1.1 server, multipart request bodies, and Server-Sent
   Events response helpers are available; client primitives are planned.
+- `uvp::tls`: TLS stream and listener adapters over uvpp byte streams, with
+  client/server contexts, ALPN, client SNI, peer verification, backpressure,
+  close-notify handling, listener handshake limits/timeouts, and HTTP listener
+  composition.
 - `uvp::websocket`: server-side WebSocket sessions are available; client
   sessions are planned.
 
 Planned:
 
-- `uvp::tls`: TLS stream adapter over uvpp streams.
 - `uvp::smtp`: SMTP client primitives.
 - `uvp::mqtt`: MQTT client sessions over TCP, TLS, or WebSocket.
 
@@ -130,10 +134,10 @@ through explicit transport APIs. Convenience helpers may exist, but they should
 not force unrelated dependencies between modules.
 
 The current transport layer exposes `uvp::io::stream_listener` and
-`uvp::io::byte_stream`, with TCP and Unix socket listener adapters. The HTTP
-server owns listeners and accepted sessions through these abstractions, so HTTP
-over Unix sockets and future TLS/WebSocket composition do not require a TCP-only
-public model.
+`uvp::io::byte_stream`, with TCP, Unix socket, and TLS listener adapters. The
+HTTP server owns listeners and accepted sessions through these abstractions, so
+HTTP over Unix sockets, HTTP over TLS, and future protocol composition do not
+require a TCP-only public model.
 
 ## Dependency Policy
 
@@ -151,6 +155,11 @@ link `libnghttp2`. External HTTP dependencies are allowed only under `detail/`.
 They never own the socket, the loop, timers, output buffers, or the public
 model.
 
+TLS currently uses OpenSSL SSL/Crypto behind the `uvp::tls` module. Public
+headers do not expose OpenSSL types, and OpenSSL does not own sockets, loops,
+timers, read buffers, or write buffers; the uvpp reactor and byte-stream model
+remain the transport boundary.
+
 Current CMake dependency options:
 
 ```sh
@@ -161,6 +170,8 @@ cmake -S . -B build -DUVPP_PROTOCOLS_LLHTTP_SOURCE_DIR=/path/to/llhttp
 
 `llhttp` is not a replaceable backend. It is the HTTP/1 parser used by the
 library. The source-directory option exists for offline or vendored builds.
+OpenSSL is discovered with `find_package(OpenSSL REQUIRED COMPONENTS SSL
+Crypto)`.
 
 ## Documentation
 
@@ -169,6 +180,7 @@ Documentation starts in [`docs/README.md`](docs/README.md).
 User documentation:
 
 - [HTTP server](docs/user/http-server.md)
+- [TLS](docs/user/tls.md)
 - [WebSocket](docs/user/websocket.md)
 
 The design notes live in [`docs/design`](docs/design):
@@ -186,6 +198,8 @@ Planning and review material:
 
 - [Roadmap](docs/roadmap.md)
 - [Proposals](docs/proposals/README.md)
+- [TLS policy and identity proposal](docs/proposals/tls-policy-and-identity.md)
+- [TLS graceful shutdown proposal](docs/proposals/tls-graceful-shutdown.md)
 - [Archived code quality audit](docs/archive/code-quality-audit.md)
 - [Archived API audit](docs/archive/api-audit.md)
 
@@ -194,8 +208,10 @@ Planning and review material:
 The current implementation includes HTTP route ergonomics, chunked responses,
 request body policies, request body streaming, the generic HTTP upgrade hook,
 server-side WebSocket handshake/framing, WebSocket sessions, byte-stream
-adaptation, typed JSON request bodies, multipart request streaming, runnable
-examples, and focused tests.
+adaptation, TLS stream and listener adapters, HTTP over TLS through listener
+composition, typed JSON request bodies, multipart request streaming, runnable
+examples, and focused tests. Remaining TLS hardening topics are tracked in the
+TLS policy/identity and graceful shutdown proposals.
 
 ## License
 
