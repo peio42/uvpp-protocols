@@ -57,6 +57,7 @@ state, and queued writes.
 auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
   .max_message_bytes(1024 * 1024)
   .max_pending_write_bytes(1024 * 1024)
+  .close_timeout(std::chrono::seconds{5})
   .subprotocol("chat"));
 
 ws
@@ -78,6 +79,18 @@ ws.ping();
 ws.pong(payload);
 ws.close(uvp::websocket::close_code::normal, "bye");
 ```
+
+After a close frame is sent, the session waits for the peer's close frame or
+transport close until `accept_options::close_timeout(...)` expires, then closes
+the transport. Invalid peer close codes are treated as protocol errors and do
+not call `on_close`.
+
+`close_code` names the standard close codes the session may send or report:
+`normal`, `going_away`, `protocol_error`, `unsupported_data`,
+`invalid_payload`, `policy_violation`, `message_too_large`,
+`mandatory_extension`, and `internal_error`. Peer private-use codes from
+`3000` through `4999` are accepted and can still be observed through the enum's
+underlying value.
 
 For callback-only endpoints that intentionally do not keep an owning session
 handle, use `uvp::websocket::accept_detached()`. The detached form returns a

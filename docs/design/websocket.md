@@ -181,6 +181,8 @@ upgrade request.
   errors;
 - `accept_options::auto_pong(bool)` to keep the default automatic ping response or make
   `on_ping` responsible for replying;
+- `accept_options::close_timeout(...)` to bound the graceful close handshake
+  after a close frame has been sent;
 - accessors for local and remote endpoints through the underlying transport;
 - `into_byte_stream()` for binary byte-stream protocols over WebSocket.
 

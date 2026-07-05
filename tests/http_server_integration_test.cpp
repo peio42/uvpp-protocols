@@ -8,6 +8,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -65,6 +66,27 @@ public:
 
 private:
   std::filesystem::path path_;
+};
+
+class scoped_permissions {
+public:
+  scoped_permissions(std::filesystem::path path, std::filesystem::perms replacement)
+      : path_(std::move(path)),
+        original_(std::filesystem::status(path_).permissions()) {
+    std::filesystem::permissions(path_, replacement, std::filesystem::perm_options::replace);
+  }
+
+  ~scoped_permissions() {
+    std::error_code ec;
+    std::filesystem::permissions(path_, original_, std::filesystem::perm_options::replace, ec);
+  }
+
+  scoped_permissions(const scoped_permissions&) = delete;
+  scoped_permissions& operator=(const scoped_permissions&) = delete;
+
+private:
+  std::filesystem::path path_;
+  std::filesystem::perms original_;
 };
 
 void write_file(const std::filesystem::path& path, std::string_view body) {
@@ -532,6 +554,88 @@ UVP_TEST_CASE("http server rejects unsafe static paths") {
 
   UVP_CHECK(hidden.find("HTTP/1.1 404 Not Found\r\n") != std::string::npos);
   UVP_CHECK(hidden.find("secret") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server confines static symlinks to the root") {
+  temporary_directory root;
+  temporary_directory outside;
+  write_file(outside.path() / "secret.txt", "secret\n");
+
+  std::error_code ec;
+  std::filesystem::create_symlink(outside.path() / "secret.txt", root.path() / "outside-link.txt", ec);
+  if (ec) {
+    return;
+  }
+
+  auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "GET /assets/outside-link.txt HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nNot Found\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 404 Not Found\r\n") != std::string::npos);
+  UVP_CHECK(received.find("secret") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server rejects static symlinks when configured") {
+  temporary_directory root;
+  write_file(root.path() / "public.txt", "public\n");
+
+  std::error_code ec;
+  std::filesystem::create_symlink(root.path() / "public.txt", root.path() / "public-link.txt", ec);
+  if (ec) {
+    return;
+  }
+
+  auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get(
+        "/assets/*path",
+        uvp::http::static_files(root.path()).symlinks(uvp::http::symlink_policy::reject));
+    },
+    "GET /assets/public-link.txt HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nNot Found\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 404 Not Found\r\n") != std::string::npos);
+  UVP_CHECK(received.find("public\n") == std::string::npos);
+}
+
+UVP_TEST_CASE("http server reports permission denied static index files as internal errors") {
+#ifdef _WIN32
+  return;
+#else
+  temporary_directory root;
+  const auto private_dir = root.path() / "private";
+  write_file(private_dir / "index.html", "secret\n");
+
+  auto permissions = scoped_permissions{private_dir, std::filesystem::perms::none};
+
+  std::error_code status_ec;
+  (void)std::filesystem::status(private_dir / "index.html", status_ec);
+  if (status_ec != std::errc::permission_denied) {
+    return;
+  }
+
+  auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(root.path()));
+    },
+    "GET /assets/private HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nInternal Server Error\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 500 Internal Server Error\r\n") != std::string::npos);
+  UVP_CHECK(received.find("secret") == std::string::npos);
+#endif
 }
 
 UVP_TEST_CASE("http server supports static file conditional etags") {
