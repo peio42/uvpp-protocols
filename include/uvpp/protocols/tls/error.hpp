@@ -16,6 +16,7 @@ enum class errc {
   pending_handshake_limit,
   write_buffer_limit,
   read_buffer_limit,
+  unexpected_eof,
 };
 
 const std::error_category& error_category() noexcept;

@@ -36,6 +36,8 @@ public:
       return "TLS write buffer limit reached";
     case errc::read_buffer_limit:
       return "TLS read buffer limit reached";
+    case errc::unexpected_eof:
+      return "TLS stream ended without close_notify";
     }
 
     return "unknown TLS error";

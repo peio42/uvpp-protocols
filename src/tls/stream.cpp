@@ -106,6 +106,10 @@ public:
   void read_start(uvp::io::read_callback on_read) {
     on_read_ = std::move(on_read);
     deliver_pending_clear();
+    deliver_terminal_read();
+    if (terminal_read_ != terminal_read_kind::none) {
+      return;
+    }
     if (open_ && on_read_) {
       start_lower_reads();
     }
@@ -161,8 +165,17 @@ public:
       return;
     }
 
+    if (on_close) {
+      on_close_.push_back(std::move(on_close));
+    }
+
+    if (closing_) {
+      return;
+    }
+
     closing_ = true;
-    on_close_ = std::move(on_close);
+    discard_pending_clear();
+    on_read_ = {};
     fail_pending_clear_writes(make_error_code(errc::closed));
 
     if (ssl_) {
@@ -218,7 +231,7 @@ private:
   };
 
   void start_lower_reads() {
-    if (lower_reading_ || closed_ || failed_) {
+    if (lower_reading_ || closed_ || failed_ || terminal_read_ != terminal_read_kind::none) {
       return;
     }
 
@@ -249,8 +262,10 @@ private:
         return;
       }
 
-      if (on_read_) {
-        on_read_(uvp::io::read_result{{}, {}, true});
+      if (close_notify_received_ || terminal_read_ != terminal_read_kind::none) {
+        set_terminal_read_eof();
+      } else {
+        fail(make_tls_error(errc::unexpected_eof, "TLS transport ended before close_notify"));
       }
       return;
     }
@@ -329,7 +344,7 @@ private:
   }
 
   void read_clear_from_ssl() {
-    if (!open_ || closed_ || failed_) {
+    if (!open_ || closed_ || failed_ || terminal_read_ != terminal_read_kind::none) {
       return;
     }
 
@@ -355,9 +370,8 @@ private:
       }
 
       if (ssl_error == SSL_ERROR_ZERO_RETURN) {
-        if (on_read_) {
-          on_read_(uvp::io::read_result{{}, {}, true});
-        }
+        close_notify_received_ = true;
+        set_terminal_read_eof();
         return;
       }
 
@@ -393,6 +407,60 @@ private:
       pending_clear_bytes_ -= bytes.size();
       on_read_(uvp::io::read_result{bytes});
     }
+  }
+
+  enum class terminal_read_kind {
+    none,
+    eof,
+    error,
+  };
+
+  void discard_pending_clear() {
+    pending_clear_.clear();
+    pending_clear_bytes_ = 0;
+  }
+
+  void set_terminal_read_eof() {
+    if (terminal_read_ != terminal_read_kind::none) {
+      deliver_terminal_read();
+      return;
+    }
+
+    terminal_read_ = terminal_read_kind::eof;
+    if (open_) {
+      stop_lower_reads();
+    }
+    deliver_terminal_read();
+  }
+
+  void set_terminal_read_error(std::error_code code) {
+    if (terminal_read_ != terminal_read_kind::none) {
+      deliver_terminal_read();
+      return;
+    }
+
+    terminal_read_ = terminal_read_kind::error;
+    terminal_read_error_ = std::move(code);
+    if (open_) {
+      stop_lower_reads();
+    }
+    deliver_terminal_read();
+  }
+
+  void deliver_terminal_read() {
+    if (terminal_read_delivered_ || terminal_read_ == terminal_read_kind::none || !on_read_ ||
+        !pending_clear_.empty()) {
+      return;
+    }
+
+    auto callback = std::move(on_read_);
+    terminal_read_delivered_ = true;
+    if (terminal_read_ == terminal_read_kind::eof) {
+      callback(uvp::io::read_result{{}, {}, true});
+      return;
+    }
+
+    callback(uvp::io::read_result{{}, uvp::io::stream_error{terminal_read_error_}});
   }
 
   void process_clear_writes() {
@@ -541,11 +609,18 @@ private:
       self->encrypted_writes_.pop_front();
       self->encrypted_write_active_ = false;
 
+      if (!error && self->failed_) {
+        error = uvp::io::stream_error{
+          self->terminal_error_code_ ? self->terminal_error_code_ : make_error_code(errc::closed)};
+      }
+
       if (error) {
         if (done) {
           done(error);
         }
-        self->fail(uvp::error{error.code(), error.message()});
+        if (!self->failed_) {
+          self->fail(uvp::error{error.code(), error.message()});
+        }
         return;
       }
 
@@ -563,13 +638,14 @@ private:
     }
 
     failed_ = true;
+    terminal_error_code_ = error.code;
     fail_pending_clear_writes(error.code);
     auto handshake = std::move(handshake_callback_);
     handshake_callback_ = {};
     if (handshake) {
       handshake(handshake_result{std::move(error)});
-    } else if (on_read_) {
-      on_read_(uvp::io::read_result{{}, uvp::io::stream_error{error.code}});
+    } else {
+      set_terminal_read_error(error.code);
     }
 
     close_lower();
@@ -581,9 +657,12 @@ private:
     }
 
     closed_ = true;
-    auto callback = std::move(on_close_);
-    lower_.close([callback = std::move(callback)]() mutable {
-      if (callback) {
+    auto callbacks = std::move(on_close_);
+    lower_.close([callbacks = std::move(callbacks)]() mutable {
+      for (auto& callback : callbacks) {
+        if (!callback) {
+          continue;
+        }
         callback();
       }
     });
@@ -607,13 +686,16 @@ private:
   std::size_t max_pending_read_bytes_ = 0;
   handshake_callback handshake_callback_;
   uvp::io::read_callback on_read_;
-  uvp::io::close_callback on_close_;
+  std::vector<uvp::io::close_callback> on_close_;
   std::deque<std::vector<std::byte>> pending_clear_;
   std::deque<clear_write> clear_writes_;
   std::deque<encrypted_write> encrypted_writes_;
   std::vector<std::byte> clear_buffer_;
+  std::error_code terminal_read_error_;
+  std::error_code terminal_error_code_;
   std::size_t pending_clear_bytes_ = 0;
   std::size_t pending_clear_write_bytes_ = 0;
+  terminal_read_kind terminal_read_ = terminal_read_kind::none;
   bool processing_clear_writes_ = false;
   bool clear_write_in_progress_ = false;
   bool clear_write_waiting_for_read_ = false;
@@ -621,6 +703,8 @@ private:
   bool lower_reading_ = false;
   bool encrypted_write_active_ = false;
   bool open_ = false;
+  bool close_notify_received_ = false;
+  bool terminal_read_delivered_ = false;
   bool closing_ = false;
   bool closed_ = false;
   bool failed_ = false;

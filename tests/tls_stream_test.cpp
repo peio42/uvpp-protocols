@@ -257,7 +257,14 @@ private:
   std::shared_ptr<memory_endpoint> state_;
 };
 
-std::pair<uvp::io::byte_stream, uvp::io::byte_stream> memory_pair(uv::loop& loop) {
+struct memory_pair_result {
+  uvp::io::byte_stream first;
+  uvp::io::byte_stream second;
+  std::shared_ptr<memory_endpoint> first_state;
+  std::shared_ptr<memory_endpoint> second_state;
+};
+
+memory_pair_result memory_pair_with_state(uv::loop& loop) {
   auto first = std::make_shared<memory_endpoint>();
   auto second = std::make_shared<memory_endpoint>();
   first->loop = &loop;
@@ -265,10 +272,25 @@ std::pair<uvp::io::byte_stream, uvp::io::byte_stream> memory_pair(uv::loop& loop
   first->peer = second;
   second->peer = first;
 
-  return {
-    uvp::io::byte_stream{std::make_unique<memory_stream>(std::move(first))},
-    uvp::io::byte_stream{std::make_unique<memory_stream>(std::move(second))},
+  return memory_pair_result{
+    uvp::io::byte_stream{std::make_unique<memory_stream>(first)},
+    uvp::io::byte_stream{std::make_unique<memory_stream>(second)},
+    first,
+    second,
   };
+}
+
+std::pair<uvp::io::byte_stream, uvp::io::byte_stream> memory_pair(uv::loop& loop) {
+  auto pair = memory_pair_with_state(loop);
+  return {std::move(pair.first), std::move(pair.second)};
+}
+
+void force_memory_eof(const std::shared_ptr<memory_endpoint>& state) {
+  state->closed = true;
+  auto peer = state->peer.lock();
+  if (peer && peer->on_read) {
+    peer->on_read(uvp::io::read_result{{}, {}, true});
+  }
 }
 
 std::filesystem::path write_test_file(std::string_view name, std::string_view content) {
@@ -417,6 +439,216 @@ UVP_TEST_CASE("tls stream pauses clear reads when upper read is stopped") {
     received.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
   });
   UVP_CHECK_EQ(received, "onetwo");
+}
+
+UVP_TEST_CASE("tls stream treats close_notify as exactly-once eof") {
+  uv::loop loop;
+  auto [server_lower, client_lower] = memory_pair(loop);
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto server_context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string());
+
+  auto client_context = uvp::tls::client_context{}
+    .insecure_no_verify_peer();
+
+  auto server_stream = uvp::io::byte_stream{};
+  auto client_stream = uvp::io::byte_stream{};
+
+  uvp::tls::accept(std::move(server_lower), server_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    server_stream = std::move(result).stream();
+  });
+
+  uvp::tls::connect(std::move(client_lower), client_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    client_stream = std::move(result).stream();
+  });
+
+  UVP_REQUIRE(server_stream);
+  UVP_REQUIRE(client_stream);
+
+  const auto payload = std::string{"ok"};
+  auto write_done = false;
+  client_stream.write(
+    std::as_bytes(std::span{payload.data(), payload.size()}),
+    [&](uvp::io::stream_error error) {
+      UVP_CHECK(!error);
+      write_done = true;
+    });
+
+  auto eof_count = 0;
+  auto error_count = 0;
+  auto received = std::string{};
+  auto read_callback = [&](uvp::io::read_result result) {
+    if (result.eof()) {
+      ++eof_count;
+      return;
+    }
+    if (!result) {
+      ++error_count;
+      return;
+    }
+
+    const auto bytes = result.bytes();
+    received.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  };
+
+  auto client_closed = false;
+  auto client_close_callback_count = 0;
+  client_stream.close([&] {
+    client_closed = true;
+    ++client_close_callback_count;
+  });
+  client_stream.close([&] {
+    ++client_close_callback_count;
+  });
+
+  server_stream.read_start(read_callback);
+  server_stream.read_start(read_callback);
+
+  UVP_CHECK(write_done);
+  UVP_CHECK(client_closed);
+  UVP_CHECK_EQ(client_close_callback_count, 2);
+  UVP_CHECK_EQ(received, "ok");
+  UVP_CHECK_EQ(eof_count, 1);
+  UVP_CHECK_EQ(error_count, 0);
+}
+
+UVP_TEST_CASE("tls stream treats read-time close_notify as exactly-once eof") {
+  uv::loop loop;
+  auto [server_lower, client_lower] = memory_pair(loop);
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto server_context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string());
+
+  auto client_context = uvp::tls::client_context{}
+    .insecure_no_verify_peer();
+
+  auto server_stream = uvp::io::byte_stream{};
+  auto client_stream = uvp::io::byte_stream{};
+
+  uvp::tls::accept(std::move(server_lower), server_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    server_stream = std::move(result).stream();
+  });
+
+  uvp::tls::connect(std::move(client_lower), client_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    client_stream = std::move(result).stream();
+  });
+
+  UVP_REQUIRE(server_stream);
+  UVP_REQUIRE(client_stream);
+
+  auto eof_count = 0;
+  auto error_count = 0;
+  server_stream.read_start([&](uvp::io::read_result result) {
+    if (result.eof()) {
+      ++eof_count;
+      return;
+    }
+    if (!result) {
+      ++error_count;
+    }
+  });
+
+  auto client_closed = false;
+  auto client_close_callback_count = 0;
+  client_stream.close([&] {
+    client_closed = true;
+    ++client_close_callback_count;
+  });
+  client_stream.close([&] {
+    ++client_close_callback_count;
+  });
+
+  server_stream.read_start([&](uvp::io::read_result result) {
+    if (result.eof()) {
+      ++eof_count;
+      return;
+    }
+    if (!result) {
+      ++error_count;
+    }
+  });
+
+  UVP_CHECK(client_closed);
+  UVP_CHECK_EQ(client_close_callback_count, 2);
+  UVP_CHECK_EQ(eof_count, 1);
+  UVP_CHECK_EQ(error_count, 0);
+}
+
+UVP_TEST_CASE("tls stream treats transport eof without close_notify as error once") {
+  uv::loop loop;
+  auto pair = memory_pair_with_state(loop);
+  auto server_lower = std::move(pair.first);
+  auto client_lower = std::move(pair.second);
+  auto client_lower_state = pair.second_state;
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto server_context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string());
+
+  auto client_context = uvp::tls::client_context{}
+    .insecure_no_verify_peer();
+
+  auto server_stream = uvp::io::byte_stream{};
+  auto client_stream = uvp::io::byte_stream{};
+
+  uvp::tls::accept(std::move(server_lower), server_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    server_stream = std::move(result).stream();
+  });
+
+  uvp::tls::connect(std::move(client_lower), client_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    client_stream = std::move(result).stream();
+  });
+
+  UVP_REQUIRE(server_stream);
+  UVP_REQUIRE(client_stream);
+
+  auto eof_count = 0;
+  auto error_count = 0;
+  auto error_code = std::error_code{};
+  server_stream.read_start([&](uvp::io::read_result result) {
+    if (result.eof()) {
+      ++eof_count;
+      return;
+    }
+    if (!result) {
+      ++error_count;
+      error_code = result.error().code();
+    }
+  });
+
+  force_memory_eof(client_lower_state);
+
+  server_stream.read_start([&](uvp::io::read_result result) {
+    if (result.eof()) {
+      ++eof_count;
+      return;
+    }
+    if (!result) {
+      ++error_count;
+      error_code = result.error().code();
+    }
+  });
+
+  UVP_CHECK_EQ(eof_count, 0);
+  UVP_CHECK_EQ(error_count, 1);
+  UVP_CHECK_EQ(error_code, uvp::tls::make_error_code(uvp::tls::errc::unexpected_eof));
 }
 
 UVP_TEST_CASE("tls listener adapts generic stream listener") {
