@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,8 @@ struct server_context::impl {
   SSL_CTX* ctx = nullptr;
   std::vector<unsigned char> alpn;
   bool require_alpn = false;
+  std::size_t max_pending_write_bytes = 1024 * 1024;
+  std::size_t max_pending_read_bytes = 1024 * 1024;
 };
 
 struct client_context::impl {
@@ -26,6 +29,8 @@ struct client_context::impl {
   std::vector<unsigned char> alpn;
   std::string server_name;
   bool verify_peer = true;
+  std::size_t max_pending_write_bytes = 1024 * 1024;
+  std::size_t max_pending_read_bytes = 1024 * 1024;
 };
 
 struct context_access {
@@ -47,6 +52,22 @@ struct context_access {
 
   static bool verify_peer(const client_context& context) noexcept {
     return context.impl_->verify_peer;
+  }
+
+  static std::size_t max_pending_write_bytes(const server_context& context) noexcept {
+    return context.impl_->max_pending_write_bytes;
+  }
+
+  static std::size_t max_pending_write_bytes(const client_context& context) noexcept {
+    return context.impl_->max_pending_write_bytes;
+  }
+
+  static std::size_t max_pending_read_bytes(const server_context& context) noexcept {
+    return context.impl_->max_pending_read_bytes;
+  }
+
+  static std::size_t max_pending_read_bytes(const client_context& context) noexcept {
+    return context.impl_->max_pending_read_bytes;
   }
 };
 

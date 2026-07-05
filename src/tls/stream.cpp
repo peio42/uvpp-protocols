@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -68,10 +69,18 @@ public:
     client,
   };
 
-  tls_state(uvp::io::byte_stream lower, SSL* ssl, mode direction, handshake_callback callback)
+  tls_state(
+    uvp::io::byte_stream lower,
+    SSL* ssl,
+    mode direction,
+    std::size_t max_pending_write_bytes,
+    std::size_t max_pending_read_bytes,
+    handshake_callback callback)
       : lower_(std::move(lower)),
         ssl_(ssl),
         direction_(direction),
+        max_pending_write_bytes_(max_pending_write_bytes),
+        max_pending_read_bytes_(max_pending_read_bytes),
         handshake_callback_(std::move(callback)) {}
 
   ~tls_state() {
@@ -85,10 +94,7 @@ public:
       SSL_set_connect_state(ssl_);
     }
 
-    auto self = shared_from_this();
-    lower_.read_start([self](uvp::io::read_result result) {
-      self->on_lower_read(std::move(result));
-    });
+    start_lower_reads();
 
     drive_handshake();
   }
@@ -100,13 +106,19 @@ public:
   void read_start(uvp::io::read_callback on_read) {
     on_read_ = std::move(on_read);
     deliver_pending_clear();
-    if (open_) {
+    if (open_ && on_read_) {
+      start_lower_reads();
+    }
+    if (open_ && on_read_) {
       read_clear_from_ssl();
     }
   }
 
   void read_stop() {
     on_read_ = {};
+    if (open_ && !clear_write_waiting_for_read_) {
+      stop_lower_reads();
+    }
   }
 
   void write(std::span<const std::byte> bytes, uvp::io::write_callback on_write) {
@@ -124,34 +136,21 @@ public:
       return;
     }
 
-    std::size_t written = 0;
-    const auto ok = SSL_write_ex(
-      ssl_,
-      bytes.data(),
-      bytes.size(),
-      &written);
-
-    if (ok != 1 || written != bytes.size()) {
-      const auto ssl_error = SSL_get_error(ssl_, ok);
-      if (ssl_error == SSL_ERROR_WANT_READ || ssl_error == SSL_ERROR_WANT_WRITE) {
-        if (on_write) {
-          on_write(uvp::io::stream_error{make_error_code(errc::protocol_error)});
-        }
-        return;
-      }
-
+    if (bytes.size() > max_pending_write_bytes_ ||
+        pending_clear_write_bytes_ > max_pending_write_bytes_ - bytes.size()) {
       if (on_write) {
-        on_write(uvp::io::stream_error{make_error_code(errc::protocol_error)});
+        on_write(uvp::io::stream_error{make_error_code(errc::write_buffer_limit)});
       }
-      fail(make_tls_error(errc::protocol_error, drain_openssl_errors("TLS write failed")));
       return;
     }
 
-    drain_wbio([callback = std::move(on_write)](uvp::io::stream_error error) mutable {
-      if (callback) {
-        callback(std::move(error));
-      }
+    pending_clear_write_bytes_ += bytes.size();
+    clear_writes_.push_back(clear_write{
+      std::vector<std::byte>(bytes.begin(), bytes.end()),
+      0,
+      std::move(on_write),
     });
+    process_clear_writes();
   }
 
   void close(uvp::io::close_callback on_close) {
@@ -164,6 +163,7 @@ public:
 
     closing_ = true;
     on_close_ = std::move(on_close);
+    fail_pending_clear_writes(make_error_code(errc::closed));
 
     if (ssl_) {
       const auto rc = SSL_shutdown(ssl_);
@@ -211,6 +211,33 @@ private:
     std::function<void(uvp::io::stream_error)> done;
   };
 
+  struct clear_write {
+    std::vector<std::byte> payload;
+    std::size_t offset = 0;
+    uvp::io::write_callback done;
+  };
+
+  void start_lower_reads() {
+    if (lower_reading_ || closed_ || failed_) {
+      return;
+    }
+
+    lower_reading_ = true;
+    auto self = shared_from_this();
+    lower_.read_start([self](uvp::io::read_result result) {
+      self->on_lower_read(std::move(result));
+    });
+  }
+
+  void stop_lower_reads() {
+    if (!lower_reading_) {
+      return;
+    }
+
+    lower_reading_ = false;
+    lower_.read_stop();
+  }
+
   void on_lower_read(uvp::io::read_result result) {
     if (closed_ || failed_) {
       return;
@@ -250,6 +277,13 @@ private:
 
     if (open_) {
       read_clear_from_ssl();
+      if (clear_write_waiting_for_read_) {
+        clear_write_waiting_for_read_ = false;
+        process_clear_writes();
+      }
+      if (!on_read_ && !clear_write_waiting_for_read_) {
+        stop_lower_reads();
+      }
     }
   }
 
@@ -309,6 +343,9 @@ private:
         clear_buffer_.resize(read);
         queue_or_deliver_clear(std::move(clear_buffer_));
         clear_buffer_ = {};
+        if (failed_ || closed_) {
+          return;
+        }
         continue;
       }
 
@@ -335,6 +372,13 @@ private:
     }
 
     if (!on_read_) {
+      if (bytes.size() > max_pending_read_bytes_ ||
+          pending_clear_bytes_ > max_pending_read_bytes_ - bytes.size()) {
+        fail(make_tls_error(errc::read_buffer_limit, "TLS read buffer limit reached"));
+        return;
+      }
+
+      pending_clear_bytes_ += bytes.size();
       pending_clear_.push_back(std::move(bytes));
       return;
     }
@@ -346,7 +390,115 @@ private:
     while (on_read_ && !pending_clear_.empty()) {
       auto bytes = std::move(pending_clear_.front());
       pending_clear_.pop_front();
+      pending_clear_bytes_ -= bytes.size();
       on_read_(uvp::io::read_result{bytes});
+    }
+  }
+
+  void process_clear_writes() {
+    if (!open_ || closing_ || closed_ || failed_ || processing_clear_writes_ ||
+        clear_write_waiting_for_read_ || clear_write_waiting_for_write_ ||
+        clear_write_in_progress_ || clear_writes_.empty()) {
+      return;
+    }
+
+    processing_clear_writes_ = true;
+    auto finish_processing = [this] {
+      processing_clear_writes_ = false;
+      if (!clear_write_in_progress_ && !clear_writes_.empty() && !closed_ && !failed_) {
+        process_clear_writes();
+      }
+    };
+
+    auto& current = clear_writes_.front();
+    while (current.offset < current.payload.size()) {
+      std::size_t written = 0;
+      const auto remaining = current.payload.size() - current.offset;
+      const auto ok = SSL_write_ex(
+        ssl_,
+        current.payload.data() + current.offset,
+        remaining,
+        &written);
+
+      if (ok == 1) {
+        if (written == 0) {
+          auto callback = std::move(current.done);
+          pending_clear_write_bytes_ -= current.payload.size() - current.offset;
+          clear_writes_.pop_front();
+          if (callback) {
+            callback(uvp::io::stream_error{make_error_code(errc::protocol_error)});
+          }
+          fail(make_tls_error(errc::protocol_error, "TLS write made no progress"));
+          finish_processing();
+          return;
+        }
+
+        current.offset += written;
+        pending_clear_write_bytes_ -= written;
+        drain_wbio();
+        continue;
+      }
+
+      const auto ssl_error = SSL_get_error(ssl_, ok);
+      if (ssl_error == SSL_ERROR_WANT_WRITE) {
+        clear_write_waiting_for_write_ = true;
+        drain_wbio([self = shared_from_this()](uvp::io::stream_error error) {
+          self->clear_write_waiting_for_write_ = false;
+          if (error) {
+            self->fail(uvp::error{error.code(), error.message()});
+            return;
+          }
+          self->process_clear_writes();
+        });
+        finish_processing();
+        return;
+      }
+
+      if (ssl_error == SSL_ERROR_WANT_READ) {
+        clear_write_waiting_for_read_ = true;
+        start_lower_reads();
+        drain_wbio();
+        finish_processing();
+        return;
+      }
+
+      auto callback = std::move(current.done);
+      pending_clear_write_bytes_ -= current.payload.size() - current.offset;
+      clear_writes_.pop_front();
+      if (callback) {
+        callback(uvp::io::stream_error{make_error_code(errc::protocol_error)});
+      }
+      fail(make_tls_error(errc::protocol_error, drain_openssl_errors("TLS write failed")));
+      finish_processing();
+      return;
+    }
+
+    auto callback = std::move(current.done);
+    clear_writes_.pop_front();
+    clear_write_in_progress_ = true;
+    drain_wbio([self = shared_from_this(), callback = std::move(callback)](uvp::io::stream_error error) mutable {
+      if (callback) {
+        callback(error);
+      }
+
+      self->clear_write_in_progress_ = false;
+      if (!error) {
+        self->process_clear_writes();
+      }
+    });
+    finish_processing();
+  }
+
+  void fail_pending_clear_writes(std::error_code code) {
+    while (!clear_writes_.empty()) {
+      auto current = std::move(clear_writes_.front());
+      clear_writes_.pop_front();
+      if (current.offset < current.payload.size()) {
+        pending_clear_write_bytes_ -= current.payload.size() - current.offset;
+      }
+      if (current.done) {
+        current.done(uvp::io::stream_error{code});
+      }
     }
   }
 
@@ -411,6 +563,7 @@ private:
     }
 
     failed_ = true;
+    fail_pending_clear_writes(error.code);
     auto handshake = std::move(handshake_callback_);
     handshake_callback_ = {};
     if (handshake) {
@@ -450,12 +603,22 @@ private:
   uvp::io::byte_stream lower_;
   SSL* ssl_ = nullptr;
   mode direction_;
+  std::size_t max_pending_write_bytes_ = 0;
+  std::size_t max_pending_read_bytes_ = 0;
   handshake_callback handshake_callback_;
   uvp::io::read_callback on_read_;
   uvp::io::close_callback on_close_;
   std::deque<std::vector<std::byte>> pending_clear_;
+  std::deque<clear_write> clear_writes_;
   std::deque<encrypted_write> encrypted_writes_;
   std::vector<std::byte> clear_buffer_;
+  std::size_t pending_clear_bytes_ = 0;
+  std::size_t pending_clear_write_bytes_ = 0;
+  bool processing_clear_writes_ = false;
+  bool clear_write_in_progress_ = false;
+  bool clear_write_waiting_for_read_ = false;
+  bool clear_write_waiting_for_write_ = false;
+  bool lower_reading_ = false;
   bool encrypted_write_active_ = false;
   bool open_ = false;
   bool closing_ = false;
@@ -598,6 +761,8 @@ handshake_operation accept(uvp::io::byte_stream lower, server_context context, h
     std::move(lower),
     ssl,
     tls_state::mode::server,
+    context_access::max_pending_write_bytes(context),
+    context_access::max_pending_read_bytes(context),
     std::move(callback));
   state->start();
   return handshake_operation{std::move(state)};
@@ -611,6 +776,8 @@ handshake_operation connect(uvp::io::byte_stream lower, client_context context, 
     std::move(lower),
     ssl,
     tls_state::mode::client,
+    context_access::max_pending_write_bytes(context),
+    context_access::max_pending_read_bytes(context),
     std::move(callback));
   state->start();
   return handshake_operation{std::move(state)};

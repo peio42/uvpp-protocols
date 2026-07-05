@@ -139,6 +139,16 @@ server_context& server_context::require_alpn(bool enabled) noexcept {
   return *this;
 }
 
+server_context& server_context::max_pending_write_bytes(std::size_t value) noexcept {
+  impl_->max_pending_write_bytes = value;
+  return *this;
+}
+
+server_context& server_context::max_pending_read_bytes(std::size_t value) noexcept {
+  impl_->max_pending_read_bytes = value;
+  return *this;
+}
+
 client_context::client_context()
     : impl_(std::make_shared<impl>()) {}
 
@@ -180,6 +190,16 @@ client_context& client_context::alpn(std::initializer_list<std::string_view> pro
 client_context& client_context::insecure_no_verify_peer() noexcept {
   impl_->verify_peer = false;
   SSL_CTX_set_verify(impl_->ctx, SSL_VERIFY_NONE, nullptr);
+  return *this;
+}
+
+client_context& client_context::max_pending_write_bytes(std::size_t value) noexcept {
+  impl_->max_pending_write_bytes = value;
+  return *this;
+}
+
+client_context& client_context::max_pending_read_bytes(std::size_t value) noexcept {
+  impl_->max_pending_read_bytes = value;
   return *this;
 }
 

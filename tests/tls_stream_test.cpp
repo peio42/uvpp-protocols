@@ -294,7 +294,8 @@ UVP_TEST_CASE("tls stream handshakes over byte streams and exchanges data") {
 
   auto client_context = uvp::tls::client_context{}
     .insecure_no_verify_peer()
-    .alpn({"http/1.1"});
+    .alpn({"http/1.1"})
+    .max_pending_write_bytes(4);
 
   auto server_done = false;
   auto client_done = false;
@@ -326,22 +327,96 @@ UVP_TEST_CASE("tls stream handshakes over byte streams and exchanges data") {
   server_stream.read_start([&](uvp::io::read_result result) {
     UVP_REQUIRE(result);
     auto bytes = result.bytes();
-    received.assign(
+    received.append(
       reinterpret_cast<const char*>(bytes.data()),
       bytes.size());
   });
 
-  auto write_done = false;
-  const auto message = std::string{"ping"};
+  auto write_done = 0;
+  for (const auto chunk : {"p", "i", "n", "g"}) {
+    const auto message = std::string{chunk};
+    client_stream.write(
+      std::as_bytes(std::span{message.data(), message.size()}),
+      [&](uvp::io::stream_error error) {
+        UVP_CHECK(!error);
+        ++write_done;
+      });
+  }
+
+  auto limit_seen = false;
+  const auto too_large = std::string{"large"};
   client_stream.write(
-    std::as_bytes(std::span{message.data(), message.size()}),
+    std::as_bytes(std::span{too_large.data(), too_large.size()}),
     [&](uvp::io::stream_error error) {
-      UVP_CHECK(!error);
-      write_done = true;
+      UVP_CHECK(error);
+      UVP_CHECK_EQ(error.code(), uvp::tls::make_error_code(uvp::tls::errc::write_buffer_limit));
+      limit_seen = true;
     });
 
-  UVP_CHECK(write_done);
+  UVP_CHECK_EQ(write_done, 4);
+  UVP_CHECK(limit_seen);
   UVP_CHECK_EQ(received, "ping");
+}
+
+UVP_TEST_CASE("tls stream pauses clear reads when upper read is stopped") {
+  uv::loop loop;
+  auto [server_lower, client_lower] = memory_pair(loop);
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto server_context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string())
+    .alpn({"http/1.1"});
+
+  auto client_context = uvp::tls::client_context{}
+    .insecure_no_verify_peer()
+    .alpn({"http/1.1"});
+
+  auto server_stream = uvp::io::byte_stream{};
+  auto client_stream = uvp::io::byte_stream{};
+
+  uvp::tls::accept(std::move(server_lower), server_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    server_stream = std::move(result).stream();
+  });
+
+  uvp::tls::connect(std::move(client_lower), client_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    client_stream = std::move(result).stream();
+  });
+
+  UVP_REQUIRE(server_stream);
+  UVP_REQUIRE(client_stream);
+
+  auto received = std::string{};
+  server_stream.read_start([&](uvp::io::read_result result) {
+    UVP_REQUIRE(result);
+    auto bytes = result.bytes();
+    received.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  });
+
+  const auto first = std::string{"one"};
+  client_stream.write(std::as_bytes(std::span{first.data(), first.size()}), [](uvp::io::stream_error error) {
+    UVP_CHECK(!error);
+  });
+  UVP_CHECK_EQ(received, "one");
+
+  server_stream.read_stop();
+
+  const auto second = std::string{"two"};
+  client_stream.write(std::as_bytes(std::span{second.data(), second.size()}), [](uvp::io::stream_error error) {
+    UVP_CHECK(!error);
+  });
+  UVP_CHECK_EQ(received, "one");
+
+  server_stream.read_start([&](uvp::io::read_result result) {
+    UVP_REQUIRE(result);
+    auto bytes = result.bytes();
+    received.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+  });
+  UVP_CHECK_EQ(received, "onetwo");
 }
 
 UVP_TEST_CASE("tls listener adapts generic stream listener") {

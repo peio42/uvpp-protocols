@@ -32,6 +32,10 @@ public:
       return "TLS operation timed out";
     case errc::pending_handshake_limit:
       return "TLS pending handshake limit reached";
+    case errc::write_buffer_limit:
+      return "TLS write buffer limit reached";
+    case errc::read_buffer_limit:
+      return "TLS read buffer limit reached";
     }
 
     return "unknown TLS error";

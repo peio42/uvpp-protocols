@@ -14,6 +14,8 @@ enum class errc {
   cancelled,
   timeout,
   pending_handshake_limit,
+  write_buffer_limit,
+  read_buffer_limit,
 };
 
 const std::error_category& error_category() noexcept;
