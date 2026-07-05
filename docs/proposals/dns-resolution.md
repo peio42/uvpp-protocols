@@ -1,7 +1,7 @@
 # DNS Resolution Proposal
 
-Status: Initial resolver API implemented; timeouts and outbound connector
-remain open
+Status: Initial resolver API and sequential TCP connector implemented; DNS
+timeouts and Happy Eyeballs remain open
 
 ## Context
 
@@ -20,8 +20,10 @@ transport layer.
   error category, async libuv `getaddrinfo` wrapper, copied address candidates,
   address family selection, numeric service helper, and exactly-once user
   cancellation.
-- Not implemented: DNS timeout handling, Happy Eyeballs, or reusable outbound
-  connect helper.
+- Implemented: reusable `uvp::io::tcp_connector` consuming either a direct TCP
+  endpoint or a DNS `address_list`, producing a connected `uvp::io::byte_stream`
+  with typed connect errors and cancellation.
+- Not implemented: DNS timeout handling or Happy Eyeballs.
 
 ## Goals
 
@@ -114,7 +116,7 @@ connect helper can consume the candidates and attempt connections.
 
 ## Outbound Connect Helper
 
-HTTP client work will likely need a reusable connector:
+HTTP client work uses a reusable connector:
 
 ```text
 DNS address list
@@ -122,17 +124,20 @@ DNS address list
     -> uvp::io::byte_stream
 ```
 
-This helper may live under `uvp::io` rather than `uvp::dns` because it owns TCP
-handles and connection timing. It should provide:
+This helper lives under `uvp::io` rather than `uvp::dns` because it owns TCP
+handles and connection timing. The first implementation provides:
 
-- connect timeout;
 - cancellation;
-- sequential address attempts at first;
-- Happy Eyeballs later;
+- sequential address attempts;
 - endpoint metadata;
 - typed failure when all candidates fail.
 
 Keeping this separate lets other protocols reuse it without depending on HTTP.
+
+Still open:
+
+- connect timeout;
+- Happy Eyeballs / IPv6-IPv4 racing policy.
 
 ## Timeouts
 

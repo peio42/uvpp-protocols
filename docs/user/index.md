@@ -11,6 +11,7 @@ Start here:
   plain `http://` URLs.
 - [HTTP server](http-server.md): routing, request body policies, responses,
   streaming, and errors.
+- [IO](io.md): byte streams, listeners, and outbound TCP connection helpers.
 - [URL](url.md): owning parsed URLs, default ports, origins, and HTTP request
   targets for client-side protocol code.
 - [TLS](tls.md): stream and listener adapters, client verification, ALPN, and

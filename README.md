@@ -109,6 +109,8 @@ Available:
 - `uvp::http`: HTTP/1.1 server, multipart request bodies, Server-Sent Events
   response helpers, and an initial one-shot HTTP/1.1 client for plain
   `http://` URLs are available.
+- `uvp::io`: byte-stream/listener transport abstractions and reusable outbound
+  TCP connection helpers.
 - `uvp::url`: shared parsed URL values and helpers for client-side protocol
   foundations, including default ports, origin keys, and HTTP request targets.
 - `uvp::tls`: TLS stream and listener adapters over uvpp byte streams, with
@@ -138,11 +140,12 @@ Each protocol layer should own its own state and compose with the layer below it
 through explicit transport APIs. Convenience helpers may exist, but they should
 not force unrelated dependencies between modules.
 
-The current transport layer exposes `uvp::io::stream_listener` and
-`uvp::io::byte_stream`, with TCP, Unix socket, and TLS listener adapters. The
-HTTP server owns listeners and accepted sessions through these abstractions, so
-HTTP over Unix sockets, HTTP over TLS, and future protocol composition do not
-require a TCP-only public model.
+The current transport layer exposes `uvp::io::stream_listener`,
+`uvp::io::byte_stream`, and `uvp::io::tcp_connector`, with TCP, Unix socket, and
+TLS listener adapters. The HTTP server owns listeners and accepted sessions
+through these abstractions, while the HTTP client uses the connector side for
+outbound TCP. HTTP over Unix sockets, HTTP over TLS, and future protocol
+composition do not require a TCP-only public model.
 
 ## Dependency Policy
 
@@ -187,6 +190,7 @@ User documentation:
 - [DNS](docs/user/dns.md)
 - [HTTP client](docs/user/http-client.md)
 - [HTTP server](docs/user/http-server.md)
+- [IO](docs/user/io.md)
 - [URL](docs/user/url.md)
 - [TLS](docs/user/tls.md)
 - [WebSocket](docs/user/websocket.md)

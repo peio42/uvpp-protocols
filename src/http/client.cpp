@@ -3,11 +3,11 @@
 #include <uvpp/protocols/dns.hpp>
 #include <uvpp/protocols/http/error.hpp>
 #include <uvpp/protocols/http/headers.hpp>
+#include <uvpp/protocols/io/tcp_connector.hpp>
 #include <uvpp/protocols/url.hpp>
 #include <uvpp/uv.hpp>
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <cstddef>
 #include <cstring>
@@ -180,7 +180,8 @@ public:
         method_(method),
         url_input_(url),
         callback_(std::move(callback)),
-        resolver_(loop) {}
+        resolver_(loop),
+        connector_(loop) {}
 
   request_operation start() {
     auto parsed = uvp::parse_url(url_input_);
@@ -221,7 +222,8 @@ public:
 
     cancelled_ = true;
     dns_operation_.cancel();
-    close_tcp();
+    connect_operation_.cancel();
+    close_stream();
     complete(make_client_error(errc::client_cancelled));
   }
 
@@ -239,45 +241,28 @@ private:
       return;
     }
 
-    addresses_ = std::move(result).value();
-    connect_next();
-  }
-
-  void connect_next() {
-    if (completed_) {
-      return;
-    }
-    if (next_address_ >= addresses_.size()) {
-      complete(make_client_error(errc::client_connect_failed, last_connect_error_.message()));
-      return;
-    }
-
-    const auto& candidate = addresses_[next_address_++];
-    tcp_ = std::make_unique<uv::tcp>(*loop_);
     auto self = shared_from_this();
-
-    if (candidate.family() == uvp::dns::address_family::ipv6) {
-      tcp_->connect(connect_request_, uv::ipv6{candidate.host(), static_cast<int>(candidate.port())}, [self](uv::connect_request&, uv::result result) {
-        self->on_connected(result);
+    connect_operation_ = connector_.connect(
+      result.value(),
+      [self](uvp::result<uvp::io::byte_stream> connect_result) mutable {
+        self->on_connected(std::move(connect_result));
       });
-    } else {
-      tcp_->connect(connect_request_, uv::ipv4{candidate.host(), static_cast<int>(candidate.port())}, [self](uv::connect_request&, uv::result result) {
-        self->on_connected(result);
-      });
-    }
   }
 
-  void on_connected(uv::result result) {
+  void on_connected(uvp::result<uvp::io::byte_stream> result) {
     if (completed_) {
+      return;
+    }
+    if (cancelled_) {
+      complete(make_client_error(errc::client_cancelled));
       return;
     }
     if (!result) {
-      last_connect_error_ = result.error_code();
-      close_tcp();
-      connect_next();
+      complete(wrap_client_error(errc::client_connect_failed, result.error()));
       return;
     }
 
+    stream_ = std::move(result).value();
     write_request();
   }
 
@@ -297,59 +282,55 @@ private:
     write_payload_.resize(request.size());
     std::memcpy(write_payload_.data(), request.data(), request.size());
     auto self = shared_from_this();
-    tcp_->write(write_request_, write_payload_, [self](uv::write_request&, uv::result result) {
+    stream_.write(write_payload_, [self](uvp::io::stream_error result) {
       self->on_written(result);
     });
   }
 
-  void on_written(uv::result result) {
+  void on_written(uvp::io::stream_error result) {
     if (completed_) {
       return;
     }
-    if (!result) {
-      complete(make_client_error(errc::client_connect_failed, result.error_code().message()));
+    if (result) {
+      complete(make_client_error(errc::client_connect_failed, result.message()));
       return;
     }
 
     auto self = shared_from_this();
-    tcp_->read_start(
-      [self](uv::tcp&, std::size_t suggested_size) {
-        self->read_buffer_.resize(std::max<std::size_t>(suggested_size, 4096));
-        return uv::buffer_view{self->read_buffer_.data(), self->read_buffer_.size()};
-      },
-      [self](uv::tcp&, uv::read_result result) {
+    stream_.read_start(
+      [self](uvp::io::read_result result) {
         self->on_read(result);
       });
   }
 
-  void on_read(uv::read_result result) {
+  void on_read(uvp::io::read_result result) {
     if (completed_) {
       return;
     }
 
     if (result.eof()) {
       auto parsed = parse_response(received_, options_.max_body_bytes);
-      close_tcp();
+      close_stream();
       complete(std::move(parsed));
       return;
     }
 
     if (!result) {
-      close_tcp();
-      complete(make_client_error(errc::client_connect_failed, result.status().error_code().message()));
+      close_stream();
+      complete(make_client_error(errc::client_connect_failed, result.error().message()));
       return;
     }
 
     received_.append(reinterpret_cast<const char*>(result.bytes().data()), result.bytes().size());
     if (received_.size() > options_.max_header_bytes + options_.max_body_bytes + 4096) {
-      close_tcp();
+      close_stream();
       complete(make_client_error(errc::client_body_limit_exceeded));
     }
   }
 
-  void close_tcp() noexcept {
-    if (tcp_ && !tcp_->closing()) {
-      tcp_->close();
+  void close_stream() noexcept {
+    if (stream_) {
+      stream_.close();
     }
   }
 
@@ -372,16 +353,12 @@ private:
   client_callback callback_;
   uvp::url url_;
   uvp::dns::resolver resolver_;
+  uvp::io::tcp_connector connector_;
   uvp::dns::resolve_operation dns_operation_;
-  uvp::dns::address_list addresses_;
-  std::size_t next_address_ = 0;
-  std::unique_ptr<uv::tcp> tcp_;
-  uv::connect_request connect_request_;
-  uv::write_request write_request_;
+  uvp::io::connect_operation connect_operation_;
+  uvp::io::byte_stream stream_;
   std::vector<std::byte> write_payload_;
-  std::vector<char> read_buffer_;
   std::string received_;
-  std::error_code last_connect_error_;
   bool cancelled_ = false;
   bool completed_ = false;
 };

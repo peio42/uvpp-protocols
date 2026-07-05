@@ -9,8 +9,8 @@
 ## Current focus
 
 - Milestone 6: Client-side foundations
-  - [ ] [Shared URL module](proposals/shared-url-module.md)
-  - [ ] [DNS resolution](proposals/dns-resolution.md)
+  - [x] [Shared URL module](proposals/shared-url-module.md)
+  - [x] [DNS resolution](proposals/dns-resolution.md)
   - [ ] [HTTP client](proposals/http-client.md)
 
 Keep completed Current focus proposals listed until the milestone is closed.

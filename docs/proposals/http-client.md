@@ -1,7 +1,8 @@
 # HTTP Client Proposal
 
-Status: Initial plain HTTP one-shot client implemented; HTTPS, streaming,
-pooling, redirects, proxying, and timeouts remain open
+Status: Initial plain HTTP one-shot client implemented; reusable TCP connector
+extracted; HTTPS, streaming, pooling, redirects, proxying, and timeouts remain
+open
 
 ## Decision
 
@@ -47,10 +48,13 @@ transport/session to the WebSocket module.
   request operation, URL + DNS + TCP orchestration, HTTP/1.1 request writer,
   buffered response parser, response body limit, and one-shot `GET` over plain
   `http://` URLs.
+- Implemented: reusable `uvp::io::tcp_connector` below HTTP, with sequential
+  address attempts, typed connect errors, byte-stream conversion, and
+  cancellation.
 - Drafted separately or still open: TLS stream/listener support, HTTP/2
-  support, WebSocket client support, reusable outbound connector, HTTPS client
-  integration, connection pooling, redirects, proxying, phase timeouts, and
-  streaming upload/download API.
+  support, WebSocket client support, HTTPS client integration, connection
+  pooling, redirects, proxying, phase timeouts, and streaming upload/download
+  API.
 
 ## Goals
 
@@ -181,7 +185,7 @@ Initial HTTP client needs:
 
 ### Sockets and Connection
 
-The client needs an outbound connection helper over uvpp TCP:
+The client uses an outbound connection helper over uvpp TCP:
 
 ```text
 resolve host
@@ -190,16 +194,21 @@ resolve host
       -> HTTP session
 ```
 
-The connection layer should own:
+The reusable `uvp::io::tcp_connector` owns:
 
 - TCP connect attempts;
 - remote/local endpoint metadata;
-- connect timeout;
 - cancellation before or during connect;
 - conversion to `uvp::io::byte_stream`.
 
 Connection establishment should be factored below HTTP so SMTP, Redis, MQTT, or
 database adapters can reuse the same direction later.
+
+Open hardening:
+
+- connect timeout;
+- Happy Eyeballs / IPv6-IPv4 racing;
+- richer diagnostics for the last failed candidate.
 
 ### TLS and ALPN
 
@@ -433,7 +442,7 @@ Suggested first implementation slice:
 1. [x] shared URL dependency usable by HTTP client;
 2. [x] DNS resolution API;
 3. [x] HTTP/1.1 one-shot `GET` over plain HTTP with buffered body limit;
-4. outbound TCP connect helper extraction;
+4. [x] outbound TCP connect helper extraction;
 5. HTTPS via TLS connect and hostname verification;
 6. streaming response body;
 7. streaming request body;

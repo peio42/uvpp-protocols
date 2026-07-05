@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <list>
 #include <memory>
 #include <span>
 #include <string>
@@ -225,6 +226,181 @@ private:
   accept_callback on_accept_;
 };
 
+class connect_error_category_impl : public std::error_category {
+public:
+  [[nodiscard]] const char* name() const noexcept override { return "uvp.io.connect"; }
+
+  [[nodiscard]] std::string message(int value) const override {
+    switch (static_cast<connect_errc>(value)) {
+    case connect_errc::no_addresses:
+      return "no TCP addresses to connect";
+    case connect_errc::cancelled:
+      return "TCP connect was cancelled";
+    case connect_errc::connect_failed:
+      return "TCP connect failed";
+    }
+    return "unknown TCP connect error";
+  }
+};
+
+uvp::error make_connect_error(connect_errc code, std::string detail = {}) {
+  return uvp::error{make_error_code(code), std::move(detail)};
+}
+
+struct connect_candidate {
+  dns::address_family family = dns::address_family::any;
+  tcp_endpoint endpoint;
+};
+
+dns::address_family infer_family(const tcp_endpoint& endpoint) noexcept {
+  return endpoint.host.find(':') == std::string::npos ? dns::address_family::ipv4 : dns::address_family::ipv6;
+}
+
+class tcp_connect_state : public std::enable_shared_from_this<tcp_connect_state> {
+public:
+  tcp_connect_state(uv::loop& loop, std::vector<connect_candidate> candidates, connect_callback callback)
+      : loop_(&loop), candidates_(std::move(candidates)), callback_(std::move(callback)) {}
+
+  connect_operation start() {
+    if (!callback_) {
+      complete(make_connect_error(connect_errc::connect_failed, "missing TCP connect callback"));
+      return connect_operation{shared_from_this()};
+    }
+    if (candidates_.empty()) {
+      complete(make_connect_error(connect_errc::no_addresses));
+      return connect_operation{shared_from_this()};
+    }
+
+    connect_next();
+    return connect_operation{shared_from_this()};
+  }
+
+  void cancel() noexcept {
+    if (completed_) {
+      return;
+    }
+
+    cancelled_ = true;
+    close_current();
+    complete(make_connect_error(connect_errc::cancelled));
+  }
+
+private:
+  void connect_next() {
+    if (completed_) {
+      return;
+    }
+
+    if (next_ >= candidates_.size()) {
+      complete(make_connect_error(connect_errc::connect_failed, last_error_.message()));
+      return;
+    }
+
+    const auto candidate = candidates_[next_++];
+    tcp_ = std::make_unique<uv::tcp>(*loop_);
+
+    auto self = shared_from_this();
+    if (candidate.family == dns::address_family::ipv6) {
+      tcp_->connect(
+        connect_request_,
+        uv::ipv6{candidate.endpoint.host, static_cast<int>(candidate.endpoint.port)},
+        [self](uv::connect_request&, uv::result result) {
+          self->on_connected(result);
+        });
+    } else {
+      tcp_->connect(
+        connect_request_,
+        uv::ipv4{candidate.endpoint.host, static_cast<int>(candidate.endpoint.port)},
+        [self](uv::connect_request&, uv::result result) {
+          self->on_connected(result);
+        });
+    }
+  }
+
+  void on_connected(uv::result result) {
+    if (completed_) {
+      return;
+    }
+    if (cancelled_) {
+      close_current();
+      complete(make_connect_error(connect_errc::cancelled));
+      return;
+    }
+    if (!result) {
+      last_error_ = result.error_code();
+      close_current_then_next();
+      return;
+    }
+
+    auto stream = byte_stream{std::make_unique<stream_model<uv::tcp>>(*loop_, std::move(tcp_))};
+    complete(std::move(stream));
+  }
+
+  void close_current() noexcept {
+    if (!tcp_ || tcp_->closing()) {
+      return;
+    }
+
+    auto raw = tcp_.get();
+    closing_.push_back(std::move(tcp_));
+    auto self = shared_from_this();
+    raw->close([self, raw](uv::tcp&) mutable {
+      self->erase_closing(raw);
+    });
+  }
+
+  void close_current_then_next() noexcept {
+    if (!tcp_ || tcp_->closing()) {
+      connect_next();
+      return;
+    }
+
+    auto raw = tcp_.get();
+    closing_.push_back(std::move(tcp_));
+    auto self = shared_from_this();
+    raw->close([self, raw](uv::tcp&) mutable {
+      self->erase_closing(raw);
+      self->connect_next();
+    });
+  }
+
+  void erase_closing(uv::tcp* raw) noexcept {
+    for (auto it = closing_.begin(); it != closing_.end(); ++it) {
+      if (it->get() == raw) {
+        closing_.erase(it);
+        return;
+      }
+    }
+  }
+
+  void complete(uvp::result<byte_stream> result) {
+    if (completed_) {
+      return;
+    }
+
+    completed_ = true;
+    auto callback = std::move(callback_);
+    if (callback) {
+      callback(std::move(result));
+    }
+  }
+
+  uv::loop* loop_;
+  std::vector<connect_candidate> candidates_;
+  connect_callback callback_;
+  uv::connect_request connect_request_;
+  std::unique_ptr<uv::tcp> tcp_;
+  std::list<std::unique_ptr<uv::tcp>> closing_;
+  std::size_t next_ = 0;
+  std::error_code last_error_;
+  bool cancelled_ = false;
+  bool completed_ = false;
+};
+
+std::shared_ptr<tcp_connect_state> tcp_connect_state_from(const std::shared_ptr<void>& state) noexcept {
+  return std::static_pointer_cast<tcp_connect_state>(state);
+}
+
 } // namespace
 
 read_result::read_result(std::span<const std::byte> bytes, stream_error error, bool eof)
@@ -330,6 +506,48 @@ endpoint stream_listener::local_endpoint() const {
 
 stream_listener::operator bool() const noexcept {
   return static_cast<bool>(self_);
+}
+
+const std::error_category& connect_category() noexcept {
+  static const connect_error_category_impl instance;
+  return instance;
+}
+
+std::error_code make_error_code(connect_errc value) noexcept {
+  return {static_cast<int>(value), connect_category()};
+}
+
+connect_operation::connect_operation(std::shared_ptr<void> state)
+    : state_(std::move(state)) {}
+
+void connect_operation::cancel() noexcept {
+  if (!state_) {
+    return;
+  }
+  tcp_connect_state_from(state_)->cancel();
+}
+
+tcp_connector::tcp_connector(uv::loop& loop) noexcept
+    : loop_(&loop) {}
+
+connect_operation tcp_connector::connect(tcp_endpoint endpoint, connect_callback callback) {
+  auto candidates = std::vector<connect_candidate>{};
+  candidates.push_back(connect_candidate{infer_family(endpoint), std::move(endpoint)});
+  auto state = std::make_shared<tcp_connect_state>(*loop_, std::move(candidates), std::move(callback));
+  return state->start();
+}
+
+connect_operation tcp_connector::connect(const uvp::dns::address_list& addresses, connect_callback callback) {
+  auto candidates = std::vector<connect_candidate>{};
+  candidates.reserve(addresses.size());
+  for (const auto& address : addresses) {
+    candidates.push_back(connect_candidate{
+      address.family(),
+      uvp::io::tcp_endpoint{std::string{address.host()}, address.port()},
+    });
+  }
+  auto state = std::make_shared<tcp_connect_state>(*loop_, std::move(candidates), std::move(callback));
+  return state->start();
 }
 
 struct tcp_listener::impl {

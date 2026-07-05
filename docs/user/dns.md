@@ -2,7 +2,7 @@
 
 `uvp::dns::resolver` resolves host and service pairs asynchronously on a
 `uv::loop`. It wraps libuv `getaddrinfo` and returns copied address candidates
-that can later feed outbound TCP connection helpers.
+that can feed `uvp::io::tcp_connector`.
 
 ```cpp
 #include <uvpp/protocols/dns.hpp>
@@ -39,3 +39,5 @@ op.cancel();
 Cancellation completes the operation with `uvp::dns::errc::cancelled` exactly
 once from the user's point of view. The resolver does not open sockets and does
 not implement connection racing; it only returns ordered address candidates.
+Use [`uvp::io::tcp_connector`](io.md) to turn those candidates into a connected
+byte stream.
