@@ -25,7 +25,9 @@ an adapter module.
 | HTTP/2 | [`nghttp2`](https://nghttp2.org/) / [`libnghttp2`](https://github.com/nghttp2/nghttp2) | Accepted for future HTTP/2 | Mature C HTTP/2 implementation with HPACK. Do not configure or link in early milestones. |
 | HTTP/3 | [`nghttp3`](https://github.com/ngtcp2/nghttp3) plus a QUIC transport such as [`ngtcp2`](https://github.com/ngtcp2/ngtcp2) | Recommended for future HTTP/3 | `nghttp3` implements HTTP/3 mapping over QUIC and QPACK, but does not provide QUIC transport. |
 | URL parsing | [`ada-url`](https://github.com/ada-url/ada) | Accepted for shared URL module | Good fit for a general `uvp::url` wrapper. Use it beyond HTTP where WHATWG URL semantics are appropriate. |
-| HTTP client | [`libcurl`](https://curl.se/libcurl/) | Candidate with constraints | Useful for broad client protocol coverage. Its multi-socket API can integrate with event loops, but libcurl owns substantial client state and socket orchestration. |
+| DNS resolution | libuv `uv_getaddrinfo` / system resolver | Draft proposal | First resolver should wrap libuv asynchronously and keep DNS reusable outside HTTP. |
+| HTTP client | uvpp-native implementation | Accepted direction | The official client should preserve the uvpp reactor model and compose with DNS, TLS, WebSocket, HTTP/2, and future protocol layers. |
+| HTTP client optional adapter | [`libcurl`](https://curl.se/libcurl/) | Optional future backend | Useful for batteries-included coverage, but must not define the canonical API or leak into shared HTTP vocabulary. |
 | Multipart | Internal parser | Accepted for first multipart milestone | No adequate low-risk dependency selected. Keep the parser private, streaming, and covered by parser state-machine tests. |
 | TLS | OpenSSL-family backend | Draft proposal | Initial candidate is OpenSSL 3.x for broad platform support. Proposal exists; implementation is pending. |
 | PostgreSQL client | [`libpq`](https://www.postgresql.org/docs/current/libpq.html) | Candidate | Official PostgreSQL C client. Nonblocking APIs and socket readiness can integrate with uvpp. Scope still needs package review. |
@@ -125,18 +127,23 @@ Adoption questions:
 
 ## HTTP Client
 
-`libcurl` is attractive for HTTP client coverage because it supports many HTTP
-features and has an event-oriented multi-socket API. It is not a simple
-synchronous parser, however. It owns substantial transfer state and socket
-orchestration.
+The official HTTP client should be implemented directly in uvpp-protocols
+rather than built on libcurl. This preserves the project's reactor ownership
+model, keeps transport composition explicit, and gives future layers such as
+TLS, WebSocket, HTTP/2, and HTTP/3 room to share connection/session machinery.
 
-Possible decision:
+Decision:
 
-- use libcurl only for an optional high-level HTTP client adapter;
+- implement the canonical client as a uvpp-native module;
+- use the shared URL, DNS, IO, TLS, and HTTP vocabulary modules rather than a
+  third-party client object model;
+- allow libcurl later only as an optional high-level adapter for broad,
+  batteries-included coverage;
 - keep `uvp::http::server` and shared HTTP vocabulary independent from libcurl;
 - never let libcurl types leak into `uvp::http` request/response APIs;
 - document that a libcurl adapter composes with uvpp through socket callbacks,
-  not through the same state-machine boundary as `llhttp`.
+  not through the same state-machine boundary as `llhttp` or future
+  `nghttp2`.
 
 Do not adopt libcurl for the first HTTP server milestones.
 
@@ -246,8 +253,7 @@ adoption, review:
 
 - TLS provider and public TLS abstraction.
 - Whether URL parsing becomes a shared module.
-- Whether HTTP client is implemented with libcurl, direct `llhttp`/`nghttp2`,
-  or a smaller custom client stack.
+- Exact HTTP client milestone slicing after the uvpp-native direction.
 - Whether database client adapters belong in `uvpp-protocols` or a separate
   package.
 - SMTP client dependency strategy.

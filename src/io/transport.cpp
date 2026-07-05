@@ -12,15 +12,6 @@
 
 namespace uvp::io {
 
-struct stream_listener::concept_ {
-  virtual ~concept_() = default;
-
-  virtual uv::loop& loop() noexcept = 0;
-  virtual void listen(accept_callback on_accept) = 0;
-  virtual void close() = 0;
-  virtual endpoint local_endpoint() const = 0;
-};
-
 namespace {
 
 constexpr int default_backlog = 64;

@@ -7,11 +7,10 @@
 
 ## Current focus
 
-- Milestone 4: HTTP payload and streaming helpers
-  - [x] [Typed JSON request bodies](proposals/typed-json-body-policy.md)
-  - [x] [Multipart handling](proposals/multipart-handling.md)
-  - [x] [Server-Sent Events helper](proposals/sse-support.md)
-  - [x] [Static file helper](proposals/static-file-helper.md)
+- Milestone 5: TLS transport support
+  - [x] [TLS stream adapter](proposals/tls-support.md)
+  - [x] [TLS listener adapter](proposals/tls-listener-adapter.md)
+  - [x] [HTTP over TLS through listener composition](proposals/http-tls-listener-integration.md)
 
 Keep completed Current focus proposals listed until the milestone is closed.
 When a Current focus proposal is implemented, mark its line with `[x]` instead
@@ -20,16 +19,18 @@ next milestone or step.
 
 ## Next
 
-- Milestone 5: TLS transport support
-  - [TLS stream adapter](proposals/tls-support.md)
-  - [TLS listener adapter](proposals/tls-support.md)
-  - [HTTP over TLS through listener composition](proposals/http-tls-listener-integration.md)
+- Client-side foundations
+  - [Shared URL module](proposals/shared-url-module.md)
+  - [DNS resolution](proposals/dns-resolution.md)
+  - [HTTP client](proposals/http-client.md)
 
 ## Later
 
-- Client-side foundations
-  - [Shared URL module](proposals/shared-url-module.md)
-  - [HTTP client](proposals/http-client.md)
+- TLS hardening
+  - [TLS policy and identity](proposals/tls-policy-and-identity.md)
+  - [TLS graceful shutdown](proposals/tls-graceful-shutdown.md)
+
+- Client protocol modules
   - [WebSocket client](proposals/websocket-client.md)
 
 - HTTP API polish

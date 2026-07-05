@@ -45,6 +45,8 @@ The built-in listener adapters are:
 
 - `uvp::io::tcp_listener`: accepts TCP connections;
 - `uvp::io::pipe_listener`: accepts Unix socket or named pipe connections;
+- `uvp::tls::listener`: adapts another stream listener and emits clear TLS
+  streams after the handshake;
 - `uvp::io::stream_listener`: type-erased listener consumed by
   `server::listen(...)`.
 
@@ -58,10 +60,30 @@ srv.listen(std::move(listener));
 ```
 
 `stream_listener` yields `uvp::io::byte_stream` objects to HTTP. This is the
-composition point used by TCP, Unix sockets, and future transports such as TLS.
+composition point used by TCP, Unix sockets, and TLS.
 At this stage, user code obtains stream listeners through the built-in adapters
 or future library adapters; implementing a third-party listener adapter is not
 part of the public API yet.
+
+HTTP over TLS uses the same generic listener path:
+
+```cpp
+auto tcp = uvp::io::tcp_listener{loop}
+  .bind("0.0.0.0", 8443);
+
+auto context = uvp::tls::server_context{}
+  .certificate_chain_file("server.crt")
+  .private_key_file("server.key")
+  .alpn({"http/1.1"});
+
+srv.listen(uvp::tls::listener{
+  uvp::io::stream_listener{std::move(tcp)},
+  std::move(context)});
+```
+
+The HTTP server observes only decrypted bytes. TLS handshake failures are
+listener accept errors, not HTTP parser errors. See [TLS](tls.md) for context
+configuration, verification, ALPN, and close behavior.
 
 ## Route Shape
 

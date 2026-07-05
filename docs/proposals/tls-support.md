@@ -1,14 +1,22 @@
 # TLS Support Proposal
 
-Status: Draft, not implemented
+Status: Implemented for the initial OpenSSL-backed stream adapter
 
 ## Current State
 
 - Implemented: shared `uvp::io::byte_stream` and `uvp::io::stream_listener`
   abstractions.
-- Not implemented: `uvp::tls`, TLS contexts, OpenSSL integration, TLS stream
-  adapter, TLS listener, verification policy, ALPN, SNI, and TLS errors.
-- Related proposals: [HTTP TLS listener integration](http-tls-listener-integration.md).
+- Implemented: `uvp::tls`, backend-private OpenSSL integration, server and
+  client contexts, TLS stream adaptation over `byte_stream`, ALPN, client SNI,
+  client peer verification, TLS errors, close-notify handling, cancellation,
+  write/read backpressure limits, and EOF/error exactly-once behavior.
+- Implemented: TLS listener composition and HTTP-over-TLS through generic
+  listener composition.
+- Follow-up: server-side SNI context selection, client certificate
+  authentication, configurable TLS version policy, session resumption, and a
+  full close-handshake timeout.
+- Related proposals: [TLS listener adapter](tls-listener-adapter.md) and
+  [HTTP TLS listener integration](http-tls-listener-integration.md).
 
 ## Purpose
 
@@ -71,21 +79,11 @@ uvp::tls::connect(
   });
 ```
 
-Server listener support should be a generic adapter:
-
-```cpp
-auto plain = uvp::io::tcp_listener{loop}.bind("0.0.0.0", 443);
-
-uvp::io::stream_listener secure =
-  uvp::tls::listener{std::move(plain), server_context};
-
-uvp::http::server http(loop);
-http.listen(std::move(secure));
-```
-
-The listener is a convenience wrapper around the same `accept(byte_stream, ...)`
-path. It accepts a lower stream, completes the TLS server handshake, and then
-emits a clear `uvp::io::byte_stream` to its accept callback.
+Server listener support should be a generic adapter over this same
+`accept(byte_stream, ...)` operation. Its design is tracked separately in
+[TLS listener adapter](tls-listener-adapter.md) because listener ownership,
+handshake backpressure, accept errors, and close behavior need their own
+decisions.
 
 ## STARTTLS
 
@@ -296,47 +294,47 @@ OpenSSL operation fails and mapped into stable uvpp-protocols errors.
 
 ## Build Integration
 
-TLS support should be optional at the CMake level until the project decides that
-OpenSSL is a mandatory dependency for the whole package:
+TLS currently uses OpenSSL SSL/Crypto as part of the package build:
 
 ```cmake
-option(UVPP_PROTOCOLS_WITH_OPENSSL "Build TLS support with OpenSSL" ON)
 find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
 target_link_libraries(uvpp_protocols PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 ```
-
-If TLS is disabled, TLS headers can either be omitted from installation or
-provide a clear compile-time diagnostic. The rest of the project should remain
-buildable without OpenSSL.
 
 OpenSSL is the initial backend, but the public design should leave room for a
 future backend boundary. That does not require a runtime pluggable backend in
 the first milestone. It only requires that backend details stay out of public
 API and non-TLS modules.
 
-## Milestone Scope
+## Implemented Milestone Scope
 
-The first TLS milestone should include:
+The first TLS milestone includes:
 
 - backend-private OpenSSL RAII wrappers;
 - `server_context` and `client_context`;
 - `accept(byte_stream, server_context, callback)`;
 - `connect(byte_stream, client_context, callback)`;
-- a generic `tls::listener` adapter over `io::stream_listener`;
 - ALPN configuration and selected-ALPN access;
 - SNI client configuration;
 - peer verification defaults for clients;
 - TLS error category and result types;
-- examples for HTTPS-style HTTP over TLS and one non-HTTP or STARTTLS-shaped
-  usage sketch;
-- tests for handshake success, verification failure, fragmented records, echo,
-  close, and listener adaptation.
+- tests for handshake success, post-handshake cancellation no-op, verification
+  failure and configured CA success, required ALPN failure, write/read
+  backpressure, close-notify, truncated EOF, listener composition, listener
+  timeout/limit/close, and HTTP-over-TLS composition.
 
-Follow-up work:
+The same milestone also tracks listener-level work in
+[TLS listener adapter](tls-listener-adapter.md) and HTTP composition work in
+[HTTP TLS listener integration](http-tls-listener-integration.md).
 
-- server-side SNI context selection;
-- client certificate authentication;
-- configurable close-handshake timeout;
-- session resumption;
-- key logging for debugging when explicitly enabled;
-- native OpenSSL escape hatches if real users need them.
+Follow-up work is split into dedicated proposals:
+
+- [TLS policy and identity](tls-policy-and-identity.md): public TLS version
+  policy, server-side SNI context selection, and server-side client certificate
+  verification.
+- [TLS graceful shutdown](tls-graceful-shutdown.md): full bounded
+  close-handshake behavior beyond the initial send-and-close policy.
+
+Other possible later features include session resumption, key logging for
+debugging when explicitly enabled, OCSP stapling, certificate reload/ACME
+integration, and native OpenSSL escape hatches if real users need them.
