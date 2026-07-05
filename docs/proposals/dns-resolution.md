@@ -1,6 +1,7 @@
 # DNS Resolution Proposal
 
-Status: Draft, not implemented
+Status: Initial resolver API implemented; timeouts and outbound connector
+remain open
 
 ## Context
 
@@ -15,9 +16,12 @@ transport layer.
 ## Current State
 
 - Implemented: typed IO endpoints and byte-stream/listener abstractions.
-- Not implemented: public resolver API, async `getaddrinfo` wrapper, resolver
-  cancellation policy, Happy Eyeballs, DNS timeout handling, or reusable
-  outbound connect helper.
+- Implemented: public `uvp::dns::resolver`, `query`, `address_list`, typed DNS
+  error category, async libuv `getaddrinfo` wrapper, copied address candidates,
+  address family selection, numeric service helper, and exactly-once user
+  cancellation.
+- Not implemented: DNS timeout handling, Happy Eyeballs, or reusable outbound
+  connect helper.
 
 ## Goals
 

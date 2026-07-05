@@ -36,7 +36,9 @@ add_library(uvpp::protocols ALIAS uvpp_protocols)
 target_sources(
   uvpp_protocols
   PRIVATE
+    src/dns.cpp
     src/io/transport.cpp
+    src/url.cpp
     src/http/detail/http1_state_machine.cpp
     src/http/error.cpp
     src/http/headers.cpp
@@ -102,6 +104,7 @@ if(UVPP_PROTOCOLS_BUILD_TESTS)
   add_executable(
     uvpp_protocols_tests
     tests/test_main.cpp
+    tests/dns_test.cpp
     tests/http1_parser_test.cpp
     tests/http_request_test.cpp
     tests/http_response_test.cpp
@@ -110,6 +113,7 @@ if(UVPP_PROTOCOLS_BUILD_TESTS)
     tests/io_test.cpp
     tests/multipart_test.cpp
     tests/tls_stream_test.cpp
+    tests/url_test.cpp
     tests/websocket_test.cpp)
   target_include_directories(uvpp_protocols_tests PRIVATE ${PROJECT_SOURCE_DIR})
   target_link_libraries(uvpp_protocols_tests PRIVATE uvpp::protocols uvpp::uvpp)
