@@ -11,18 +11,12 @@ the `Current focus` block.
 
 ## Milestone-Tracked Proposals
 
-- [Static file helper](static-file-helper.md)
-- [Typed JSON body policy](typed-json-body-policy.md)
-- [Multipart handling](multipart-handling.md)
-- [Server-Sent Events support](sse-support.md)
+- [Shared URL module](shared-url-module.md)
+- [DNS resolution](dns-resolution.md)
+- [HTTP client](http-client.md)
 - [SSE automatic heartbeat scheduling](sse-automatic-heartbeats.md)
-- [TLS support](tls-support.md)
-- [TLS listener adapter](tls-listener-adapter.md)
-- [HTTP TLS listener integration](http-tls-listener-integration.md)
 - [TLS policy and identity](tls-policy-and-identity.md)
 - [TLS graceful shutdown](tls-graceful-shutdown.md)
-- [HTTP client](http-client.md)
-- [DNS resolution](dns-resolution.md)
 - [WebSocket client](websocket-client.md)
 - [Fluent temporary route builders](fluent-temporary-route-builders.md)
 - [Route-level hooks](route-level-hooks.md)
@@ -33,8 +27,10 @@ the `Current focus` block.
 - [HTTP metrics](http-metrics.md)
 - [HTTP/2 support](http2-support.md)
 - [HTTP/3 and QUIC support](http3-quic-support.md)
-- [Shared URL module](shared-url-module.md)
 - [SMTP support](smtp-support.md)
 - [Redis support](redis-support.md)
 - [MQTT client](mqtt-client.md)
 - [Database client adapters](database-adapters.md)
+
+Completed proposals are moved to [`../archive`](../archive) when the roadmap
+focus advances to the next milestone.

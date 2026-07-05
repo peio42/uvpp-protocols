@@ -31,5 +31,5 @@ should compose with TLS and STARTTLS.
 ## Source Documents
 
 - [Project scope](../design/project-scope.md)
-- [TLS support proposal](tls-support.md)
+- [TLS support proposal](../archive/tls-support.md)
 - [Dependency decisions](../design/dependency-decisions.md)

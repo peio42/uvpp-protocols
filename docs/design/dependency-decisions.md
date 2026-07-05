@@ -106,11 +106,11 @@ semantics.
 The public type should be general:
 
 ```cpp
-namespace uv {
+namespace uvp {
 
 class url;
 
-}
+} // namespace uvp
 ```
 
 HTTP-specific helpers can then use `uvp::url` rather than defining a separate
@@ -172,7 +172,7 @@ public `multipart_stream` / `multipart_form` objects.
 
 ## TLS
 
-TLS has a dedicated [proposal](../proposals/tls-support.md). The initial backend
+TLS has a dedicated [proposal](../archive/tls-support.md). The initial backend
 should be OpenSSL 3.x, kept private to the TLS module behind `uvp::tls` context
 and stream types.
 

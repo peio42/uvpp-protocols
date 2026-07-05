@@ -329,10 +329,10 @@ The same milestone also tracks listener-level work in
 
 Follow-up work is split into dedicated proposals:
 
-- [TLS policy and identity](tls-policy-and-identity.md): public TLS version
+- [TLS policy and identity](../proposals/tls-policy-and-identity.md): public TLS version
   policy, server-side SNI context selection, and server-side client certificate
   verification.
-- [TLS graceful shutdown](tls-graceful-shutdown.md): full bounded
+- [TLS graceful shutdown](../proposals/tls-graceful-shutdown.md): full bounded
   close-handshake behavior beyond the initial send-and-close policy.
 
 Other possible later features include session resumption, key logging for

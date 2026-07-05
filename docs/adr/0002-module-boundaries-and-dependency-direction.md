@@ -53,4 +53,4 @@ in the canonical modules.
 - [Module architecture](../design/module-architecture.md)
 - [Protocol composition](../design/protocol-composition.md)
 - [WebSocket design](../design/websocket.md)
-- [TLS support proposal](../proposals/tls-support.md)
+- [TLS support proposal](../archive/tls-support.md)

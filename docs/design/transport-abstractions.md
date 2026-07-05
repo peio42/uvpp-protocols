@@ -292,7 +292,7 @@ tcp_listener
 ```
 
 TLS is not implemented yet; the proposed shape is tracked in
-[TLS support](../proposals/tls-support.md).
+[TLS support](../archive/tls-support.md).
 
 WebSocket starts as an HTTP upgrade. After upgrade, the HTTP session transfers
 or wraps the underlying `byte_stream` into a WebSocket session.
