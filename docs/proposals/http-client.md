@@ -1,6 +1,7 @@
 # HTTP Client Proposal
 
-Status: Draft, not implemented
+Status: Initial plain HTTP one-shot client implemented; HTTPS, streaming,
+pooling, redirects, proxying, and timeouts remain open
 
 ## Decision
 
@@ -42,11 +43,14 @@ transport/session to the WebSocket module.
 
 - Implemented: HTTP/1.1 server, shared HTTP method/status/header vocabulary,
   request/response objects, `uvp::io::byte_stream`, and listener composition.
-- Drafted separately: TLS stream/listener support, shared URL module, HTTP/2
-  support, and WebSocket client support.
-- Not implemented: public HTTP client API, DNS resolution, outbound TCP connect
-  helper, client TLS integration, connection pooling, request writer, response
-  parser, redirects, proxying, or streaming upload/download API.
+- Implemented: initial `uvp::http::client`, `client_options`, cancellable
+  request operation, URL + DNS + TCP orchestration, HTTP/1.1 request writer,
+  buffered response parser, response body limit, and one-shot `GET` over plain
+  `http://` URLs.
+- Drafted separately or still open: TLS stream/listener support, HTTP/2
+  support, WebSocket client support, reusable outbound connector, HTTPS client
+  integration, connection pooling, redirects, proxying, phase timeouts, and
+  streaming upload/download API.
 
 ## Goals
 
@@ -426,16 +430,17 @@ Constraints:
 
 Suggested first implementation slice:
 
-1. shared URL dependency usable by HTTP client;
-2. DNS resolution API and outbound TCP connect helper;
-3. HTTP/1.1 one-shot `GET` over plain HTTP with buffered body limit;
-4. HTTPS via TLS connect and hostname verification;
-5. streaming response body;
-6. streaming request body;
-7. basic keep-alive and pool reuse for HTTP/1.1;
-8. cancellation and phase-specific timeout coverage;
-9. redirects with conservative policy;
-10. proxy design spike or minimal HTTP CONNECT support.
+1. [x] shared URL dependency usable by HTTP client;
+2. [x] DNS resolution API;
+3. [x] HTTP/1.1 one-shot `GET` over plain HTTP with buffered body limit;
+4. outbound TCP connect helper extraction;
+5. HTTPS via TLS connect and hostname verification;
+6. streaming response body;
+7. streaming request body;
+8. basic keep-alive and pool reuse for HTTP/1.1;
+9. cancellation and phase-specific timeout coverage;
+10. redirects with conservative policy;
+11. proxy design spike or minimal HTTP CONNECT support.
 
 HTTP/2 should follow only after ALPN, pooling, and stream ownership are settled.
 

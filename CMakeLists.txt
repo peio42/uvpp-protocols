@@ -39,6 +39,7 @@ target_sources(
     src/dns.cpp
     src/io/transport.cpp
     src/url.cpp
+    src/http/client.cpp
     src/http/detail/http1_state_machine.cpp
     src/http/error.cpp
     src/http/headers.cpp
@@ -108,6 +109,7 @@ if(UVPP_PROTOCOLS_BUILD_TESTS)
     tests/http1_parser_test.cpp
     tests/http_request_test.cpp
     tests/http_response_test.cpp
+    tests/http_client_test.cpp
     tests/http_router_test.cpp
     tests/http_server_integration_test.cpp
     tests/io_test.cpp

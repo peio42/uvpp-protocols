@@ -106,8 +106,9 @@ Available:
 
 - `uvp::dns`: asynchronous host/service resolution over libuv `getaddrinfo`,
   with typed address candidates and cancellable operations.
-- `uvp::http`: HTTP/1.1 server, multipart request bodies, and Server-Sent
-  Events response helpers are available; client primitives are planned.
+- `uvp::http`: HTTP/1.1 server, multipart request bodies, Server-Sent Events
+  response helpers, and an initial one-shot HTTP/1.1 client for plain
+  `http://` URLs are available.
 - `uvp::url`: shared parsed URL values and helpers for client-side protocol
   foundations, including default ports, origin keys, and HTTP request targets.
 - `uvp::tls`: TLS stream and listener adapters over uvpp byte streams, with
@@ -184,6 +185,7 @@ Documentation starts in [`docs/README.md`](docs/README.md).
 User documentation:
 
 - [DNS](docs/user/dns.md)
+- [HTTP client](docs/user/http-client.md)
 - [HTTP server](docs/user/http-server.md)
 - [URL](docs/user/url.md)
 - [TLS](docs/user/tls.md)

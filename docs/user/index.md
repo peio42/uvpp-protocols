@@ -7,6 +7,8 @@ Start here:
 
 - [DNS](dns.md): asynchronous host/service resolution and cancellable address
   candidate operations.
+- [HTTP client](http-client.md): one-shot buffered HTTP/1.1 requests over
+  plain `http://` URLs.
 - [HTTP server](http-server.md): routing, request body policies, responses,
   streaming, and errors.
 - [URL](url.md): owning parsed URLs, default ports, origins, and HTTP request
