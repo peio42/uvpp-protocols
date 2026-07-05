@@ -293,6 +293,17 @@ void force_memory_eof(const std::shared_ptr<memory_endpoint>& state) {
   }
 }
 
+void close_tcp_client(const std::shared_ptr<uv::tcp>& client, bool& closed) {
+  if (!client || client->closing()) {
+    closed = true;
+    return;
+  }
+
+  client->close([&closed](uv::tcp&) {
+    closed = true;
+  });
+}
+
 std::filesystem::path write_test_file(std::string_view name, std::string_view content) {
   auto path = std::filesystem::temp_directory_path() / name;
   auto file = std::ofstream(path);
@@ -675,6 +686,235 @@ UVP_TEST_CASE("tls listener adapts generic stream listener") {
 
   UVP_CHECK(static_cast<bool>(secure));
   UVP_CHECK(std::holds_alternative<uvp::io::tcp_endpoint>(secure.local_endpoint()));
+
+  secure.close();
+  loop.run();
+  loop.close();
+}
+
+UVP_TEST_CASE("tls listener reports handshake timeout") {
+  uv::loop loop;
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string());
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto secure = uvp::io::stream_listener{
+    uvp::tls::listener{
+      uvp::io::stream_listener{std::move(tcp)},
+      std::move(context),
+      uvp::tls::listener_options{}
+        .handshake_timeout(std::chrono::milliseconds{20})
+        .max_pending_handshakes(8)}};
+  const auto port = std::get<uvp::io::tcp_endpoint>(secure.local_endpoint()).port;
+
+  auto client = std::make_shared<uv::tcp>(loop);
+  uv::connect_request connect_request;
+  uv::timer guard(loop);
+  auto connected = false;
+  auto client_closed = false;
+  auto timed_out = false;
+  auto accept_called = false;
+  auto accept_error = std::error_code{};
+
+  secure.listen([&](uvp::io::accept_result result) {
+    accept_called = true;
+    UVP_CHECK(!result);
+    accept_error = result.error().code();
+    secure.close();
+    close_tcp_client(client, client_closed);
+    if (!guard.closing()) {
+      guard.close();
+    }
+  });
+
+  guard.start(std::chrono::seconds{3}, [&](uv::timer& timer) {
+    timed_out = true;
+    secure.close();
+    close_tcp_client(client, client_closed);
+    timer.close();
+  });
+
+  client->connect(
+    connect_request,
+    uv::ipv4{"127.0.0.1", static_cast<int>(port)},
+    [&](uv::connect_request&, uv::result status) {
+      UVP_REQUIRE(status);
+      connected = true;
+    });
+
+  loop.run();
+
+  UVP_CHECK(!timed_out);
+  UVP_CHECK(connected);
+  UVP_CHECK(client_closed);
+  UVP_CHECK(accept_called);
+  UVP_CHECK_EQ(accept_error, uvp::tls::make_error_code(uvp::tls::errc::timeout));
+
+  loop.close();
+}
+
+UVP_TEST_CASE("tls listener enforces pending handshake limit") {
+  uv::loop loop;
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string());
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto secure = uvp::io::stream_listener{
+    uvp::tls::listener{
+      uvp::io::stream_listener{std::move(tcp)},
+      std::move(context),
+      uvp::tls::listener_options{}
+        .handshake_timeout(std::chrono::seconds{3})
+        .max_pending_handshakes(1)}};
+  const auto port = std::get<uvp::io::tcp_endpoint>(secure.local_endpoint()).port;
+
+  auto first = std::make_shared<uv::tcp>(loop);
+  auto second = std::make_shared<uv::tcp>(loop);
+  uv::connect_request first_connect;
+  uv::connect_request second_connect;
+  uv::timer guard(loop);
+  auto first_connected = false;
+  auto second_connected = false;
+  auto first_closed = false;
+  auto second_closed = false;
+  auto timed_out = false;
+  auto accept_count = 0;
+  auto accept_error = std::error_code{};
+
+  secure.listen([&](uvp::io::accept_result result) {
+    ++accept_count;
+    UVP_CHECK(!result);
+    accept_error = result.error().code();
+    secure.close();
+    close_tcp_client(first, first_closed);
+    close_tcp_client(second, second_closed);
+    if (!guard.closing()) {
+      guard.close();
+    }
+  });
+
+  guard.start(std::chrono::seconds{3}, [&](uv::timer& timer) {
+    timed_out = true;
+    secure.close();
+    close_tcp_client(first, first_closed);
+    close_tcp_client(second, second_closed);
+    timer.close();
+  });
+
+  first->connect(
+    first_connect,
+    uv::ipv4{"127.0.0.1", static_cast<int>(port)},
+    [&](uv::connect_request&, uv::result status) {
+      UVP_REQUIRE(status);
+      first_connected = true;
+      second->connect(
+        second_connect,
+        uv::ipv4{"127.0.0.1", static_cast<int>(port)},
+        [&](uv::connect_request&, uv::result second_status) {
+          (void)second_status;
+          second_connected = true;
+        });
+    });
+
+  loop.run();
+
+  UVP_CHECK(!timed_out);
+  UVP_CHECK(first_connected);
+  UVP_CHECK(second_connected);
+  UVP_CHECK(first_closed);
+  UVP_CHECK(second_closed);
+  UVP_CHECK_EQ(accept_count, 1);
+  UVP_CHECK_EQ(accept_error, uvp::tls::make_error_code(uvp::tls::errc::pending_handshake_limit));
+
+  loop.close();
+}
+
+UVP_TEST_CASE("tls listener close cancels pending handshakes without accept callback") {
+  uv::loop loop;
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string());
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto secure = uvp::io::stream_listener{
+    uvp::tls::listener{
+      uvp::io::stream_listener{std::move(tcp)},
+      std::move(context),
+      uvp::tls::listener_options{}
+        .handshake_timeout(std::chrono::seconds{3})
+        .max_pending_handshakes(8)}};
+  const auto port = std::get<uvp::io::tcp_endpoint>(secure.local_endpoint()).port;
+
+  auto client = std::make_shared<uv::tcp>(loop);
+  uv::connect_request connect_request;
+  uv::timer close_timer(loop);
+  uv::timer guard(loop);
+  auto connected = false;
+  auto client_closed = false;
+  auto close_timer_closed = false;
+  auto timed_out = false;
+  auto accept_called = false;
+
+  secure.listen([&](uvp::io::accept_result) {
+    accept_called = true;
+  });
+
+  guard.start(std::chrono::seconds{3}, [&](uv::timer& timer) {
+    timed_out = true;
+    secure.close();
+    close_tcp_client(client, client_closed);
+    if (!close_timer_closed && !close_timer.closing()) {
+      close_timer.close([&](uv::timer&) {
+        close_timer_closed = true;
+      });
+    }
+    timer.close();
+  });
+
+  client->connect(
+    connect_request,
+    uv::ipv4{"127.0.0.1", static_cast<int>(port)},
+    [&](uv::connect_request&, uv::result status) {
+      UVP_REQUIRE(status);
+      connected = true;
+      close_timer.start(std::chrono::milliseconds{20}, [&](uv::timer& timer) {
+        secure.close();
+        close_tcp_client(client, client_closed);
+        timer.close([&](uv::timer&) {
+          close_timer_closed = true;
+        });
+        if (!guard.closing()) {
+          guard.close();
+        }
+      });
+    });
+
+  loop.run();
+
+  UVP_CHECK(!timed_out);
+  UVP_CHECK(connected);
+  UVP_CHECK(client_closed);
+  UVP_CHECK(close_timer_closed);
+  UVP_CHECK(!accept_called);
+
+  loop.close();
 }
 
 UVP_TEST_CASE("http server serves requests over tls listener composition") {

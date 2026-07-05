@@ -397,7 +397,8 @@ private:
       return;
     }
 
-    on_read_(uvp::io::read_result{bytes});
+    auto callback = on_read_;
+    callback(uvp::io::read_result{bytes});
   }
 
   void deliver_pending_clear() {
@@ -405,7 +406,8 @@ private:
       auto bytes = std::move(pending_clear_.front());
       pending_clear_.pop_front();
       pending_clear_bytes_ -= bytes.size();
-      on_read_(uvp::io::read_result{bytes});
+      auto callback = on_read_;
+      callback(uvp::io::read_result{bytes});
     }
   }
 
@@ -658,7 +660,8 @@ private:
 
     closed_ = true;
     auto callbacks = std::move(on_close_);
-    lower_.close([callbacks = std::move(callbacks)]() mutable {
+    auto self = shared_from_this();
+    lower_.close([self, callbacks = std::move(callbacks)]() mutable {
       for (auto& callback : callbacks) {
         if (!callback) {
           continue;

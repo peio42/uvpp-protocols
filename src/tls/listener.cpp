@@ -61,8 +61,8 @@ public:
       }
 
       if (pending_.size() >= options_.max_pending_handshakes()) {
-        auto stream = std::move(result).stream();
-        stream.close();
+        auto stream = std::make_shared<uvp::io::byte_stream>(std::move(result).stream());
+        stream->close([stream] {});
         on_accept_(uvp::io::accept_result{
           uvp::io::stream_error{make_error_code(errc::pending_handshake_limit)}});
         return;
@@ -115,6 +115,7 @@ private:
 
     pending->timer = std::make_shared<uv::timer>(loop());
     pending->timer->start(timeout, [pending](uv::timer&) {
+      close_timer(pending);
       pending->operation.cancel(
         uvp::error{make_error_code(errc::timeout), "TLS handshake timed out"});
     });
