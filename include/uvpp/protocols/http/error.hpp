@@ -21,6 +21,7 @@ enum class errc {
   client_malformed_response,
   client_body_limit_exceeded,
   client_cancelled,
+  client_timeout,
 };
 
 std::error_code make_error_code(errc value) noexcept;

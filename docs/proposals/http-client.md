@@ -51,6 +51,8 @@ transport/session to the WebSocket module.
 - Implemented: reusable `uvp::io::tcp_connector` below HTTP, with sequential
   address attempts, typed connect errors, byte-stream conversion, and
   cancellation.
+- Implemented: initial one-shot client phase timeouts for DNS resolution, TCP
+  connect, response headers, and buffered response body.
 - Drafted separately or still open: TLS stream/listener support, HTTP/2
   support, WebSocket client support, HTTPS client integration, connection
   pooling, redirects, proxying, phase timeouts, and streaming upload/download
@@ -206,7 +208,6 @@ database adapters can reuse the same direction later.
 
 Open hardening:
 
-- connect timeout;
 - Happy Eyeballs / IPv6-IPv4 racing;
 - richer diagnostics for the last failed candidate.
 
@@ -367,13 +368,12 @@ Download streaming:
 
 Timeouts should be phase-aware:
 
-- overall request deadline;
-- DNS resolution timeout;
-- TCP connect timeout;
-- TLS handshake timeout;
-- request header/body write timeout or idle timeout;
-- response header timeout;
-- response body idle timeout;
+- implemented for the one-shot client: DNS resolution timeout, TCP connect
+  timeout, response header timeout, and buffered response body timeout;
+- still open: overall request deadline;
+- still open: TLS handshake timeout integration for HTTPS;
+- still open: request header/body write timeout or idle timeout;
+- still open: streaming response body idle timeout;
 - pool checkout timeout.
 
 Timeout errors should include the phase where practical.

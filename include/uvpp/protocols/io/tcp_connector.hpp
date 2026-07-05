@@ -5,6 +5,7 @@
 #include <uvpp/protocols/io/endpoint.hpp>
 #include <uvpp/protocols/result.hpp>
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <system_error>
@@ -20,12 +21,17 @@ enum class connect_errc {
   no_addresses = 1,
   cancelled,
   connect_failed,
+  timeout,
 };
 
 std::error_code make_error_code(connect_errc value) noexcept;
 const std::error_category& connect_category() noexcept;
 
 using connect_callback = std::function<void(uvp::result<byte_stream>)>;
+
+struct connect_options {
+  std::chrono::milliseconds timeout{0};
+};
 
 class connect_operation {
 public:
@@ -44,7 +50,9 @@ public:
   explicit tcp_connector(uv::loop& loop) noexcept;
 
   [[nodiscard]] connect_operation connect(tcp_endpoint endpoint, connect_callback callback);
+  [[nodiscard]] connect_operation connect(tcp_endpoint endpoint, connect_options options, connect_callback callback);
   [[nodiscard]] connect_operation connect(const uvp::dns::address_list& addresses, connect_callback callback);
+  [[nodiscard]] connect_operation connect(const uvp::dns::address_list& addresses, connect_options options, connect_callback callback);
 
 private:
   uv::loop* loop_;

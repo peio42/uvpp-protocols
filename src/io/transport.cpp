@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <uvpp/uv.hpp>
+#include <uvpp/handles/timer.hpp>
 
 namespace uvp::io {
 
@@ -238,6 +239,8 @@ public:
       return "TCP connect was cancelled";
     case connect_errc::connect_failed:
       return "TCP connect failed";
+    case connect_errc::timeout:
+      return "TCP connect timed out";
     }
     return "unknown TCP connect error";
   }
@@ -258,8 +261,8 @@ dns::address_family infer_family(const tcp_endpoint& endpoint) noexcept {
 
 class tcp_connect_state : public std::enable_shared_from_this<tcp_connect_state> {
 public:
-  tcp_connect_state(uv::loop& loop, std::vector<connect_candidate> candidates, connect_callback callback)
-      : loop_(&loop), candidates_(std::move(candidates)), callback_(std::move(callback)) {}
+  tcp_connect_state(uv::loop& loop, std::vector<connect_candidate> candidates, connect_options options, connect_callback callback)
+      : loop_(&loop), candidates_(std::move(candidates)), options_(options), callback_(std::move(callback)) {}
 
   connect_operation start() {
     if (!callback_) {
@@ -271,6 +274,7 @@ public:
       return connect_operation{shared_from_this()};
     }
 
+    start_timeout();
     connect_next();
     return connect_operation{shared_from_this()};
   }
@@ -286,6 +290,45 @@ public:
   }
 
 private:
+  void start_timeout() {
+    if (options_.timeout <= std::chrono::milliseconds{0}) {
+      return;
+    }
+
+    timeout_timer_ = std::make_shared<uv::timer>(*loop_);
+    auto self = shared_from_this();
+    timeout_timer_->start(options_.timeout, [self](uv::timer&) {
+      self->on_timeout();
+    });
+  }
+
+  void close_timeout_timer() noexcept {
+    if (!timeout_timer_) {
+      return;
+    }
+
+    auto timer = std::move(timeout_timer_);
+    if (timer->closing()) {
+      return;
+    }
+
+    try {
+      timer->stop();
+    } catch (...) {
+    }
+    timer->close([timer](uv::timer&) {});
+  }
+
+  void on_timeout() {
+    if (completed_) {
+      return;
+    }
+
+    cancelled_ = true;
+    close_current();
+    complete(make_connect_error(connect_errc::timeout));
+  }
+
   void connect_next() {
     if (completed_) {
       return;
@@ -379,6 +422,7 @@ private:
     }
 
     completed_ = true;
+    close_timeout_timer();
     auto callback = std::move(callback_);
     if (callback) {
       callback(std::move(result));
@@ -387,10 +431,12 @@ private:
 
   uv::loop* loop_;
   std::vector<connect_candidate> candidates_;
+  connect_options options_;
   connect_callback callback_;
   uv::connect_request connect_request_;
   std::unique_ptr<uv::tcp> tcp_;
   std::list<std::unique_ptr<uv::tcp>> closing_;
+  std::shared_ptr<uv::timer> timeout_timer_;
   std::size_t next_ = 0;
   std::error_code last_error_;
   bool cancelled_ = false;
@@ -531,13 +577,21 @@ tcp_connector::tcp_connector(uv::loop& loop) noexcept
     : loop_(&loop) {}
 
 connect_operation tcp_connector::connect(tcp_endpoint endpoint, connect_callback callback) {
+  return connect(std::move(endpoint), connect_options{}, std::move(callback));
+}
+
+connect_operation tcp_connector::connect(tcp_endpoint endpoint, connect_options options, connect_callback callback) {
   auto candidates = std::vector<connect_candidate>{};
   candidates.push_back(connect_candidate{infer_family(endpoint), std::move(endpoint)});
-  auto state = std::make_shared<tcp_connect_state>(*loop_, std::move(candidates), std::move(callback));
+  auto state = std::make_shared<tcp_connect_state>(*loop_, std::move(candidates), options, std::move(callback));
   return state->start();
 }
 
 connect_operation tcp_connector::connect(const uvp::dns::address_list& addresses, connect_callback callback) {
+  return connect(addresses, connect_options{}, std::move(callback));
+}
+
+connect_operation tcp_connector::connect(const uvp::dns::address_list& addresses, connect_options options, connect_callback callback) {
   auto candidates = std::vector<connect_candidate>{};
   candidates.reserve(addresses.size());
   for (const auto& address : addresses) {
@@ -546,7 +600,7 @@ connect_operation tcp_connector::connect(const uvp::dns::address_list& addresses
       uvp::io::tcp_endpoint{std::string{address.host()}, address.port()},
     });
   }
-  auto state = std::make_shared<tcp_connect_state>(*loop_, std::move(candidates), std::move(callback));
+  auto state = std::make_shared<tcp_connect_state>(*loop_, std::move(candidates), options, std::move(callback));
   return state->start();
 }
 

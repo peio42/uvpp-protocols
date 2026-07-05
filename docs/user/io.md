@@ -20,6 +20,7 @@ uvp::io::tcp_connector connector(loop);
 
 auto op = connector.connect(
   uvp::io::tcp_endpoint{.host = "127.0.0.1", .port = 8080},
+  uvp::io::connect_options{.timeout = std::chrono::seconds{3}},
   [](uvp::result<uvp::io::byte_stream> result) {
     if (!result) {
       auto error = result.error().code;
@@ -41,6 +42,9 @@ op.cancel();
 
 Cancellation completes the operation with `uvp::io::connect_errc::cancelled`
 unless the connection has already completed.
+
+If `connect_options::timeout` is greater than zero and no candidate connects in
+time, the operation completes with `uvp::io::connect_errc::timeout`.
 
 ## DNS Composition
 
@@ -73,4 +77,4 @@ auto resolve = resolver.resolve(
 ```
 
 The first connector implementation tries address candidates sequentially. Happy
-Eyeballs and connect timeouts remain future hardening points.
+Eyeballs remains a future hardening point.

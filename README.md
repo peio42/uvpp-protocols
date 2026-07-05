@@ -108,9 +108,9 @@ Available:
   with typed address candidates and cancellable operations.
 - `uvp::http`: HTTP/1.1 server, multipart request bodies, Server-Sent Events
   response helpers, and an initial one-shot HTTP/1.1 client for plain
-  `http://` URLs are available.
+  `http://` URLs with phase timeouts are available.
 - `uvp::io`: byte-stream/listener transport abstractions and reusable outbound
-  TCP connection helpers.
+  TCP connection helpers with connect timeouts.
 - `uvp::url`: shared parsed URL values and helpers for client-side protocol
   foundations, including default ports, origin keys, and HTTP request targets.
 - `uvp::tls`: TLS stream and listener adapters over uvpp byte streams, with

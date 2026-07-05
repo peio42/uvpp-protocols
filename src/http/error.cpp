@@ -42,6 +42,8 @@ public:
       return "HTTP client response body limit exceeded";
     case errc::client_cancelled:
       return "HTTP client request was cancelled";
+    case errc::client_timeout:
+      return "HTTP client request timed out";
     }
     return "unknown HTTP protocol error";
   }

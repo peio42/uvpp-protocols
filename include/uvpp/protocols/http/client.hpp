@@ -4,6 +4,7 @@
 #include <uvpp/protocols/http/response.hpp>
 #include <uvpp/protocols/result.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -18,6 +19,10 @@ namespace uvp::http {
 struct client_options {
   std::size_t max_header_bytes = 64 * 1024;
   std::size_t max_body_bytes = 4 * 1024 * 1024;
+  std::chrono::milliseconds dns_timeout{0};
+  std::chrono::milliseconds connect_timeout{0};
+  std::chrono::milliseconds response_header_timeout{0};
+  std::chrono::milliseconds response_body_timeout{0};
 };
 
 using client_callback = std::function<void(uvp::result<http::response>)>;

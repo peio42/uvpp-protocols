@@ -6,9 +6,11 @@
 #include <uvpp/protocols/io/tcp_connector.hpp>
 #include <uvpp/protocols/url.hpp>
 #include <uvpp/uv.hpp>
+#include <uvpp/handles/timer.hpp>
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <memory>
@@ -211,6 +213,7 @@ public:
       [self](uvp::result<uvp::dns::address_list> result) mutable {
         self->on_resolved(std::move(result));
       });
+    start_phase_timeout(timeout_phase::dns, options_.dns_timeout);
 
     return request_operation{std::move(self)};
   }
@@ -228,11 +231,80 @@ public:
   }
 
 private:
+  enum class timeout_phase {
+    none,
+    dns,
+    response_header,
+    response_body,
+  };
+
+  void start_phase_timeout(timeout_phase phase, std::chrono::milliseconds duration) {
+    stop_phase_timeout();
+    if (duration <= std::chrono::milliseconds{0}) {
+      return;
+    }
+
+    timeout_phase_ = phase;
+    timeout_timer_ = std::make_shared<uv::timer>(*loop_);
+    auto self = shared_from_this();
+    timeout_timer_->start(duration, [self, phase](uv::timer&) {
+      self->on_timeout(phase);
+    });
+  }
+
+  void stop_phase_timeout() noexcept {
+    timeout_phase_ = timeout_phase::none;
+    if (!timeout_timer_) {
+      return;
+    }
+
+    auto timer = std::move(timeout_timer_);
+    if (timer->closing()) {
+      return;
+    }
+
+    try {
+      timer->stop();
+    } catch (...) {
+    }
+    timer->close([timer](uv::timer&) {});
+  }
+
+  void on_timeout(timeout_phase phase) {
+    if (completed_ || phase != timeout_phase_) {
+      return;
+    }
+
+    cancelled_ = true;
+    timed_out_ = true;
+    dns_operation_.cancel();
+    connect_operation_.cancel();
+    close_stream();
+    complete(make_client_error(errc::client_timeout, timeout_phase_name(phase)));
+  }
+
+  [[nodiscard]] static std::string timeout_phase_name(timeout_phase phase) {
+    switch (phase) {
+    case timeout_phase::dns:
+      return "DNS resolution timed out";
+    case timeout_phase::response_header:
+      return "response headers timed out";
+    case timeout_phase::response_body:
+      return "response body timed out";
+    case timeout_phase::none:
+      break;
+    }
+    return "request timed out";
+  }
+
   void on_resolved(uvp::result<uvp::dns::address_list> result) {
     if (completed_) {
       return;
     }
     if (cancelled_) {
+      if (timed_out_) {
+        return;
+      }
       complete(make_client_error(errc::client_cancelled));
       return;
     }
@@ -241,9 +313,11 @@ private:
       return;
     }
 
+    stop_phase_timeout();
     auto self = shared_from_this();
     connect_operation_ = connector_.connect(
       result.value(),
+      uvp::io::connect_options{.timeout = options_.connect_timeout},
       [self](uvp::result<uvp::io::byte_stream> connect_result) mutable {
         self->on_connected(std::move(connect_result));
       });
@@ -254,10 +328,17 @@ private:
       return;
     }
     if (cancelled_) {
+      if (timed_out_) {
+        return;
+      }
       complete(make_client_error(errc::client_cancelled));
       return;
     }
     if (!result) {
+      if (result.error().code == uvp::io::connect_errc::timeout) {
+        complete(make_client_error(errc::client_timeout, "TCP connect timed out"));
+        return;
+      }
       complete(wrap_client_error(errc::client_connect_failed, result.error()));
       return;
     }
@@ -301,6 +382,7 @@ private:
       [self](uvp::io::read_result result) {
         self->on_read(result);
       });
+    start_phase_timeout(timeout_phase::response_header, options_.response_header_timeout);
   }
 
   void on_read(uvp::io::read_result result) {
@@ -322,6 +404,11 @@ private:
     }
 
     received_.append(reinterpret_cast<const char*>(result.bytes().data()), result.bytes().size());
+    if (!response_headers_complete_ && received_.find("\r\n\r\n") != std::string::npos) {
+      response_headers_complete_ = true;
+      start_phase_timeout(timeout_phase::response_body, options_.response_body_timeout);
+    }
+
     if (received_.size() > options_.max_header_bytes + options_.max_body_bytes + 4096) {
       close_stream();
       complete(make_client_error(errc::client_body_limit_exceeded));
@@ -340,6 +427,7 @@ private:
     }
 
     completed_ = true;
+    stop_phase_timeout();
     auto callback = std::move(callback_);
     if (callback) {
       callback(std::move(result));
@@ -357,9 +445,13 @@ private:
   uvp::dns::resolve_operation dns_operation_;
   uvp::io::connect_operation connect_operation_;
   uvp::io::byte_stream stream_;
+  std::shared_ptr<uv::timer> timeout_timer_;
   std::vector<std::byte> write_payload_;
   std::string received_;
+  timeout_phase timeout_phase_ = timeout_phase::none;
+  bool response_headers_complete_ = false;
   bool cancelled_ = false;
+  bool timed_out_ = false;
   bool completed_ = false;
 };
 

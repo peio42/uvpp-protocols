@@ -26,16 +26,35 @@ loop.run();
 The first implementation composes the shared URL and DNS foundations:
 
 ```text
-URL -> DNS -> TCP -> HTTP/1.1 request -> buffered response
+URL -> DNS -> TCP connect -> HTTP/1.1 request -> buffered response
 ```
 
 Current limits:
 
 - only `http://` is supported;
-- HTTPS/TLS, pooling, redirects, proxying, timeouts, and streaming request or
-  response bodies are follow-up work;
+- HTTPS/TLS, pooling, redirects, proxying, and streaming request or response
+  bodies are follow-up work;
 - responses are buffered and bounded by `client_options::max_body_bytes`;
 - requests use `Connection: close`, so connections are not reused yet.
+
+Timeouts are phase-scoped and disabled by default. Configure the phases needed
+by the application:
+
+```cpp
+uvp::http::client client(
+  loop,
+  uvp::http::client_options{
+    .max_header_bytes = 64 * 1024,
+    .max_body_bytes = 4 * 1024 * 1024,
+    .dns_timeout = std::chrono::seconds{2},
+    .connect_timeout = std::chrono::seconds{3},
+    .response_header_timeout = std::chrono::seconds{5},
+    .response_body_timeout = std::chrono::seconds{30},
+  });
+```
+
+If a phase expires, the request completes with
+`uvp::http::errc::client_timeout`. The error detail names the timed-out phase.
 
 Requests are cancellable:
 

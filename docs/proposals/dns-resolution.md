@@ -1,7 +1,7 @@
 # DNS Resolution Proposal
 
 Status: Initial resolver API and sequential TCP connector implemented; DNS
-timeouts and Happy Eyeballs remain open
+module timeouts and Happy Eyeballs remain open
 
 ## Context
 
@@ -22,8 +22,8 @@ transport layer.
   cancellation.
 - Implemented: reusable `uvp::io::tcp_connector` consuming either a direct TCP
   endpoint or a DNS `address_list`, producing a connected `uvp::io::byte_stream`
-  with typed connect errors and cancellation.
-- Not implemented: DNS timeout handling or Happy Eyeballs.
+  with typed connect errors, cancellation, and connect timeout support.
+- Not implemented: resolver-owned DNS timeout handling or Happy Eyeballs.
 
 ## Goals
 
@@ -129,15 +129,13 @@ handles and connection timing. The first implementation provides:
 
 - cancellation;
 - sequential address attempts;
+- connect timeout;
 - endpoint metadata;
 - typed failure when all candidates fail.
 
 Keeping this separate lets other protocols reuse it without depending on HTTP.
 
-Still open:
-
-- connect timeout;
-- Happy Eyeballs / IPv6-IPv4 racing policy.
+Happy Eyeballs / IPv6-IPv4 racing policy remains open.
 
 ## Timeouts
 
