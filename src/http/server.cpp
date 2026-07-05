@@ -99,9 +99,6 @@ std::string serialize_response_head(
   for (const auto& [name, value] : response.headers()) {
     if (header_name_equals(name, "content-length")) {
       has_content_length = true;
-      if (chunked) {
-        continue;
-      }
     }
     if (header_name_equals(name, "connection")) {
       has_connection = true;
@@ -109,10 +106,14 @@ std::string serialize_response_head(
     if (header_name_equals(name, "server")) {
       has_server = true;
     }
+  }
+
+  for (const auto& [name, value] : response.headers()) {
+    if (header_name_equals(name, "content-length") && chunked) {
+      continue;
+    }
     if (header_name_equals(name, "transfer-encoding")) {
-      if (chunked) {
-        continue;
-      }
+      continue;
     }
     out << name << ": " << value << "\r\n";
   }

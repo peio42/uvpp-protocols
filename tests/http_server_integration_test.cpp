@@ -781,6 +781,30 @@ UVP_TEST_CASE("http server sends server sent events over chunked streaming") {
   UVP_CHECK(received.find("ignored") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server suppresses transfer encoding when streaming with content length") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.get("/stream", [](uvp::http::request&, uvp::http::response& res) {
+        auto stream = res.stream();
+        stream.header("content-length", "5");
+        stream.header("transfer-encoding", "chunked");
+        const auto write = stream.write(std::string_view{"hello"});
+        UVP_CHECK(write.accepted());
+        stream.end();
+      });
+    },
+    "GET /stream HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nhello");
+
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("content-length: 5\r\n") != std::string::npos);
+  UVP_CHECK(received.find("transfer-encoding:") == std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nhello") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server routes on decoded path segments") {
   std::vector<std::string> observed_segments;
 

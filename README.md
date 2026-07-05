@@ -103,8 +103,8 @@ uvp::http::server srv(
 
 Available:
 
-- `uvp::http`: HTTP/1.1 server and Server-Sent Events response helpers are
-  available; client primitives are planned.
+- `uvp::http`: HTTP/1.1 server, multipart request bodies, and Server-Sent
+  Events response helpers are available; client primitives are planned.
 - `uvp::websocket`: server-side WebSocket sessions are available; client
   sessions are planned.
 
@@ -112,7 +112,6 @@ Planned:
 
 - `uvp::tls`: TLS stream adapter over uvpp streams.
 - `uvp::smtp`: SMTP client primitives.
-- `uvp::multipart`: multipart/form-data parser and streaming upload helpers.
 - `uvp::mqtt`: MQTT client sessions over TCP, TLS, or WebSocket.
 
 ## Protocol Composition

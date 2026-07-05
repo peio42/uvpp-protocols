@@ -23,6 +23,8 @@ uv::buffer_view websocket_alloc(uv::tcp&, std::size_t) {
 }
 
 std::string masked_text_frame(std::string_view payload, std::array<unsigned char, 4> mask) {
+  UVP_REQUIRE(payload.size() <= 125U);
+
   std::string frame;
   frame.reserve(payload.size() + 6U);
   frame.push_back(static_cast<char>(0x81U));
@@ -37,6 +39,8 @@ std::string masked_text_frame(std::string_view payload, std::array<unsigned char
 }
 
 std::string masked_frame(unsigned char first, std::span<const std::byte> payload, std::array<unsigned char, 4> mask) {
+  UVP_REQUIRE(payload.size() <= 125U);
+
   std::string frame;
   frame.reserve(payload.size() + 6U);
   frame.push_back(static_cast<char>(first));
