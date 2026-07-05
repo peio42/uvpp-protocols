@@ -1,0 +1,238 @@
+#include "test.hpp"
+
+#include <uvpp/protocols/tls.hpp>
+
+#include <cstddef>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <span>
+#include <string>
+#include <system_error>
+#include <utility>
+#include <vector>
+
+#include <uvpp/uv.hpp>
+
+namespace {
+
+constexpr auto test_certificate = R"(-----BEGIN CERTIFICATE-----
+MIIDCTCCAfGgAwIBAgIUeCbcn8RBu5za2QE14pO+pVrZ0jIwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcwNTExMDc0MFoXDTM2MDcw
+MjExMDc0MFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAw6pTRpJrXyGV95CIl18Voh3UZsqyM+EEKK08tJCoG6Q+
+etlNKe7Z8gSfXvYdOG9jYQwT9W+eeLQyk8EPgr9gPxxu2Yg4DvVTC5naSu+Cx122
+uAlZ46FOecAhpcamuC1Ie0/CwbS7QI65Cra150asIZW9Cg0WaIU19OCD8wMallgM
+2BPk0mWSUjFTVt0v2hUGITarWig4NYHj5vWW00yjFOs1LxV8y6bM70judC/g/2Z7
+RTuRk1+vyUfoW8Q+soTaYbClws6uK1FBK+gA88RKZbi17vKavWjh3wrNkDHnPhD6
+vUo5vnTeK4luDuf72x7cvDV5vpamqodK9UW3j4zxAQIDAQABo1MwUTAdBgNVHQ4E
+FgQUM9+pT084oqrPS2tNVSMRuLFTZH4wHwYDVR0jBBgwFoAUM9+pT084oqrPS2tN
+VSMRuLFTZH4wDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAMrTm
+gRUcFJvFlHiEB3Nxd4BMPcMA+ci02zXhn8SF1oN1udpcNwzU6oJ+xHQH0Af52dUg
+m00dRA0DnjsI3PU4f4WQ8Dx1/d+/29xT3AIaDQgO0B2VmKX0BTaJzJVIzV/9iOFn
+BLfczzMRL36SL+Obb87jsVMAoXP7KGtp5qTAwctZ+kC/K75D71q3I6gt7OL/2P8C
+EJ3VXt1Ni649srglFWs5ravJbIc7gmR9F5jFT6yTCyw+tLtw8WpA1cbEXJrkAXre
+Np97aGfgHVw5AdhG9vf4BGO/WvT4ZSdaRaFUYBiF1SJyNzizyor112/UCdaxgFgr
+7IVpk0bnemE5dOl/sw==
+-----END CERTIFICATE-----
+)";
+
+constexpr auto test_private_key = R"(-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDDqlNGkmtfIZX3
+kIiXXxWiHdRmyrIz4QQorTy0kKgbpD562U0p7tnyBJ9e9h04b2NhDBP1b554tDKT
+wQ+Cv2A/HG7ZiDgO9VMLmdpK74LHXba4CVnjoU55wCGlxqa4LUh7T8LBtLtAjrkK
+trXnRqwhlb0KDRZohTX04IPzAxqWWAzYE+TSZZJSMVNW3S/aFQYhNqtaKDg1gePm
+9ZbTTKMU6zUvFXzLpszvSO50L+D/ZntFO5GTX6/JR+hbxD6yhNphsKXCzq4rUUEr
+6ADzxEpluLXu8pq9aOHfCs2QMec+EPq9Sjm+dN4riW4O5/vbHty8NXm+lqaqh0r1
+RbePjPEBAgMBAAECggEABgU5H7xEmn49j4r+cO3ni//v96O3/Pmo95lw+ztSONuC
+YqRKCAbF5Pj4cGMRPhnLTIKjIJOpJByjS8GOeR7rVrXIwV+8HdW1ku9OdKzO8NR0
+2U/MWMEvWXascl3c5mDaUJUBMJWfh1p83hQGH9IgXL4vPV5uuJOUt+6qkLEhQcvw
+6uDN/tcxiCodCvTP5n5Zq/aUljbXWYMrzh5HJ3rVrzNTvc9uiTGNqC9qfC0EEs2p
+vUjpJrPe3KlVtlv0K3f2XUYOgQht3Rm5100R9MhYZ+D/ulo0POZYWcS3JqBMt01D
+/kA4KqBZlpRR/SH9nf2fixVJCZzCyvOTS9GJGCBsKwKBgQD5RiavdNKmbaNOPjsC
+N2pkuwiBlHfsGRh/K1kRXdu0KPXp0tRpppM67Z7katRR80fj7rr+iv9E3qpAF2dx
+Qa+KqiYPTugXwHQ1jEjYq2em2wbKRs8JB2R+nyWOowL0T5W9PvaCNn7KZ0dm4Gtl
++V4tf6jaMrJkxQ91vIOqVsGLwwKBgQDI8d/k/G5gEo6AW78UBAHjsS1lJg4LMXuy
+pSFXuRu6Kx2b9TXLp5KKvWr8UGM1MBSetTCaMO9r7ZMCYPggGMZaKRxLSRAM/Mi9
+i1IQf2vJJ57dM/xkkO+54V7wriheERQNwda+FrenGqkrHXpEwu+nFdm7THDel6mx
+n/3rv8536wKBgF2uhZ9vMjOmBLfFH3wnw25z9DBu0dsDW3d/nQuv0IAW3MSxnW7P
+UYnV/98sXvsliSEaeWBscJ87Z5SKty+TVhuw8njSWNuEUqhFPqNfV6cXraebkPd9
+tcD4oq7GiLe0qTvkS9SIEoKS6fy53uMGIuTKk3TdlLnWbYb8ACemTzrtAoGBAI1X
+pRcagEDPjLC42BSqJPIVpEqrk+FHsyybfnKH3/r5bOBQgMB5ZFh2mBRWLxIwebCQ
+3lj25tHR0EAyGRXql0q/9Aj4oXOhM0ov/09fcV+SoOoTMQtD73ueDPvaZMaV2Lc8
+i2I19IRz+l47Y8+OFqg+dGKMiC/qGhC46xCyX/Z1AoGBAIABbh2187I4SoOVbLKG
+t/PpNQ7uV5WVnWrGyng7UXnVTTOjAeSdPvX4VQIKL9DPa7V22SnYkPSjelTsl2Kg
+U7vDLTZ/3gZPWdGQpwmNkmbHyIJ62cXvHUObmW3bmd4lFtjWXE4s3w2/ewLLgAFg
+Jmcgq7zyPeY+rXdqNowARHbF
+-----END PRIVATE KEY-----
+)";
+
+struct memory_endpoint {
+  uv::loop* loop = nullptr;
+  uvp::io::read_callback on_read;
+  std::deque<std::vector<std::byte>> pending_reads;
+  std::weak_ptr<memory_endpoint> peer;
+  bool closed = false;
+};
+
+class memory_stream final : public uvp::io::byte_stream::concept_ {
+public:
+  explicit memory_stream(std::shared_ptr<memory_endpoint> state)
+      : state_(std::move(state)) {}
+
+  uv::loop& loop() noexcept override {
+    return *state_->loop;
+  }
+
+  void read_start(uvp::io::read_callback on_read) override {
+    state_->on_read = std::move(on_read);
+    while (state_->on_read && !state_->pending_reads.empty()) {
+      auto payload = std::move(state_->pending_reads.front());
+      state_->pending_reads.pop_front();
+      state_->on_read(uvp::io::read_result{payload});
+    }
+  }
+
+  void read_stop() override {
+    state_->on_read = {};
+  }
+
+  void write(std::span<const std::byte> bytes, uvp::io::write_callback on_write) override {
+    auto peer = state_->peer.lock();
+    if (!peer || peer->closed) {
+      if (on_write) {
+        on_write(uvp::io::stream_error{std::make_error_code(std::errc::broken_pipe)});
+      }
+      return;
+    }
+
+    auto payload = std::vector<std::byte>(bytes.begin(), bytes.end());
+    if (peer->on_read) {
+      peer->on_read(uvp::io::read_result{payload});
+    } else {
+      peer->pending_reads.push_back(std::move(payload));
+    }
+
+    if (on_write) {
+      on_write({});
+    }
+  }
+
+  void close(uvp::io::close_callback on_close) override {
+    state_->closed = true;
+    auto peer = state_->peer.lock();
+    if (peer && peer->on_read) {
+      peer->on_read(uvp::io::read_result{{}, {}, true});
+    }
+    if (on_close) {
+      on_close();
+    }
+  }
+
+  uvp::io::endpoint local_endpoint() const override {
+    return {};
+  }
+
+  uvp::io::endpoint remote_endpoint() const override {
+    return {};
+  }
+
+  uv::tcp* tcp() noexcept override {
+    return nullptr;
+  }
+
+  uv::pipe* pipe() noexcept override {
+    return nullptr;
+  }
+
+private:
+  std::shared_ptr<memory_endpoint> state_;
+};
+
+std::pair<uvp::io::byte_stream, uvp::io::byte_stream> memory_pair(uv::loop& loop) {
+  auto first = std::make_shared<memory_endpoint>();
+  auto second = std::make_shared<memory_endpoint>();
+  first->loop = &loop;
+  second->loop = &loop;
+  first->peer = second;
+  second->peer = first;
+
+  return {
+    uvp::io::byte_stream{std::make_unique<memory_stream>(std::move(first))},
+    uvp::io::byte_stream{std::make_unique<memory_stream>(std::move(second))},
+  };
+}
+
+std::filesystem::path write_test_file(std::string_view name, std::string_view content) {
+  auto path = std::filesystem::temp_directory_path() / name;
+  auto file = std::ofstream(path);
+  file << content;
+  return path;
+}
+
+} // namespace
+
+UVP_TEST_CASE("tls stream handshakes over byte streams and exchanges data") {
+  uv::loop loop;
+  auto [server_lower, client_lower] = memory_pair(loop);
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto server_context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string())
+    .alpn({"http/1.1"});
+
+  auto client_context = uvp::tls::client_context{}
+    .insecure_no_verify_peer()
+    .alpn({"http/1.1"});
+
+  auto server_done = false;
+  auto client_done = false;
+  auto server_alpn = std::string{};
+  auto client_alpn = std::string{};
+  auto server_stream = uvp::io::byte_stream{};
+  auto client_stream = uvp::io::byte_stream{};
+
+  uvp::tls::accept(std::move(server_lower), server_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    server_alpn = std::string(result.selected_alpn());
+    server_stream = std::move(result).stream();
+    server_done = true;
+  });
+
+  uvp::tls::connect(std::move(client_lower), client_context, [&](uvp::tls::handshake_result result) {
+    UVP_REQUIRE(result);
+    client_alpn = std::string(result.selected_alpn());
+    client_stream = std::move(result).stream();
+    client_done = true;
+  });
+
+  UVP_REQUIRE(server_done);
+  UVP_REQUIRE(client_done);
+  UVP_CHECK_EQ(server_alpn, "http/1.1");
+  UVP_CHECK_EQ(client_alpn, "http/1.1");
+
+  auto received = std::string{};
+  server_stream.read_start([&](uvp::io::read_result result) {
+    UVP_REQUIRE(result);
+    auto bytes = result.bytes();
+    received.assign(
+      reinterpret_cast<const char*>(bytes.data()),
+      bytes.size());
+  });
+
+  auto write_done = false;
+  const auto message = std::string{"ping"};
+  client_stream.write(
+    std::as_bytes(std::span{message.data(), message.size()}),
+    [&](uvp::io::stream_error error) {
+      UVP_CHECK(!error);
+      write_done = true;
+    });
+
+  UVP_CHECK(write_done);
+  UVP_CHECK_EQ(received, "ping");
+}

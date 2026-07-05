@@ -21,7 +21,7 @@ function(uvpp_protocols_require_uvpp)
   FetchContent_Declare(
     uvpp
     GIT_REPOSITORY https://github.com/peio42/uvpp.git
-    GIT_TAG main)
+    GIT_TAG v2.5.1)
 
   FetchContent_GetProperties(uvpp)
   if(NOT uvpp_POPULATED)
@@ -146,4 +146,11 @@ function(uvpp_protocols_require_openssl_crypto target)
   target_link_libraries(${target} PRIVATE OpenSSL::Crypto)
   set(UVPP_PROTOCOLS_USES_OPENSSL_CRYPTO ON PARENT_SCOPE)
   message(STATUS "uvpp-protocols: WebSocket handshake digest: OpenSSL Crypto")
+endfunction()
+
+function(uvpp_protocols_require_openssl_ssl target)
+  find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
+  target_link_libraries(${target} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+  set(UVPP_PROTOCOLS_USES_OPENSSL_SSL ON PARENT_SCOPE)
+  message(STATUS "uvpp-protocols: TLS backend: OpenSSL SSL")
 endfunction()

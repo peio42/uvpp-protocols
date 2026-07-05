@@ -52,6 +52,9 @@ target_sources(
     src/http/static_files.cpp
     src/http/status.cpp
     src/http/upgrade.cpp
+    src/tls/context.cpp
+    src/tls/error.cpp
+    src/tls/stream.cpp
     src/websocket/detail/handshake.cpp
     src/websocket/session.cpp)
 
@@ -74,6 +77,7 @@ uvpp_protocols_require_uvpp()
 uvpp_protocols_require_llhttp(uvpp_protocols)
 uvpp_protocols_require_nlohmann_json(uvpp_protocols)
 uvpp_protocols_require_openssl_crypto(uvpp_protocols)
+uvpp_protocols_require_openssl_ssl(uvpp_protocols)
 target_include_directories(
   uvpp_protocols
   PRIVATE
@@ -104,6 +108,7 @@ if(UVPP_PROTOCOLS_BUILD_TESTS)
     tests/http_server_integration_test.cpp
     tests/io_test.cpp
     tests/multipart_test.cpp
+    tests/tls_stream_test.cpp
     tests/websocket_test.cpp)
   target_include_directories(uvpp_protocols_tests PRIVATE ${PROJECT_SOURCE_DIR})
   target_link_libraries(uvpp_protocols_tests PRIVATE uvpp::protocols uvpp::uvpp)
