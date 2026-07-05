@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -11,6 +12,11 @@
 #include <uvpp/protocols/http/method.hpp>
 
 namespace uvp::http::detail {
+
+struct http1_limits {
+  std::size_t max_header_bytes = 16 * 1024;
+  std::size_t max_header_count = 128;
+};
 
 struct http1_message {
   http::method method = http::method::unknown;
@@ -116,6 +122,7 @@ public:
   http1_state_machine& operator=(http1_state_machine&&) noexcept;
 
   void reset();
+  void limits(http1_limits value);
   [[nodiscard]] http1_parse_result parse(std::string_view bytes);
 
   [[nodiscard]] const std::vector<http1_message>& completed_messages() const noexcept;

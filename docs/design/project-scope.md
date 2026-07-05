@@ -43,12 +43,12 @@ blocks into application protocols.
 
 The initial family of modules can grow in this order:
 
-- `uvp::http`: HTTP/1.1 server first, then client primitives.
+- `uvp::http`: HTTP/1.1 server first, including response helpers such as
+  Server-Sent Events, then client primitives.
 - `uvp::websocket`: WebSocket server/client sessions built on HTTP upgrade.
 - `uvp::tls`: TLS stream adapter over uvpp streams, with backend-specific
   providers such as OpenSSL or mbedTLS.
 - `uvp::smtp`: SMTP client primitives.
-- `uvp::sse`: Server-Sent Events response helper on top of HTTP.
 - `uvp::multipart`: multipart/form-data parser and streaming upload helpers for
   HTTP.
 - `uvp::redis`: RESP client/session protocol for simple service integration.

@@ -150,6 +150,70 @@ UVP_TEST_CASE("http router infers body policies from handler signatures") {
   UVP_CHECK(none_match.body == uvp::http::detail::body_mode::none);
 }
 
+UVP_TEST_CASE("http router stores explicit multipart stream body policies") {
+  uvp::http::router router;
+  router.post(
+    "/upload",
+    uvp::http::body::multipart_stream{},
+    [](uvp::http::request&, uvp::http::response&, uvp::http::multipart_stream&) {});
+
+  auto upload_match = router.match(uvp::http::method::post, "/upload");
+  UVP_REQUIRE(upload_match);
+  UVP_CHECK(upload_match.body == uvp::http::detail::body_mode::multipart_stream);
+
+  router.post(
+    "/limited-upload",
+    uvp::http::body::multipart_stream{}.max_total_bytes(123),
+    [](uvp::http::request&, uvp::http::response&, uvp::http::multipart_stream&) {});
+  auto limited_match = router.match(uvp::http::method::post, "/limited-upload");
+  UVP_REQUIRE(limited_match);
+  UVP_CHECK(limited_match.body == uvp::http::detail::body_mode::multipart_stream);
+  UVP_CHECK_EQ(limited_match.max_body_bytes, 123U);
+
+  router.post(
+    "/route-limited-upload",
+    uvp::http::route_options{}.max_body_bytes(456),
+    uvp::http::body::multipart_stream{}.max_total_bytes(123),
+    [](uvp::http::request&, uvp::http::response&, uvp::http::multipart_stream&) {});
+  auto route_limited_match = router.match(uvp::http::method::post, "/route-limited-upload");
+  UVP_REQUIRE(route_limited_match);
+  UVP_CHECK(route_limited_match.body == uvp::http::detail::body_mode::multipart_stream);
+  UVP_CHECK_EQ(route_limited_match.max_body_bytes, 456U);
+}
+
+UVP_TEST_CASE("http router stores explicit multipart form body policies") {
+  uvp::http::router router;
+  router.post(
+    "/upload",
+    uvp::http::body::multipart_form{},
+    [](uvp::http::request&, uvp::http::response&, const uvp::http::multipart_form&) {});
+
+  auto upload_match = router.match(uvp::http::method::post, "/upload");
+  UVP_REQUIRE(upload_match);
+  UVP_CHECK(upload_match.body == uvp::http::detail::body_mode::multipart_form);
+  UVP_CHECK_EQ(upload_match.max_body_bytes, 16U * 1024U * 1024U);
+}
+
+UVP_TEST_CASE("http router stores explicit json body policies") {
+  uvp::http::router router;
+  router.post(
+    "/items",
+    uvp::http::body::json<int>{},
+    [](uvp::http::request&, uvp::http::response&, int) {});
+  router.post(
+    "/raw",
+    uvp::http::body::json<>{},
+    [](uvp::http::request&, uvp::http::response&, const uvp::json&) {});
+
+  auto item_match = router.match(uvp::http::method::post, "/items");
+  UVP_REQUIRE(item_match);
+  UVP_CHECK(item_match.body == uvp::http::detail::body_mode::json);
+
+  auto raw_match = router.match(uvp::http::method::post, "/raw");
+  UVP_REQUIRE(raw_match);
+  UVP_CHECK(raw_match.body == uvp::http::detail::body_mode::json);
+}
+
 UVP_TEST_CASE("http router stores route options body limits") {
   uvp::http::router router;
 
@@ -181,6 +245,31 @@ UVP_TEST_CASE("http router stores route options body limits") {
   UVP_CHECK(resource_match.body == uvp::http::detail::body_mode::text);
   UVP_CHECK_EQ(resource_match.max_body_bytes, 24U);
   UVP_CHECK(resource_match.body_timeout == std::chrono::milliseconds{500});
+
+  router.post(
+    "/default-timeout",
+    uvp::http::route_options{}
+      .body_timeout(std::chrono::milliseconds{25})
+      .inherit_body_timeout(),
+    uvp::http::body::text{},
+    [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+
+  auto inherited_match = router.match(uvp::http::method::post, "/default-timeout");
+  UVP_REQUIRE(inherited_match);
+  UVP_CHECK(inherited_match.body_timeout == std::chrono::milliseconds{0});
+
+  router.post(
+    "/zero-timeout",
+    uvp::http::route_options{}.body_timeout(std::chrono::milliseconds{0}),
+    uvp::http::body::text{},
+    [](uvp::http::request&, uvp::http::response&, std::string_view) {});
+
+  auto zero_match = router.match(uvp::http::method::post, "/zero-timeout");
+  UVP_REQUIRE(zero_match);
+  UVP_CHECK(zero_match.body_timeout == std::chrono::milliseconds{0});
+  UVP_CHECK_THROWS(
+    uvp::http::route_options{}.body_timeout(std::chrono::milliseconds{-1}),
+    std::invalid_argument);
 }
 
 UVP_TEST_CASE("http router exposes explicit convenience methods for every common verb") {

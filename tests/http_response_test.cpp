@@ -1,9 +1,11 @@
 #include "test.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 
 #include <uvpp/protocols/http.hpp>
@@ -73,6 +75,25 @@ UVP_TEST_CASE("http deferred response completes the owner response") {
   UVP_CHECK(!cancelled);
 }
 
+UVP_TEST_CASE("http deferred response try methods report inactive handles") {
+  uvp::http::response response;
+  auto reply = response.defer();
+
+  UVP_CHECK(reply.try_status(uvp::http::status::created));
+  UVP_CHECK(reply.try_header("x-test", "before"));
+  UVP_CHECK(reply.try_text("done"));
+
+  UVP_CHECK(!reply.active());
+  UVP_CHECK(!reply.try_header("x-test", "after"));
+  UVP_CHECK(!reply.try_text("ignored"));
+  UVP_CHECK(!reply.try_end());
+  reply.header("x-test", "after").text("ignored");
+
+  UVP_CHECK_EQ(response.status_code(), static_cast<unsigned int>(uvp::http::status::created));
+  UVP_CHECK_EQ(response.headers().get("x-test"), "before");
+  UVP_CHECK_EQ(response.body(), "done");
+}
+
 UVP_TEST_CASE("http response prevents mixing buffered and streaming modes") {
   uvp::http::response response;
   auto stream = response.stream();
@@ -110,6 +131,59 @@ UVP_TEST_CASE("http streaming response rejects unattached writes") {
   UVP_CHECK(!stream_cancelled);
   UVP_CHECK(!stream_drained);
   UVP_CHECK(!stream_errored);
+}
+
+UVP_TEST_CASE("http sse response sets headers and uses streaming semantics") {
+  uvp::http::response response;
+  auto sse = response.sse();
+
+  UVP_CHECK(response.streaming());
+  UVP_CHECK(sse.active());
+  UVP_CHECK_EQ(response.headers().get("content-type"), "text/event-stream; charset=utf-8");
+  UVP_CHECK_EQ(response.headers().get("cache-control"), "no-cache");
+  UVP_CHECK_EQ(response.headers().get("x-accel-buffering"), "no");
+  UVP_CHECK_THROWS(response.text("not allowed"), std::logic_error);
+}
+
+UVP_TEST_CASE("http sse response honors header options") {
+  uvp::http::response response;
+  auto sse = response.sse(uvp::http::sse_options{
+    .no_cache = false,
+    .x_accel_buffering_no = false,
+  });
+
+  UVP_CHECK(response.streaming());
+  UVP_CHECK(sse.active());
+  UVP_CHECK_EQ(response.headers().get("content-type"), "text/event-stream; charset=utf-8");
+  UVP_CHECK_EQ(response.headers().get("cache-control"), "");
+  UVP_CHECK_EQ(response.headers().get("x-accel-buffering"), "");
+}
+
+UVP_TEST_CASE("http sse response rejects invalid frames before writing") {
+  uvp::http::response response;
+  auto sse = response.sse();
+
+  const auto bad_event = sse.send(uvp::http::sse_event{
+    .event = "bad\nevent",
+    .data = "ignored",
+  });
+  UVP_CHECK(!bad_event.accepted());
+  UVP_CHECK(bad_event.error() == std::make_error_code(std::errc::invalid_argument));
+
+  const auto bad_id = sse.send(uvp::http::sse_event{
+    .id = std::string_view{"bad\0id", 6},
+    .data = "ignored",
+  });
+  UVP_CHECK(!bad_id.accepted());
+  UVP_CHECK(bad_id.error() == std::make_error_code(std::errc::invalid_argument));
+
+  const auto bad_retry = sse.retry(std::chrono::milliseconds{0});
+  UVP_CHECK(!bad_retry.accepted());
+  UVP_CHECK(bad_retry.error() == std::make_error_code(std::errc::invalid_argument));
+
+  const auto huge_retry = sse.retry(std::chrono::milliseconds::max());
+  UVP_CHECK(!huge_retry.accepted());
+  UVP_CHECK(huge_retry.error() == std::make_error_code(std::errc::invalid_argument));
 }
 
 UVP_TEST_CASE("http stream write result reports accepted backpressure and rejection") {

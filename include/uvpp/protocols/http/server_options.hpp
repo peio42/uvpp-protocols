@@ -12,6 +12,10 @@ struct server_options {
   server_options&& max_header_bytes(std::size_t value) &&;
   [[nodiscard]] std::size_t max_header_bytes() const noexcept { return max_header_bytes_; }
 
+  server_options& max_header_count(std::size_t value) &;
+  server_options&& max_header_count(std::size_t value) &&;
+  [[nodiscard]] std::size_t max_header_count() const noexcept { return max_header_count_; }
+
   server_options& max_body_bytes(std::size_t value) &;
   server_options&& max_body_bytes(std::size_t value) &&;
   [[nodiscard]] std::size_t max_body_bytes() const noexcept { return max_body_bytes_; }
@@ -54,6 +58,7 @@ struct server_options {
 
 private:
   std::size_t max_header_bytes_ = 16 * 1024;
+  std::size_t max_header_count_ = 128;
   std::size_t max_body_bytes_ = 1024 * 1024;
   std::size_t max_pending_write_bytes_ = 1024 * 1024;
   std::size_t max_pending_responses_per_connection_ = 16;

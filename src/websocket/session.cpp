@@ -10,11 +10,14 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#include <uvpp/uv.hpp>
 
 #include "detail/handshake.hpp"
 
@@ -160,6 +163,26 @@ std::string make_close_payload(close_code code, std::string_view reason) {
   return payload;
 }
 
+bool valid_close_code(unsigned short code) noexcept {
+  if (code >= 3000U && code <= 4999U) {
+    return true;
+  }
+  switch (code) {
+  case 1000U:
+  case 1001U:
+  case 1002U:
+  case 1003U:
+  case 1007U:
+  case 1008U:
+  case 1009U:
+  case 1010U:
+  case 1011U:
+    return true;
+  default:
+    return false;
+  }
+}
+
 std::span<const std::byte> bytes_view(const std::string& value) noexcept {
   return std::as_bytes(std::span{value.data(), value.size()});
 }
@@ -184,6 +207,7 @@ struct session::state : public std::enable_shared_from_this<state> {
       keep_alive = shared_from_this();
     }
     stream = std::move(accepted_stream);
+    close_timer = std::make_shared<uv::timer>(stream.loop());
     if (!extra_bytes.empty()) {
       read_buffer.insert(read_buffer.end(), extra_bytes.begin(), extra_bytes.end());
       parse_frames();
@@ -208,11 +232,15 @@ struct session::state : public std::enable_shared_from_this<state> {
       return;
     }
     if (result.eof()) {
+      if (close_sent) {
+        close_transport();
+        return;
+      }
       fail(not_connected_error());
       return;
     }
     if (!result) {
-      fail(result.error().code(), false);
+      fail(result.error().code());
       return;
     }
 
@@ -428,6 +456,10 @@ struct session::state : public std::enable_shared_from_this<state> {
       const auto raw_code =
         (static_cast<unsigned short>(payload[0]) << 8U) |
         static_cast<unsigned short>(payload[1]);
+      if (!valid_close_code(raw_code)) {
+        close_with_error(close_code::protocol_error, protocol_error());
+        return;
+      }
       code = static_cast<close_code>(raw_code);
       reason = std::string_view{reinterpret_cast<const char*>(payload.data() + 2U), payload.size() - 2U};
     }
@@ -442,7 +474,8 @@ struct session::state : public std::enable_shared_from_this<state> {
 
     if (!close_sent) {
       close_sent = true;
-      queue(make_frame(opcode::close, payload), true);
+      queue(make_frame(opcode::close, payload), false);
+      start_close_timeout();
     } else {
       close_transport();
     }
@@ -480,7 +513,8 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
     close_sent = true;
     const auto payload = make_close_payload(code, reason);
-    queue(make_frame(opcode::close, bytes_view(payload)), true);
+    queue(make_frame(opcode::close, bytes_view(payload)), false);
+    start_close_timeout();
   }
 
   void close_with_error(close_code code, std::error_code error) {
@@ -555,6 +589,55 @@ struct session::state : public std::enable_shared_from_this<state> {
     flush_next();
   }
 
+  void start_close_timeout() {
+    if (closed || close_timer_closed || !close_timer || close_timeout_active) {
+      return;
+    }
+    close_timeout_active = true;
+    auto self = weak_from_this();
+    close_timer->start(options.close_timeout(), [self](uv::timer&) {
+      if (auto state = self.lock()) {
+        state->on_close_timeout();
+      }
+    });
+  }
+
+  void stop_close_timeout() noexcept {
+    close_timeout_active = false;
+    if (!close_timer || close_timer_closed) {
+      return;
+    }
+    try {
+      close_timer->stop();
+    } catch (...) {
+    }
+  }
+
+  void close_timer_handle() noexcept {
+    if (!close_timer || close_timer_closed) {
+      keep_alive.reset();
+      return;
+    }
+    stop_close_timeout();
+    close_timer_closed = true;
+    auto timer = std::move(close_timer);
+    if (auto self = weak_from_this().lock()) {
+      timer->close([self, timer](uv::timer&) mutable {
+        self->keep_alive.reset();
+      });
+    } else {
+      timer->close([timer](uv::timer&) mutable {});
+    }
+  }
+
+  void on_close_timeout() {
+    if (closed || !close_timeout_active) {
+      return;
+    }
+    close_timeout_active = false;
+    close_transport();
+  }
+
   void close_transport(uvp::io::close_callback on_close = {}) {
     auto self = shared_from_this();
     if (closed) {
@@ -564,6 +647,7 @@ struct session::state : public std::enable_shared_from_this<state> {
       return;
     }
     closed = true;
+    close_timeout_active = false;
     writes.clear();
     pending_write_bytes = 0;
     try {
@@ -577,13 +661,13 @@ struct session::state : public std::enable_shared_from_this<state> {
         if (callback) {
           callback();
         }
-        self->keep_alive.reset();
+        self->close_timer_handle();
       });
     } else if (on_close) {
       on_close();
-      keep_alive.reset();
+      close_timer_handle();
     } else {
-      keep_alive.reset();
+      close_timer_handle();
     }
   }
 
@@ -610,10 +694,13 @@ struct session::state : public std::enable_shared_from_this<state> {
   std::vector<std::byte> read_buffer;
   std::size_t read_offset = 0;
   std::deque<pending_write> writes;
+  std::shared_ptr<uv::timer> close_timer;
   std::size_t pending_write_bytes = 0;
   bool writing = false;
   bool closed = false;
   bool close_sent = false;
+  bool close_timeout_active = false;
+  bool close_timer_closed = false;
 
   std::optional<opcode> fragmented_opcode;
   std::vector<std::byte> fragmented_message;
@@ -695,6 +782,19 @@ accept_options& accept_options::max_pending_write_bytes(std::size_t value) & {
 
 accept_options&& accept_options::max_pending_write_bytes(std::size_t value) && {
   max_pending_write_bytes(value);
+  return std::move(*this);
+}
+
+accept_options& accept_options::close_timeout(std::chrono::milliseconds value) & {
+  if (value.count() <= 0) {
+    throw std::invalid_argument("close_timeout must be greater than zero");
+  }
+  close_timeout_ = value;
+  return *this;
+}
+
+accept_options&& accept_options::close_timeout(std::chrono::milliseconds value) && {
+  close_timeout(value);
   return std::move(*this);
 }
 

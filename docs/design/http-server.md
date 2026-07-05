@@ -39,12 +39,26 @@ Current public types:
 - `uvp::http::headers`
 - `uvp::http::method`
 - `uvp::http::status`
+- `uvp::http::errc`
 - `uvp::http::route_params`
 - `uvp::http::query_params`
+- `uvp::http::multipart_stream`
+- `uvp::http::multipart_part`
+- `uvp::http::multipart_part_stream`
+- `uvp::http::multipart_form`
+- `uvp::http::multipart_part_view`
+- `uvp::http::multipart_field_view`
+- `uvp::http::multipart_file_view`
+- `uvp::http::multipart_stream_options`
+- `uvp::http::multipart_form_options`
+- `uvp::http::multipart_limits`
 - `uvp::http::body::none`
 - `uvp::http::body::bytes`
 - `uvp::http::body::text`
+- `uvp::http::body::json`
 - `uvp::http::body::stream`
+- `uvp::http::body::multipart_stream`
+- `uvp::http::body::multipart_form`
 - `uvp::http::request_body_stream`
 
 The aggregate include should be:
@@ -217,6 +231,9 @@ Routes declare a body policy explicitly:
 srv.get("/health", body::none{}, handler);
 srv.post("/echo", route_options{}.max_body_bytes(64 * 1024), body::bytes{}, handler);
 srv.post("/message", route_options{}.max_body_bytes(64 * 1024), body::text{}, handler);
+srv.post("/json", route_options{}.max_body_bytes(64 * 1024), body::json<my_type>{}, handler);
+srv.post("/upload-form", body::multipart_form{}, handler);
+srv.post("/upload-stream", body::multipart_stream{}.max_file_bytes(2 * 1024 * 1024), handler);
 srv.post("/events", body::stream{}, handler);
 ```
 
@@ -226,13 +243,27 @@ The body policy is part of the route contract:
 - `body::bytes{}` buffers the body, then dispatches with
   `std::span<const std::byte>`;
 - `body::text{}` buffers the body, then dispatches with `std::string_view`;
+- `body::json<T>{}` buffers the body, validates a JSON content type, parses
+  through `uvp::json`, converts with nlohmann `from_json`, then dispatches
+  with `const T&`;
+- `body::multipart_form{}` buffers the body up to its total/memory limits,
+  validates `multipart/form-data`, collects fields and explicitly allowed small
+  files into `const multipart_form&`, then dispatches;
+- `body::multipart_stream{}` dispatches after request headers, validates
+  `multipart/form-data`, then streams parsed parts through `multipart_stream&`;
 - `body::stream{}` dispatches after request headers and provides a
   `request_body_stream&`.
 
-Future typed policies such as JSON and multipart should use the same explicit
-route declaration shape. They are tracked in
-[typed JSON body policy](../proposals/typed-json-body-policy.md) and
-[multipart handling](../proposals/multipart-handling.md).
+`body::json<>` dispatches with `const uvp::json&`. JSON and multipart request
+policies are not inferred from handler signatures; routes declare
+`body::json<T>{}`, `body::multipart_form{}`, or `body::multipart_stream{}`
+explicitly because parsing, buffering, typed conversion, and upload limits are
+part of the route contract.
+Multipart routes can carry `multipart_stream_options`,
+`multipart_form_options`, and `multipart_limits` to enforce structural, field,
+file, header, part, memory, and total body limits. `max_file_bytes = 0` is
+policy-specific: it means unlimited file bytes for `multipart_stream`, but
+reject file parts for `multipart_form`.
 
 Route-level options extend the body contract with operational metadata:
 
@@ -252,6 +283,12 @@ body limit. Otherwise the server falls back to
 `route_options::body_timeout(...)` when a route needs a body receive timeout
 different from `server_options::body_timeout()`.
 
+For multipart routes, `route_options::max_body_bytes(...)` remains the
+strongest route-level body limit. If it is not set, a non-zero
+`multipart_stream_options::limits().max_total_bytes` or
+`multipart_form_options::limits.max_total_bytes` is also installed as the
+route HTTP body limit, so parser limits and transport read limits stay aligned.
+
 Configured body limits must be greater than zero. A route that does not accept a
 request body should use `body::none{}` instead of a zero byte limit. The current
 route-level implementation still uses an internal `0` value to mean "inherit the
@@ -269,7 +306,8 @@ srv.post("/events", stream_handler); // equivalent to body::stream{}
 ```
 
 Inference stops at `body::none{}`, `body::bytes{}`, `body::text{}`, and
-`body::stream{}`. Typed policies should be declared explicitly.
+`body::stream{}`. Typed or parser-backed policies should be declared
+explicitly.
 
 ## Request
 
@@ -356,6 +394,17 @@ public:
 The chunk span passed to `on_data` is borrowed and valid only while the callback
 is running. Applications must copy bytes they need to keep.
 
+For `body::multipart_stream{}`, once the handler receives `multipart_stream&`,
+multipart parser failures and HTTP body-limit failures are reported through
+`mp.on_error()`. The application owns the response from that point; the server
+does not synthesize a competing multipart error response after handler entry.
+The handler must install `mp.on_error()` before returning, even when it calls
+`res.defer()`. If it does not and the response is not ended or already claimed
+for streaming, the route fails immediately with `500 Internal Server Error`.
+Each multipart part must select exactly one consumer. A second call to
+`stream()`, `text(...)`, or `discard()` is reported as a multipart error instead
+of being ignored.
+
 `pause()` stops consuming additional body data after the current callback.
 `resume()` restarts reads. `on_end()` means the full request body has been
 received and the HTTP parser can continue to the next request on a keep-alive
@@ -394,9 +443,8 @@ public:
 JSON is represented by `uvp::json`, a public alias for `nlohmann::json`.
 `json(std::string_view)` remains available for already serialized payloads.
 `json(const uvp::json&)` serializes with `dump()` and supports strings,
-numbers, booleans, arrays, objects, and null values. Future typed JSON request
-bodies should build on the same type and nlohmann's `from_json` / `to_json`
-customization points.
+numbers, booleans, arrays, objects, and null values. Typed JSON request bodies
+use the same type and nlohmann's `from_json` customization point.
 
 ## Handler Completion
 
@@ -630,7 +678,6 @@ uvp::http::server srv(
 
 Future HTTP work is tracked outside stable design:
 
-- [Typed JSON body policy](../proposals/typed-json-body-policy.md)
 - [Multipart handling](../proposals/multipart-handling.md)
 - [Server-Sent Events support](../proposals/sse-support.md)
 - [Static file helper](../proposals/static-file-helper.md)

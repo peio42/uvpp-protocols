@@ -31,6 +31,17 @@ server_options&& server_options::max_header_bytes(std::size_t value) && {
   return std::move(*this);
 }
 
+server_options& server_options::max_header_count(std::size_t value) & {
+  require_positive(value, "max_header_count must be greater than zero");
+  max_header_count_ = value;
+  return *this;
+}
+
+server_options&& server_options::max_header_count(std::size_t value) && {
+  max_header_count(value);
+  return std::move(*this);
+}
+
 server_options& server_options::max_body_bytes(std::size_t value) & {
   require_positive(value, "max_body_bytes must be greater than zero");
   max_body_bytes_ = value;
@@ -129,6 +140,7 @@ server_options&& server_options::route_path_matching(http::route_path_matching v
 
 void server_options::validate() const {
   require_positive(max_header_bytes_, "max_header_bytes must be greater than zero");
+  require_positive(max_header_count_, "max_header_count must be greater than zero");
   require_positive(max_body_bytes_, "max_body_bytes must be greater than zero");
   require_positive(max_pending_write_bytes_, "max_pending_write_bytes must be greater than zero");
   require_positive(max_pending_responses_per_connection_, "max_pending_responses_per_connection must be greater than zero");

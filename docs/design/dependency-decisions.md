@@ -26,6 +26,7 @@ an adapter module.
 | HTTP/3 | [`nghttp3`](https://github.com/ngtcp2/nghttp3) plus a QUIC transport such as [`ngtcp2`](https://github.com/ngtcp2/ngtcp2) | Recommended for future HTTP/3 | `nghttp3` implements HTTP/3 mapping over QUIC and QPACK, but does not provide QUIC transport. |
 | URL parsing | [`ada-url`](https://github.com/ada-url/ada) | Accepted for shared URL module | Good fit for a general `uvp::url` wrapper. Use it beyond HTTP where WHATWG URL semantics are appropriate. |
 | HTTP client | [`libcurl`](https://curl.se/libcurl/) | Candidate with constraints | Useful for broad client protocol coverage. Its multi-socket API can integrate with event loops, but libcurl owns substantial client state and socket orchestration. |
+| Multipart | Internal parser | Accepted for first multipart milestone | No adequate low-risk dependency selected. Keep the parser private, streaming, and covered by parser state-machine tests. |
 | TLS | OpenSSL-family backend | Draft proposal | Initial candidate is OpenSSL 3.x for broad platform support. Proposal exists; implementation is pending. |
 | PostgreSQL client | [`libpq`](https://www.postgresql.org/docs/current/libpq.html) | Candidate | Official PostgreSQL C client. Nonblocking APIs and socket readiness can integrate with uvpp. Scope still needs package review. |
 | MariaDB/MySQL client | [MariaDB Connector/C](https://mariadb.com/docs/connectors/mariadb-connector-c) | Candidate | Official C connector for MariaDB/MySQL with nonblocking API support. License and event integration need review. |
@@ -138,6 +139,29 @@ Possible decision:
   not through the same state-machine boundary as `llhttp`.
 
 Do not adopt libcurl for the first HTTP server milestones.
+
+### Multipart
+
+Multipart parsing for the first HTTP server milestone should use an internal
+private parser. The project should not add a fragile multipart dependency and
+must not implement streaming uploads by buffering complete uploads before
+parsing. `body::multipart_form{}` is the bounded exception: it uses explicit
+total and memory limits, rejects files by default, and is intended for small
+HTML-style forms.
+
+The parser boundary is:
+
+```text
+uvp::http session
+  -> src/http/detail/multipart_parser
+    -> multipart body policy adapters
+```
+
+The parser consumes byte spans, emits typed events, enforces a snapshot of
+effective multipart limits, and stays independent from sockets, timers,
+responses, and route dispatch. The HTTP session and body policy adapters own
+transport reads, backpressure, timeout behavior, response responsibility, and
+public `multipart_stream` / `multipart_form` objects.
 
 ## TLS
 

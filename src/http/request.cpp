@@ -1,23 +1,12 @@
 #include <uvpp/protocols/http/request.hpp>
 
+#include "detail/url_encoding.hpp"
+
 #include <utility>
 
 namespace uvp::http {
 
 namespace {
-
-int hex_value(char value) noexcept {
-  if (value >= '0' && value <= '9') {
-    return value - '0';
-  }
-  if (value >= 'a' && value <= 'f') {
-    return value - 'a' + 10;
-  }
-  if (value >= 'A' && value <= 'F') {
-    return value - 'A' + 10;
-  }
-  return -1;
-}
 
 std::string decode_query_component(std::string_view component) {
   std::string decoded;
@@ -31,8 +20,8 @@ std::string decode_query_component(std::string_view component) {
     }
 
     if (value == '%' && offset + 2 < component.size()) {
-      const auto high = hex_value(component[offset + 1]);
-      const auto low = hex_value(component[offset + 2]);
+      const auto high = detail::hex_value(component[offset + 1]);
+      const auto low = detail::hex_value(component[offset + 2]);
       if (high >= 0 && low >= 0) {
         decoded.push_back(static_cast<char>((high << 4) | low));
         offset += 2;

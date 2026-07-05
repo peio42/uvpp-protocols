@@ -21,7 +21,10 @@ enum class close_code : unsigned short {
   going_away = 1001,
   protocol_error = 1002,
   unsupported_data = 1003,
+  invalid_payload = 1007,
+  policy_violation = 1008,
   message_too_large = 1009,
+  mandatory_extension = 1010,
   internal_error = 1011,
 };
 
@@ -34,6 +37,10 @@ struct accept_options {
   accept_options&& max_pending_write_bytes(std::size_t value) &&;
   [[nodiscard]] std::size_t max_pending_write_bytes() const noexcept { return max_pending_write_bytes_; }
 
+  accept_options& close_timeout(std::chrono::milliseconds value) &;
+  accept_options&& close_timeout(std::chrono::milliseconds value) &&;
+  [[nodiscard]] std::chrono::milliseconds close_timeout() const noexcept { return close_timeout_; }
+
   accept_options& subprotocol(std::string_view value) &;
   accept_options&& subprotocol(std::string_view value) &&;
   [[nodiscard]] const std::string& subprotocol() const noexcept { return subprotocol_; }
@@ -45,6 +52,7 @@ struct accept_options {
 private:
   std::size_t max_message_bytes_ = 1024 * 1024;
   std::size_t max_pending_write_bytes_ = 1024 * 1024;
+  std::chrono::milliseconds close_timeout_ = std::chrono::seconds{5};
   std::string subprotocol_;
   bool auto_pong_ = true;
 };
@@ -111,7 +119,7 @@ private:
 };
 
 [[nodiscard]] session accept(uvp::http::upgrade_request& req, accept_options options = {});
-session accept_detached(uvp::http::upgrade_request& req, accept_options options = {});
+[[nodiscard]] session accept_detached(uvp::http::upgrade_request& req, accept_options options = {});
 uvp::io::byte_stream accept_byte_stream(uvp::http::upgrade_request& req, accept_options options = {});
 
 } // namespace uvp::websocket

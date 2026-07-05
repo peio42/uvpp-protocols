@@ -1,8 +1,10 @@
 #include <uvpp/protocols/http/response.hpp>
 
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -64,6 +66,85 @@ struct response_state {
 };
 
 } // namespace detail
+
+namespace {
+
+std::error_code invalid_argument_error() {
+  return std::make_error_code(std::errc::invalid_argument);
+}
+
+stream_write_result invalid_sse_argument() noexcept {
+  return stream_write_result::rejected(invalid_argument_error());
+}
+
+constexpr auto max_sse_retry_delay = std::chrono::hours{24 * 365};
+
+bool contains_invalid_sse_field_byte(std::string_view value) noexcept {
+  for (char ch : value) {
+    if (ch == '\r' || ch == '\n' || ch == '\0') {
+      return true;
+    }
+  }
+  return false;
+}
+
+void append_sse_field_line(std::string& out, std::string_view field, std::string_view value) {
+  out += field;
+  out += ':';
+  if (!value.empty()) {
+    out += ' ';
+    out.append(value);
+  }
+  out += '\n';
+}
+
+void append_sse_comment_line(std::string& out, std::string_view value) {
+  out += ':';
+  if (!value.empty()) {
+    out += ' ';
+    out.append(value);
+  }
+  out += '\n';
+}
+
+template<class AppendLine>
+void append_split_sse_lines(std::string& out, std::string_view value, AppendLine append_line) {
+  std::size_t offset = 0;
+  while (offset < value.size()) {
+    auto line_end = offset;
+    while (line_end < value.size() && value[line_end] != '\r' && value[line_end] != '\n') {
+      ++line_end;
+    }
+
+    append_line(out, value.substr(offset, line_end - offset));
+
+    if (line_end == value.size()) {
+      return;
+    }
+
+    if (value[line_end] == '\r' && line_end + 1 < value.size() && value[line_end + 1] == '\n') {
+      offset = line_end + 2;
+    } else {
+      offset = line_end + 1;
+    }
+  }
+
+  append_line(out, {});
+}
+
+void append_sse_data_lines(std::string& out, std::string_view data) {
+  append_split_sse_lines(out, data, [](std::string& target, std::string_view line) {
+    append_sse_field_line(target, "data", line);
+  });
+}
+
+void append_sse_comment_lines(std::string& out, std::string_view comment) {
+  append_split_sse_lines(out, comment, [](std::string& target, std::string_view line) {
+    append_sse_comment_line(target, line);
+  });
+}
+
+} // namespace
 
 stream_write_result::stream_write_result(bool accepted, bool should_continue, std::error_code error) noexcept
     : accepted_(accepted), should_continue_(should_continue), error_(std::move(error)) {}
@@ -197,6 +278,18 @@ streaming_response response::stream() {
   return streaming_response{state_};
 }
 
+sse_stream response::sse(sse_options options) {
+  auto out = stream();
+  out.type("text/event-stream; charset=utf-8");
+  if (options.no_cache) {
+    out.header("cache-control", "no-cache");
+  }
+  if (options.x_accel_buffering_no) {
+    out.header("x-accel-buffering", "no");
+  }
+  return sse_stream{std::move(out)};
+}
+
 unsigned int response::status_code() const noexcept {
   return state().status_code;
 }
@@ -307,9 +400,7 @@ deferred_response& deferred_response::on_cancel(std::function<void()> callback) 
 }
 
 deferred_response& deferred_response::status(unsigned int code) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.status(code);
-  }
+  (void)try_status(code);
   return *this;
 }
 
@@ -318,9 +409,7 @@ deferred_response& deferred_response::status(http::status value) {
 }
 
 deferred_response& deferred_response::header(std::string_view name, std::string_view value) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.header(name, value);
-  }
+  (void)try_header(name, value);
   return *this;
 }
 
@@ -328,46 +417,111 @@ deferred_response& deferred_response::type(std::string_view content_type) {
   return header("content-type", content_type);
 }
 
-void deferred_response::text(std::string_view body) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.text(body);
+bool deferred_response::try_status(unsigned int code) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
   }
+  response{std::move(state)}.status(code);
+  return true;
+}
+
+bool deferred_response::try_status(http::status value) {
+  return try_status(static_cast<unsigned int>(value));
+}
+
+bool deferred_response::try_header(std::string_view name, std::string_view value) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.header(name, value);
+  return true;
+}
+
+bool deferred_response::try_type(std::string_view content_type) {
+  return try_header("content-type", content_type);
+}
+
+void deferred_response::text(std::string_view body) {
+  (void)try_text(body);
 }
 
 void deferred_response::json(const char* serialized_json) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.json(serialized_json);
-  }
+  (void)try_json(serialized_json);
 }
 
 void deferred_response::json(const std::string& serialized_json) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.json(serialized_json);
-  }
+  (void)try_json(serialized_json);
 }
 
 void deferred_response::json(std::string_view serialized_json) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.json(serialized_json);
-  }
+  (void)try_json(serialized_json);
 }
 
 void deferred_response::json(const uvp::json& value) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.json(value);
-  }
+  (void)try_json(value);
 }
 
 void deferred_response::bytes(std::span<const std::byte> body) {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.bytes(body);
-  }
+  (void)try_bytes(body);
 }
 
 void deferred_response::end() {
-  if (auto state = lock_active()) {
-    response{std::move(state)}.end();
+  (void)try_end();
+}
+
+bool deferred_response::try_text(std::string_view body) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
   }
+  response{std::move(state)}.text(body);
+  return true;
+}
+
+bool deferred_response::try_json(const char* serialized_json) {
+  return try_json(std::string_view{serialized_json});
+}
+
+bool deferred_response::try_json(const std::string& serialized_json) {
+  return try_json(std::string_view{serialized_json});
+}
+
+bool deferred_response::try_json(std::string_view serialized_json) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.json(serialized_json);
+  return true;
+}
+
+bool deferred_response::try_json(const uvp::json& value) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.json(value);
+  return true;
+}
+
+bool deferred_response::try_bytes(std::span<const std::byte> body) {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.bytes(body);
+  return true;
+}
+
+bool deferred_response::try_end() {
+  auto state = lock_active();
+  if (!state) {
+    return false;
+  }
+  response{std::move(state)}.end();
+  return true;
 }
 
 streaming_response::streaming_response(std::weak_ptr<detail::response_state> state) noexcept
@@ -460,6 +614,68 @@ void streaming_response::end() {
   if (state->on_stream_end) {
     state->on_stream_end();
   }
+}
+
+sse_stream::sse_stream(streaming_response stream) noexcept
+    : stream_(std::move(stream)) {}
+
+bool sse_stream::active() const noexcept {
+  return stream_.active();
+}
+
+sse_stream& sse_stream::on_cancel(std::function<void()> callback) {
+  stream_.on_cancel(std::move(callback));
+  return *this;
+}
+
+sse_stream& sse_stream::on_drain(std::function<void()> callback) {
+  stream_.on_drain(std::move(callback));
+  return *this;
+}
+
+sse_stream& sse_stream::on_error(std::function<void(std::error_code)> callback) {
+  stream_.on_error(std::move(callback));
+  return *this;
+}
+
+stream_write_result sse_stream::retry(std::chrono::milliseconds value) {
+  if (value.count() <= 0 || value > max_sse_retry_delay) {
+    return invalid_sse_argument();
+  }
+
+  std::string frame;
+  frame += "retry: ";
+  frame += std::to_string(value.count());
+  frame += "\n\n";
+  return stream_.write(std::move(frame));
+}
+
+stream_write_result sse_stream::send(const sse_event& event) {
+  if (contains_invalid_sse_field_byte(event.event) || contains_invalid_sse_field_byte(event.id)) {
+    return invalid_sse_argument();
+  }
+
+  std::string frame;
+  if (!event.event.empty()) {
+    append_sse_field_line(frame, "event", event.event);
+  }
+  if (!event.id.empty()) {
+    append_sse_field_line(frame, "id", event.id);
+  }
+  append_sse_data_lines(frame, event.data);
+  frame += '\n';
+  return stream_.write(std::move(frame));
+}
+
+stream_write_result sse_stream::comment(std::string_view value) {
+  std::string frame;
+  append_sse_comment_lines(frame, value);
+  frame += '\n';
+  return stream_.write(std::move(frame));
+}
+
+void sse_stream::close() {
+  stream_.end();
 }
 
 } // namespace uvp::http

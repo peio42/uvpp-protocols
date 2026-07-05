@@ -16,6 +16,7 @@ using namespace std::chrono_literals;
 UVP_TEST_CASE("http options expose configured limits") {
   auto options = uvp::http::server_options{}
     .max_header_bytes(32 * 1024)
+    .max_header_count(64)
     .max_body_bytes(1024 * 1024)
     .max_pending_responses_per_connection(8)
     .idle_timeout(30s)
@@ -23,6 +24,7 @@ UVP_TEST_CASE("http options expose configured limits") {
     .server_header(false);
 
   UVP_CHECK_EQ(options.max_header_bytes(), 32 * 1024U);
+  UVP_CHECK_EQ(options.max_header_count(), 64U);
   UVP_CHECK_EQ(options.max_body_bytes(), 1024 * 1024U);
   UVP_CHECK_EQ(options.max_pending_responses_per_connection(), 8U);
   UVP_CHECK(options.idle_timeout() == 30s);
@@ -32,6 +34,7 @@ UVP_TEST_CASE("http options expose configured limits") {
 
 UVP_TEST_CASE("http server options reject zero body limit") {
   UVP_CHECK_THROWS(uvp::http::server_options{}.max_body_bytes(0), std::invalid_argument);
+  UVP_CHECK_THROWS(uvp::http::server_options{}.max_header_count(0), std::invalid_argument);
 }
 
 UVP_TEST_CASE("http headers are case insensitive") {

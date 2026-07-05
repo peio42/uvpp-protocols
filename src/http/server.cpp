@@ -99,9 +99,6 @@ std::string serialize_response_head(
   for (const auto& [name, value] : response.headers()) {
     if (header_name_equals(name, "content-length")) {
       has_content_length = true;
-      if (chunked) {
-        continue;
-      }
     }
     if (header_name_equals(name, "connection")) {
       has_connection = true;
@@ -109,10 +106,14 @@ std::string serialize_response_head(
     if (header_name_equals(name, "server")) {
       has_server = true;
     }
+  }
+
+  for (const auto& [name, value] : response.headers()) {
+    if (header_name_equals(name, "content-length") && chunked) {
+      continue;
+    }
     if (header_name_equals(name, "transfer-encoding")) {
-      if (chunked) {
-        continue;
-      }
+      continue;
     }
     out << name << ": " << value << "\r\n";
   }
@@ -167,6 +168,10 @@ std::span<const std::byte> as_bytes(std::string& value) noexcept {
   return std::as_bytes(std::span{value.data(), value.size()});
 }
 
+bool is_streaming_body_mode(detail::body_mode mode) noexcept {
+  return mode == detail::body_mode::stream || mode == detail::body_mode::multipart_stream;
+}
+
 } // namespace
 
 struct server::impl {
@@ -188,6 +193,7 @@ struct server::impl {
     bool suppress_body = false;
     bool streaming = false;
     bool stream_headers_queued = false;
+    bool stream_chunked = true;
     bool stream_backpressured = false;
     bool stream_ended = false;
     bool response_hooks_ran = false;
@@ -200,7 +206,12 @@ struct server::impl {
     session(impl& owner, uvp::io::byte_stream stream)
         : owner_(owner),
           stream_(std::move(stream)),
-          timeout_timer_(owner.owner.loop()) {}
+          timeout_timer_(owner.owner.loop()) {
+      parser_.limits(detail::http1_limits{
+        owner_.owner.options_.max_header_bytes(),
+        owner_.owner.options_.max_header_count(),
+      });
+    }
 
     void start() {
       start_timeout(timeout_phase::header, owner_.owner.options_.header_timeout());
@@ -404,7 +415,7 @@ struct server::impl {
       active_request_->parsed_path = parsed_path;
       active_request_->req = std::move(req);
 
-      if (!active_request_->route || active_request_->route.body != detail::body_mode::stream) {
+      if (!active_request_->route || !is_streaming_body_mode(active_request_->route.body)) {
         if (active_request_->route && active_request_->route.body == detail::body_mode::none && request_has_body(message)) {
           active_request_->rejected = true;
           send_error(status::bad_request, false);
@@ -487,14 +498,17 @@ struct server::impl {
       if (active.route && active.received_body_bytes > route_body_limit(active.route)) {
         active.rejected = true;
         stop_timeout();
-        if (active.route.body == detail::body_mode::stream) {
+        if (is_streaming_body_mode(active.route.body)) {
           active.body_stream.emit_error(std::make_error_code(std::errc::message_size));
+          if (active.route.body == detail::body_mode::multipart_stream) {
+            return;
+          }
         }
         send_error(status::payload_too_large, false);
         return;
       }
 
-      if (active.route && active.route.body == detail::body_mode::stream) {
+      if (active.route && is_streaming_body_mode(active.route.body)) {
         active.body_stream.emit_data(std::as_bytes(std::span{chunk.data(), chunk.size()}));
         if (active.body_stream.paused()) {
           body_processing_paused_ = true;
@@ -514,7 +528,7 @@ struct server::impl {
         return;
       }
 
-      if (active->route && active->route.body == detail::body_mode::stream) {
+      if (active->route && is_streaming_body_mode(active->route.body)) {
         active->body_stream.emit_end();
         return;
       }
@@ -983,6 +997,7 @@ struct server::impl {
       }
 
       if (!slot.stream_headers_queued) {
+        slot.stream_chunked = !slot.res.headers().contains("content-length");
         slot.res.commit_headers();
         queue_stream_write(
           slot,
@@ -990,14 +1005,14 @@ struct server::impl {
             slot.res,
             !slot.close_after,
             owner_.owner.options_,
-            true,
+            slot.stream_chunked,
             slot.suppress_body));
         slot.stream_headers_queued = true;
       }
 
       if (!slot.suppress_body && !payload.empty()) {
         slot.stream_body_bytes += payload.size();
-        queue_stream_write(slot, serialize_chunk(std::move(payload)));
+        queue_stream_write(slot, slot.stream_chunked ? serialize_chunk(std::move(payload)) : std::move(payload));
       }
 
       flush_response_slots();
@@ -1017,6 +1032,7 @@ struct server::impl {
       slot.streaming = true;
       slot.stream_ended = true;
       if (!slot.stream_headers_queued) {
+        slot.stream_chunked = !slot.res.headers().contains("content-length");
         slot.res.commit_headers();
         queue_stream_write(
           slot,
@@ -1024,13 +1040,13 @@ struct server::impl {
             slot.res,
             !slot.close_after,
             owner_.owner.options_,
-            true,
+            slot.stream_chunked,
             slot.suppress_body),
           slot.suppress_body && slot.close_after);
         slot.stream_headers_queued = true;
       }
 
-      if (!slot.suppress_body) {
+      if (!slot.suppress_body && slot.stream_chunked) {
         queue_stream_write(slot, "0\r\n\r\n", slot.close_after);
       }
       slot.res.complete_stream();
@@ -1181,7 +1197,7 @@ struct server::impl {
       case timeout_phase::body: {
         const auto error = std::make_error_code(std::errc::timed_out);
         timeout_closing_ = true;
-        if (active_request_ && active_request_->route && active_request_->route.body == detail::body_mode::stream) {
+        if (active_request_ && active_request_->route && is_streaming_body_mode(active_request_->route.body)) {
           active_request_->body_stream.emit_error(error);
         }
         notify_stream_errors(error);

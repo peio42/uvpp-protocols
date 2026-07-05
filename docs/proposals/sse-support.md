@@ -1,12 +1,14 @@
 # Server-Sent Events Support Proposal
 
-Status: Draft, not implemented
+Status: Implemented for the initial helper; automatic heartbeat scheduling is
+tracked separately.
 
 ## Current State
 
-- Implemented: HTTP streaming responses with drain, cancel, and error hooks.
-- Not implemented: `response::sse()`, `sse_stream`, SSE formatting, headers,
-  retry frames, comments, and heartbeat support.
+- Implemented: `response::sse()`, `sse_stream`, SSE formatting, headers, retry
+  frames, manual comments, and HTTP streaming integration with drain, cancel,
+  and error hooks.
+- Not implemented: automatic heartbeat support.
 
 ## Scope
 
@@ -20,12 +22,18 @@ The first implementation should cover:
 - `response::sse()` as an ergonomic wrapper over `response::stream()`;
 - automatic SSE response headers;
 - event, retry, and comment formatting;
-- optional heartbeat comments;
-- close, drain, and error callbacks;
+- manual heartbeat comments through `comment()`;
+- cancel, drain, and error callbacks aligned with `streaming_response`;
 - the same backpressure behavior as HTTP streaming responses.
 
 Client-side EventSource behavior, application replay logs, and generic event
 bus abstractions are outside the initial scope.
+
+Automatic heartbeat scheduling is also outside this first implementation. It
+needs an owned timer tied to the HTTP response slot or another long-lived SSE
+state object, which is a broader lifetime decision than formatting SSE frames.
+That follow-up is tracked in
+[SSE automatic heartbeat scheduling](sse-automatic-heartbeats.md).
 
 ## Public API Shape
 
@@ -33,14 +41,12 @@ The intended route shape is:
 
 ```cpp
 srv.get("/events", [](uvp::http::request& req, uvp::http::response& res) {
-  auto sse = res.sse(uvp::http::sse_options{
-    .heartbeat = std::chrono::seconds{15},
-  });
+  auto sse = res.sse();
 
   auto last_id = req.header("Last-Event-ID");
 
-  sse.on_close([] {
-    // Unsubscribe, stop timers, release resources.
+  sse.on_cancel([] {
+    // Unsubscribe application-owned work after connection cancellation.
   });
 
   sse.retry(std::chrono::seconds{5});
@@ -68,8 +74,6 @@ struct sse_event {
 };
 
 struct sse_options {
-  std::chrono::milliseconds heartbeat = std::chrono::milliseconds{0};
-  std::string_view heartbeat_comment = "ping";
   bool no_cache = true;
   bool x_accel_buffering_no = true;
 };
@@ -78,7 +82,7 @@ class sse_stream {
 public:
   bool active() const noexcept;
 
-  sse_stream& on_close(std::function<void()> callback);
+  sse_stream& on_cancel(std::function<void()> callback);
   sse_stream& on_drain(std::function<void()> callback);
   sse_stream& on_error(std::function<void(std::error_code)> callback);
 
@@ -89,11 +93,23 @@ public:
 };
 ```
 
-`on_close()` is the application cleanup hook. It should map to the underlying
-stream cancellation and normal close behavior in a way that runs user cleanup at
-most once. `on_error()` reports write failures and connection errors. `on_drain`
-follows `streaming_response::on_drain()` and lets applications resume queued
-event writes after backpressure clears.
+`sse_stream` follows the same handle model as `streaming_response`: it is a
+move-only application handle, not an owning detached protocol session. A handler
+that wants to keep publishing events after it returns must store the
+`sse_stream` in application-owned state. A local `sse_stream` is useful for
+setting headers, registering callbacks, sending immediate frames, or closing
+immediately, but destroying the handle must not implicitly close the HTTP
+response.
+
+`on_cancel()` maps directly to `streaming_response::on_cancel()` and is the
+application cleanup hook for connection close, server shutdown, timeout, or any
+other response-slot cancellation before normal completion. It should not run for
+the normal application path where `close()` ends the underlying stream.
+`on_error()` maps to `streaming_response::on_error()` and reports write failures
+or connection errors. If an error also cancels the response slot, `on_error()`
+may run before `on_cancel()`, matching the existing HTTP streaming behavior.
+`on_drain()` maps to `streaming_response::on_drain()` and lets applications
+resume queued domain events after backpressure clears.
 
 ## Response Headers
 
@@ -122,7 +138,9 @@ itself.
 
 ## Event Formatting
 
-`sse_stream::send()` formats one event according to the EventSource wire format:
+`sse_stream::send()` formats one event according to the EventSource wire
+format. Formatting is deterministic and does not perform JSON serialization,
+escaping, compression, or replay bookkeeping:
 
 ```text
 event: ready
@@ -135,12 +153,48 @@ Rules:
 
 - omit `event:` when `event` is empty;
 - omit `id:` when `id` is empty;
-- omit `data:` only when the application intentionally sends an empty data
-  event;
-- split multi-line data into one `data:` line per input line;
+- always emit at least one `data:` line, so an empty `data` value dispatches an
+  empty browser event rather than becoming an id-only control frame;
+- split multi-line data into one `data:` line per input line, treating `\n`,
+  `\r\n`, and lone `\r` as line separators;
+- preserve a trailing empty data line, so `data == "a\n"` is sent as
+  `data: a`, then `data:`, and dispatches `a\n` in the browser;
 - terminate every event with a blank line;
-- validate or reject raw CR/LF in `event` and `id`;
-- encode `retry` as milliseconds and require a positive duration.
+- validate or reject raw CR, LF, and NUL bytes in `event` and `id`;
+- pass `data` bytes through unchanged other than line splitting; callers own
+  UTF-8 correctness for the declared `text/event-stream; charset=utf-8` content
+  type;
+- return `stream_write_result::rejected(std::errc::invalid_argument)` for
+  invalid event fields and perform no partial write.
+
+Field separators should follow the common readable form:
+
+```text
+event: ready
+id: 1
+data: {"ok":true}
+data:
+
+```
+
+For non-empty values, emit `field: value`. For an empty field value, emit
+`field:` without a trailing space.
+
+`retry(value)` writes a retry frame:
+
+```text
+retry: 5000
+
+```
+
+Rules:
+
+- encode the duration as a decimal millisecond count;
+- require a strictly positive duration;
+- reject durations that cannot be represented as a non-negative millisecond
+  count;
+- return `stream_write_result::rejected(std::errc::invalid_argument)` for
+  invalid durations and perform no partial write.
 
 `comment(value)` writes a comment frame:
 
@@ -152,6 +206,15 @@ Rules:
 Comments do not dispatch browser events, so they are the right primitive for
 manual heartbeats.
 
+Comment formatting rules:
+
+- split `value` on `\n`, `\r\n`, and lone `\r`;
+- emit one comment line per input line;
+- preserve trailing empty comment lines;
+- emit `:` for an empty comment value and `: value` for a non-empty line;
+- terminate the comment frame with a blank line;
+- return the underlying stream write result.
+
 ## Heartbeats
 
 Applications may send manual heartbeats:
@@ -160,23 +223,14 @@ Applications may send manual heartbeats:
 sse.comment("ping");
 ```
 
-They may also request automatic heartbeat comments:
+Manual heartbeat writes use the same `stream_write_result` model as any other
+SSE write. If `comment()` returns accepted backpressure, the application should
+wait for `on_drain()` before sending more heartbeat or domain frames.
 
-```cpp
-auto sse = res.sse(uvp::http::sse_options{
-  .heartbeat = std::chrono::seconds{15},
-  .heartbeat_comment = "ping",
-});
-```
-
-Automatic heartbeats should use a uvpp timer owned by the SSE stream state or
-by the HTTP response slot. The timer must stop when the stream closes, when the
-connection is cancelled, or when the user calls `close()`.
-
-Heartbeat writes must respect backpressure. If a heartbeat cannot be accepted
-because the stream is closed, the timer should stop. If a heartbeat is accepted
-but `should_continue()` is false, later heartbeat ticks should not pile up an
-unbounded queue.
+Automatic heartbeat comments can be added later behind an explicit user option,
+but the first SSE helper should not add a timer-owning state machine just for
+that feature. See
+[SSE automatic heartbeat scheduling](sse-automatic-heartbeats.md).
 
 ## Last-Event-ID
 
@@ -237,9 +291,11 @@ with future WebSocket send-queue semantics.
 `close()` should end the underlying streaming response. It is a normal
 application close and should not call the error callback.
 
-Connection close, server shutdown, write failure, or response cancellation
-should make `active() == false` and run `on_close()` at most once. Write errors
-should also call `on_error()` with the underlying `std::error_code`.
+Connection close, server shutdown, timeout, write failure, or response
+cancellation should make `active() == false` and run `on_cancel()` at most once
+when the stream did not complete normally. Write errors should also call
+`on_error()` with the underlying `std::error_code`, following the current HTTP
+streaming callback order.
 
 Callbacks must not throw through libuv callbacks. If the HTTP server already
 has a policy for uncaught handler exceptions, SSE callback exceptions should
@@ -260,5 +316,6 @@ write queues, pending-write limits, chunked transfer encoding, and connection
 keep-alive behavior.
 
 This means `uvp::http::sse_stream` can live in the HTTP module initially. A
-separate `uvp::sse` namespace is only needed if the project later adds reusable
-SSE client support, event codecs, or non-HTTP composition points.
+separate `uvp::sse` namespace is not planned for the initial implementation. It
+would only be worth revisiting if the project later adds reusable SSE client
+support, event codecs, or credible non-HTTP composition points.

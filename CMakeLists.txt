@@ -38,8 +38,10 @@ target_sources(
   PRIVATE
     src/io/transport.cpp
     src/http/detail/http1_state_machine.cpp
+    src/http/error.cpp
     src/http/headers.cpp
     src/http/method.cpp
+    src/http/multipart.cpp
     src/http/request.cpp
     src/http/response.cpp
     src/http/route_path.cpp
@@ -47,6 +49,7 @@ target_sources(
     src/http/router.cpp
     src/http/server.cpp
     src/http/server_options.cpp
+    src/http/static_files.cpp
     src/http/status.cpp
     src/http/upgrade.cpp
     src/websocket/detail/handshake.cpp
@@ -100,6 +103,7 @@ if(UVPP_PROTOCOLS_BUILD_TESTS)
     tests/http_router_test.cpp
     tests/http_server_integration_test.cpp
     tests/io_test.cpp
+    tests/multipart_test.cpp
     tests/websocket_test.cpp)
   target_include_directories(uvpp_protocols_tests PRIVATE ${PROJECT_SOURCE_DIR})
   target_link_libraries(uvpp_protocols_tests PRIVATE uvpp::protocols uvpp::uvpp)
