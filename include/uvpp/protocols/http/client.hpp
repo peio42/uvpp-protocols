@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace uv {
@@ -23,6 +24,9 @@ struct client_options {
   std::chrono::milliseconds connect_timeout{0};
   std::chrono::milliseconds response_header_timeout{0};
   std::chrono::milliseconds response_body_timeout{0};
+  bool tls_default_verify_paths = true;
+  std::string tls_ca_file;
+  std::string tls_ca_path;
 };
 
 using client_callback = std::function<void(uvp::result<http::response>)>;

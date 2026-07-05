@@ -36,6 +36,8 @@ public:
       return "HTTP client DNS resolution failed";
     case errc::client_connect_failed:
       return "HTTP client connection failed";
+    case errc::client_tls_failed:
+      return "HTTP client TLS handshake failed";
     case errc::client_malformed_response:
       return "HTTP client response is malformed";
     case errc::client_body_limit_exceeded:

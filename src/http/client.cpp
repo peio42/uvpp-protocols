@@ -4,6 +4,7 @@
 #include <uvpp/protocols/http/error.hpp>
 #include <uvpp/protocols/http/headers.hpp>
 #include <uvpp/protocols/io/tcp_connector.hpp>
+#include <uvpp/protocols/tls.hpp>
 #include <uvpp/protocols/url.hpp>
 #include <uvpp/uv.hpp>
 #include <uvpp/handles/timer.hpp>
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <exception>
 #include <memory>
 #include <span>
 #include <string>
@@ -193,7 +195,8 @@ public:
     }
 
     url_ = std::move(parsed).value();
-    if (uvp::scheme_id(url_) != uvp::url_scheme::http) {
+    const auto scheme = uvp::scheme_id(url_);
+    if (scheme != uvp::url_scheme::http && scheme != uvp::url_scheme::https) {
       complete(make_client_error(errc::client_unsupported_scheme));
       return request_operation{shared_from_this()};
     }
@@ -226,6 +229,7 @@ public:
     cancelled_ = true;
     dns_operation_.cancel();
     connect_operation_.cancel();
+    tls_operation_.cancel();
     close_stream();
     complete(make_client_error(errc::client_cancelled));
   }
@@ -279,6 +283,7 @@ private:
     timed_out_ = true;
     dns_operation_.cancel();
     connect_operation_.cancel();
+    tls_operation_.cancel();
     close_stream();
     complete(make_client_error(errc::client_timeout, timeout_phase_name(phase)));
   }
@@ -343,7 +348,67 @@ private:
       return;
     }
 
-    stream_ = std::move(result).value();
+    auto stream = std::move(result).value();
+    if (uvp::scheme_id(url_) == uvp::url_scheme::https) {
+      start_tls(std::move(stream));
+      return;
+    }
+
+    stream_ = std::move(stream);
+    write_request();
+  }
+
+  void start_tls(uvp::io::byte_stream lower) {
+    try {
+      auto context = uvp::tls::client_context{}
+        .server_name(url_.hostname())
+        .alpn({"http/1.1"});
+      if (options_.tls_default_verify_paths) {
+        context.default_verify_paths();
+      }
+      if (!options_.tls_ca_file.empty()) {
+        context.ca_file(options_.tls_ca_file);
+      }
+      if (!options_.tls_ca_path.empty()) {
+        context.ca_path(options_.tls_ca_path);
+      }
+
+      auto self = shared_from_this();
+      tls_operation_ = uvp::tls::connect(
+        std::move(lower),
+        std::move(context),
+        [self](uvp::tls::handshake_result result) mutable {
+          self->on_tls_connected(std::move(result));
+        });
+    } catch (const std::exception& error) {
+      complete(make_client_error(errc::client_tls_failed, error.what()));
+    }
+  }
+
+  void on_tls_connected(uvp::tls::handshake_result result) {
+    if (completed_) {
+      return;
+    }
+    if (cancelled_) {
+      if (timed_out_) {
+        return;
+      }
+      complete(make_client_error(errc::client_cancelled));
+      return;
+    }
+    if (!result) {
+      complete(wrap_client_error(errc::client_tls_failed, result.error()));
+      return;
+    }
+
+    const auto selected_alpn = result.selected_alpn();
+    if (!selected_alpn.empty() && selected_alpn != "http/1.1") {
+      std::move(result).stream().close();
+      complete(make_client_error(errc::client_tls_failed, "unsupported TLS ALPN protocol"));
+      return;
+    }
+
+    stream_ = std::move(result).stream();
     write_request();
   }
 
@@ -444,6 +509,7 @@ private:
   uvp::io::tcp_connector connector_;
   uvp::dns::resolve_operation dns_operation_;
   uvp::io::connect_operation connect_operation_;
+  uvp::tls::handshake_operation tls_operation_;
   uvp::io::byte_stream stream_;
   std::shared_ptr<uv::timer> timeout_timer_;
   std::vector<std::byte> write_payload_;

@@ -1,8 +1,7 @@
 # HTTP Client Proposal
 
-Status: Initial plain HTTP one-shot client implemented; reusable TCP connector
-extracted; HTTPS, streaming, pooling, redirects, proxying, and timeouts remain
-open
+Status: Initial HTTP/HTTPS one-shot client implemented; streaming, pooling,
+redirects, proxying, and broader timeout coverage remain open
 
 ## Decision
 
@@ -46,17 +45,19 @@ transport/session to the WebSocket module.
   request/response objects, `uvp::io::byte_stream`, and listener composition.
 - Implemented: initial `uvp::http::client`, `client_options`, cancellable
   request operation, URL + DNS + TCP orchestration, HTTP/1.1 request writer,
-  buffered response parser, response body limit, and one-shot `GET` over plain
+  buffered response parser, response body limit, and one-shot `GET` over
   `http://` URLs.
 - Implemented: reusable `uvp::io::tcp_connector` below HTTP, with sequential
   address attempts, typed connect errors, byte-stream conversion, and
   cancellation.
+- Implemented: HTTPS one-shot requests through `uvp::tls::connect()`, SNI from
+  the URL host, hostname verification by default, configurable CA file/path,
+  and ALPN `http/1.1`.
 - Implemented: initial one-shot client phase timeouts for DNS resolution, TCP
   connect, response headers, and buffered response body.
 - Drafted separately or still open: TLS stream/listener support, HTTP/2
-  support, WebSocket client support, HTTPS client integration, connection
-  pooling, redirects, proxying, phase timeouts, and streaming upload/download
-  API.
+  support, WebSocket client support, connection pooling, redirects, proxying,
+  broader phase timeouts, and streaming upload/download API.
 
 ## Goals
 
@@ -443,7 +444,7 @@ Suggested first implementation slice:
 2. [x] DNS resolution API;
 3. [x] HTTP/1.1 one-shot `GET` over plain HTTP with buffered body limit;
 4. [x] outbound TCP connect helper extraction;
-5. HTTPS via TLS connect and hostname verification;
+5. [x] HTTPS via TLS connect and hostname verification;
 6. streaming response body;
 7. streaming request body;
 8. basic keep-alive and pool reuse for HTTP/1.1;

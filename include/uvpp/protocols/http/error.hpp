@@ -18,6 +18,7 @@ enum class errc {
   client_unsupported_scheme,
   client_dns_failed,
   client_connect_failed,
+  client_tls_failed,
   client_malformed_response,
   client_body_limit_exceeded,
   client_cancelled,

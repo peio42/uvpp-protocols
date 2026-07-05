@@ -343,20 +343,25 @@ private:
     tcp_ = std::make_unique<uv::tcp>(*loop_);
 
     auto self = shared_from_this();
-    if (candidate.family == dns::address_family::ipv6) {
-      tcp_->connect(
-        connect_request_,
-        uv::ipv6{candidate.endpoint.host, static_cast<int>(candidate.endpoint.port)},
-        [self](uv::connect_request&, uv::result result) {
-          self->on_connected(result);
-        });
-    } else {
-      tcp_->connect(
-        connect_request_,
-        uv::ipv4{candidate.endpoint.host, static_cast<int>(candidate.endpoint.port)},
-        [self](uv::connect_request&, uv::result result) {
-          self->on_connected(result);
-        });
+    try {
+      if (candidate.family == dns::address_family::ipv6) {
+        tcp_->connect(
+          connect_request_,
+          uv::ipv6{candidate.endpoint.host, static_cast<int>(candidate.endpoint.port)},
+          [self](uv::connect_request&, uv::result result) {
+            self->on_connected(result);
+          });
+      } else {
+        tcp_->connect(
+          connect_request_,
+          uv::ipv4{candidate.endpoint.host, static_cast<int>(candidate.endpoint.port)},
+          [self](uv::connect_request&, uv::result result) {
+            self->on_connected(result);
+          });
+      }
+    } catch (const std::system_error& error) {
+      last_error_ = error.code();
+      close_current_then_next();
     }
   }
 

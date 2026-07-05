@@ -107,8 +107,8 @@ Available:
 - `uvp::dns`: asynchronous host/service resolution over libuv `getaddrinfo`,
   with typed address candidates and cancellable operations.
 - `uvp::http`: HTTP/1.1 server, multipart request bodies, Server-Sent Events
-  response helpers, and an initial one-shot HTTP/1.1 client for plain
-  `http://` URLs with phase timeouts are available.
+  response helpers, and an initial one-shot HTTP/1.1 client for `http://` and
+  `https://` URLs with phase timeouts are available.
 - `uvp::io`: byte-stream/listener transport abstractions and reusable outbound
   TCP connection helpers with connect timeouts.
 - `uvp::url`: shared parsed URL values and helpers for client-side protocol
@@ -221,8 +221,9 @@ The current implementation includes HTTP route ergonomics, chunked responses,
 request body policies, request body streaming, the generic HTTP upgrade hook,
 server-side WebSocket handshake/framing, WebSocket sessions, byte-stream
 adaptation, TLS stream and listener adapters, HTTP over TLS through listener
-composition, typed JSON request bodies, multipart request streaming, runnable
-examples, and focused tests. Remaining TLS hardening topics are tracked in the
+composition, HTTPS one-shot client requests, typed JSON request bodies,
+multipart request streaming, runnable examples, and focused tests. Remaining TLS
+hardening topics are tracked in the
 TLS policy/identity and graceful shutdown proposals.
 
 ## License

@@ -3,22 +3,106 @@
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <optional>
 #include <uvpp/protocols/http.hpp>
+#include <uvpp/protocols/tls.hpp>
 #include <uvpp/uv.hpp>
 
-#include <string>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <system_error>
 #include <variant>
 #include <vector>
 
 namespace {
 
+constexpr auto test_certificate = R"(-----BEGIN CERTIFICATE-----
+MIIDCTCCAfGgAwIBAgIUeCbcn8RBu5za2QE14pO+pVrZ0jIwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcwNTExMDc0MFoXDTM2MDcw
+MjExMDc0MFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAw6pTRpJrXyGV95CIl18Voh3UZsqyM+EEKK08tJCoG6Q+
+etlNKe7Z8gSfXvYdOG9jYQwT9W+eeLQyk8EPgr9gPxxu2Yg4DvVTC5naSu+Cx122
+uAlZ46FOecAhpcamuC1Ie0/CwbS7QI65Cra150asIZW9Cg0WaIU19OCD8wMallgM
+2BPk0mWSUjFTVt0v2hUGITarWig4NYHj5vWW00yjFOs1LxV8y6bM70judC/g/2Z7
+RTuRk1+vyUfoW8Q+soTaYbClws6uK1FBK+gA88RKZbi17vKavWjh3wrNkDHnPhD6
+vUo5vnTeK4luDuf72x7cvDV5vpamqodK9UW3j4zxAQIDAQABo1MwUTAdBgNVHQ4E
+FgQUM9+pT084oqrPS2tNVSMRuLFTZH4wHwYDVR0jBBgwFoAUM9+pT084oqrPS2tN
+VSMRuLFTZH4wDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAMrTm
+gRUcFJvFlHiEB3Nxd4BMPcMA+ci02zXhn8SF1oN1udpcNwzU6oJ+xHQH0Af52dUg
+m00dRA0DnjsI3PU4f4WQ8Dx1/d+/29xT3AIaDQgO0B2VmKX0BTaJzJVIzV/9iOFn
+BLfczzMRL36SL+Obb87jsVMAoXP7KGtp5qTAwctZ+kC/K75D71q3I6gt7OL/2P8C
+EJ3VXt1Ni649srglFWs5ravJbIc7gmR9F5jFT6yTCyw+tLtw8WpA1cbEXJrkAXre
+Np97aGfgHVw5AdhG9vf4BGO/WvT4ZSdaRaFUYBiF1SJyNzizyor112/UCdaxgFgr
+7IVpk0bnemE5dOl/sw==
+-----END CERTIFICATE-----
+)";
+
+constexpr auto test_private_key = R"(-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDDqlNGkmtfIZX3
+kIiXXxWiHdRmyrIz4QQorTy0kKgbpD562U0p7tnyBJ9e9h04b2NhDBP1b554tDKT
+wQ+Cv2A/HG7ZiDgO9VMLmdpK74LHXba4CVnjoU55wCGlxqa4LUh7T8LBtLtAjrkK
+trXnRqwhlb0KDRZohTX04IPzAxqWWAzYE+TSZZJSMVNW3S/aFQYhNqtaKDg1gePm
+9ZbTTKMU6zUvFXzLpszvSO50L+D/ZntFO5GTX6/JR+hbxD6yhNphsKXCzq4rUUEr
+6ADzxEpluLXu8pq9aOHfCs2QMec+EPq9Sjm+dN4riW4O5/vbHty8NXm+lqaqh0r1
+RbePjPEBAgMBAAECggEABgU5H7xEmn49j4r+cO3ni//v96O3/Pmo95lw+ztSONuC
+YqRKCAbF5Pj4cGMRPhnLTIKjIJOpJByjS8GOeR7rVrXIwV+8HdW1ku9OdKzO8NR0
+2U/MWMEvWXascl3c5mDaUJUBMJWfh1p83hQGH9IgXL4vPV5uuJOUt+6qkLEhQcvw
+6uDN/tcxiCodCvTP5n5Zq/aUljbXWYMrzh5HJ3rVrzNTvc9uiTGNqC9qfC0EEs2p
+vUjpJrPe3KlVtlv0K3f2XUYOgQht3Rm5100R9MhYZ+D/ulo0POZYWcS3JqBMt01D
+/kA4KqBZlpRR/SH9nf2fixVJCZzCyvOTS9GJGCBsKwKBgQD5RiavdNKmbaNOPjsC
+N2pkuwiBlHfsGRh/K1kRXdu0KPXp0tRpppM67Z7katRR80fj7rr+iv9E3qpAF2dx
+Qa+KqiYPTugXwHQ1jEjYq2em2wbKRs8JB2R+nyWOowL0T5W9PvaCNn7KZ0dm4Gtl
++V4tf6jaMrJkxQ91vIOqVsGLwwKBgQDI8d/k/G5gEo6AW78UBAHjsS1lJg4LMXuy
+pSFXuRu6Kx2b9TXLp5KKvWr8UGM1MBSetTCaMO9r7ZMCYPggGMZaKRxLSRAM/Mi9
+i1IQf2vJJ57dM/xkkO+54V7wriheERQNwda+FrenGqkrHXpEwu+nFdm7THDel6mx
+n/3rv8536wKBgF2uhZ9vMjOmBLfFH3wnw25z9DBu0dsDW3d/nQuv0IAW3MSxnW7P
+UYnV/98sXvsliSEaeWBscJ87Z5SKty+TVhuw8njSWNuEUqhFPqNfV6cXraebkPd9
+tcD4oq7GiLe0qTvkS9SIEoKS6fy53uMGIuTKk3TdlLnWbYb8ACemTzrtAoGBAI1X
+pRcagEDPjLC42BSqJPIVpEqrk+FHsyybfnKH3/r5bOBQgMB5ZFh2mBRWLxIwebCQ
+3lj25tHR0EAyGRXql0q/9Aj4oXOhM0ov/09fcV+SoOoTMQtD73ueDPvaZMaV2Lc8
+i2I19IRz+l47Y8+OFqg+dGKMiC/qGhC46xCyX/Z1AoGBAIABbh2187I4SoOVbLKG
+t/PpNQ7uV5WVnWrGyng7UXnVTTOjAeSdPvX4VQIKL9DPa7V22SnYkPSjelTsl2Kg
+U7vDLTZ/3gZPWdGQpwmNkmbHyIJ62cXvHUObmW3bmd4lFtjWXE4s3w2/ewLLgAFg
+Jmcgq7zyPeY+rXdqNowARHbF
+-----END PRIVATE KEY-----
+)";
+
 std::vector<std::byte> bytes(std::string_view text) {
   auto out = std::vector<std::byte>(text.size());
   std::memcpy(out.data(), text.data(), text.size());
   return out;
+}
+
+std::filesystem::path test_temp_directory() {
+  static const auto directory = [] {
+    const auto base = std::filesystem::temp_directory_path();
+    for (auto index = 0; index != 1000; ++index) {
+      auto candidate = base / ("uvpp-protocols-http-client-test-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(index));
+      auto error = std::error_code{};
+      if (std::filesystem::create_directory(candidate, error)) {
+        return candidate;
+      }
+      if (error && !std::filesystem::exists(candidate)) {
+        throw std::filesystem::filesystem_error{"failed to create HTTP client test temp directory", candidate, error};
+      }
+    }
+
+    throw std::runtime_error{"failed to allocate unique HTTP client test temp directory"};
+  }();
+
+  return directory;
+}
+
+std::filesystem::path write_test_file(std::string_view name, std::string_view content) {
+  auto path = test_temp_directory() / name;
+  auto file = std::ofstream(path);
+  file << content;
+  return path;
 }
 
 } // namespace
@@ -58,12 +142,70 @@ UVP_TEST_CASE("http client performs a plain get request") {
   UVP_CHECK(completed);
 }
 
+UVP_TEST_CASE("http client performs an https get request") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  server.get("/secure", [](uvp::http::request&, uvp::http::response& res) {
+    res.header("x-secure", "yes");
+    res.text("hello tls client");
+  });
+
+  const auto cert_path = write_test_file("https-client-cert.pem", test_certificate);
+  const auto key_path = write_test_file("https-client-key.pem", test_private_key);
+
+  auto context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string())
+    .alpn({"http/1.1"});
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto secure = uvp::io::stream_listener{
+    uvp::tls::listener{
+      uvp::io::stream_listener{std::move(tcp)},
+      std::move(context),
+      uvp::tls::listener_options{}
+        .handshake_timeout(std::chrono::seconds{2})
+        .max_pending_handshakes(8)}};
+  const auto port = std::get<uvp::io::tcp_endpoint>(secure.local_endpoint()).port;
+  server.listen(std::move(secure));
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .connect_timeout = std::chrono::seconds{2},
+      .response_header_timeout = std::chrono::seconds{2},
+      .response_body_timeout = std::chrono::seconds{2},
+      .tls_default_verify_paths = false,
+      .tls_ca_file = cert_path.string(),
+    });
+
+  auto completed = false;
+  auto request = client.get(
+    "https://localhost:" + std::to_string(port) + "/secure",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().status_code(), 200U);
+      UVP_CHECK_EQ(result.value().headers().get("x-secure"), "yes");
+      UVP_CHECK_EQ(result.value().body(), "hello tls client");
+      server.close();
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
 UVP_TEST_CASE("http client rejects unsupported schemes") {
   uv::loop loop;
   uvp::http::client client(loop);
 
   auto completed = false;
-  auto request = client.get("https://example.com/", [&](uvp::result<uvp::http::response> result) {
+  auto request = client.get("ftp://example.com/", [&](uvp::result<uvp::http::response> result) {
     completed = true;
     UVP_CHECK(!result);
     UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_unsupported_scheme);

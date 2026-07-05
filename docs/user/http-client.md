@@ -1,7 +1,7 @@
 # HTTP Client
 
 `uvp::http::client` provides the first uvpp-native client path: a one-shot
-buffered HTTP/1.1 request over plain `http://` URLs.
+buffered HTTP/1.1 request over `http://` and `https://` URLs.
 
 ```cpp
 #include <uvpp/protocols/http.hpp>
@@ -9,7 +9,7 @@ buffered HTTP/1.1 request over plain `http://` URLs.
 uv::loop loop;
 uvp::http::client client(loop);
 
-auto op = client.get("http://127.0.0.1:8080/health",
+auto op = client.get("https://api.example.com/health",
   [](uvp::result<uvp::http::response> result) {
     if (!result) {
       auto error = result.error().code;
@@ -26,16 +26,27 @@ loop.run();
 The first implementation composes the shared URL and DNS foundations:
 
 ```text
-URL -> DNS -> TCP connect -> HTTP/1.1 request -> buffered response
+URL -> DNS -> TCP connect -> optional TLS/ALPN -> HTTP/1.1 request -> buffered response
 ```
 
 Current limits:
 
-- only `http://` is supported;
-- HTTPS/TLS, pooling, redirects, proxying, and streaming request or response
-  bodies are follow-up work;
+- pooling, redirects, proxying, and streaming request or response bodies are
+  follow-up work;
 - responses are buffered and bounded by `client_options::max_body_bytes`;
 - requests use `Connection: close`, so connections are not reused yet.
+
+HTTPS uses `uvp::tls::connect()` internally. The client sets SNI and hostname
+verification from the URL host, loads default verify paths by default, and offers
+ALPN `http/1.1`. Additional trust roots can be configured on the client:
+
+```cpp
+uvp::http::client client(
+  loop,
+  uvp::http::client_options{
+    .tls_ca_file = "local-test-ca.pem",
+  });
+```
 
 Timeouts are phase-scoped and disabled by default. Configure the phases needed
 by the application:
@@ -50,6 +61,7 @@ uvp::http::client client(
     .connect_timeout = std::chrono::seconds{3},
     .response_header_timeout = std::chrono::seconds{5},
     .response_body_timeout = std::chrono::seconds{30},
+    .tls_default_verify_paths = true,
   });
 ```
 
