@@ -11,6 +11,9 @@ enum class errc {
   verification_failed,
   protocol_error,
   closed,
+  cancelled,
+  timeout,
+  pending_handshake_limit,
 };
 
 const std::error_category& error_category() noexcept;

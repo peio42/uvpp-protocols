@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string>
 
 #include <uvpp/protocols/io/byte_stream.hpp>
@@ -32,7 +33,26 @@ private:
 
 using handshake_callback = std::function<void(handshake_result)>;
 
-void accept(uvp::io::byte_stream lower, server_context context, handshake_callback callback);
-void connect(uvp::io::byte_stream lower, client_context context, handshake_callback callback);
+class handshake_operation {
+public:
+  struct state {
+    virtual ~state() = default;
+    virtual void cancel(uvp::error error) = 0;
+    virtual bool active() const noexcept = 0;
+  };
+
+  handshake_operation() = default;
+  explicit handshake_operation(std::shared_ptr<state> self);
+
+  void cancel();
+  void cancel(uvp::error error);
+  [[nodiscard]] bool active() const noexcept;
+
+private:
+  std::shared_ptr<state> self_;
+};
+
+handshake_operation accept(uvp::io::byte_stream lower, server_context context, handshake_callback callback);
+handshake_operation connect(uvp::io::byte_stream lower, client_context context, handshake_callback callback);
 
 } // namespace uvp::tls

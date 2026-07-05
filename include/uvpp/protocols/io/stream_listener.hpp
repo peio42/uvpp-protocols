@@ -11,6 +11,10 @@ namespace uv {
 class loop;
 } // namespace uv
 
+namespace uvp::tls {
+class listener;
+} // namespace uvp::tls
+
 namespace uvp::io {
 
 class accept_result {
@@ -35,7 +39,14 @@ using accept_callback = std::function<void(accept_result)>;
 
 class stream_listener {
 public:
-  struct concept_;
+  struct concept_ {
+    virtual ~concept_() = default;
+
+    virtual uv::loop& loop() noexcept = 0;
+    virtual void listen(accept_callback on_accept) = 0;
+    virtual void close() = 0;
+    virtual endpoint local_endpoint() const = 0;
+  };
 
   stream_listener() = default;
   ~stream_listener();
@@ -58,6 +69,7 @@ public:
 private:
   friend class tcp_listener;
   friend class pipe_listener;
+  friend class uvp::tls::listener;
 
   explicit stream_listener(std::unique_ptr<concept_> self);
 

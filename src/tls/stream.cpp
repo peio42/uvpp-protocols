@@ -61,7 +61,7 @@ private:
   std::shared_ptr<tls_state> state_;
 };
 
-class tls_state final : public std::enable_shared_from_this<tls_state> {
+class tls_state final : public handshake_operation::state, public std::enable_shared_from_this<tls_state> {
 public:
   enum class mode {
     server,
@@ -179,6 +179,14 @@ public:
     } else {
       close_lower();
     }
+  }
+
+  void cancel(uvp::error error) override {
+    fail(std::move(error));
+  }
+
+  bool active() const noexcept override {
+    return !open_ && !closed_ && !failed_;
   }
 
   uvp::io::endpoint local_endpoint() const {
@@ -539,6 +547,23 @@ void configure_client_ssl(SSL* ssl, const client_context& context) {
 
 } // namespace
 
+handshake_operation::handshake_operation(std::shared_ptr<state> self)
+    : self_(std::move(self)) {}
+
+void handshake_operation::cancel() {
+  cancel(uvp::error{make_error_code(errc::cancelled), "TLS handshake cancelled"});
+}
+
+void handshake_operation::cancel(uvp::error error) {
+  if (self_) {
+    self_->cancel(std::move(error));
+  }
+}
+
+bool handshake_operation::active() const noexcept {
+  return self_ && self_->active();
+}
+
 handshake_result::handshake_result(uvp::io::byte_stream stream, std::string selected_alpn)
     : stream_(std::move(stream)),
       selected_alpn_(std::move(selected_alpn)),
@@ -567,7 +592,7 @@ const uvp::error& handshake_result::error() const& {
   return error_;
 }
 
-void accept(uvp::io::byte_stream lower, server_context context, handshake_callback callback) {
+handshake_operation accept(uvp::io::byte_stream lower, server_context context, handshake_callback callback) {
   auto* ssl = make_ssl(context_access::native(context));
   auto state = std::make_shared<tls_state>(
     std::move(lower),
@@ -575,9 +600,10 @@ void accept(uvp::io::byte_stream lower, server_context context, handshake_callba
     tls_state::mode::server,
     std::move(callback));
   state->start();
+  return handshake_operation{std::move(state)};
 }
 
-void connect(uvp::io::byte_stream lower, client_context context, handshake_callback callback) {
+handshake_operation connect(uvp::io::byte_stream lower, client_context context, handshake_callback callback) {
   auto* ssl = make_ssl(context_access::native(context));
   configure_client_ssl(ssl, context);
 
@@ -587,6 +613,7 @@ void connect(uvp::io::byte_stream lower, client_context context, handshake_callb
     tls_state::mode::client,
     std::move(callback));
   state->start();
+  return handshake_operation{std::move(state)};
 }
 
 } // namespace uvp::tls

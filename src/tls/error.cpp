@@ -26,6 +26,12 @@ public:
       return "TLS protocol error";
     case errc::closed:
       return "TLS stream is closed";
+    case errc::cancelled:
+      return "TLS operation cancelled";
+    case errc::timeout:
+      return "TLS operation timed out";
+    case errc::pending_handshake_limit:
+      return "TLS pending handshake limit reached";
     }
 
     return "unknown TLS error";

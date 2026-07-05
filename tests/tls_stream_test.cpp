@@ -1,7 +1,9 @@
 #include "test.hpp"
 
+#include <uvpp/protocols/io.hpp>
 #include <uvpp/protocols/tls.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <deque>
 #include <filesystem>
@@ -235,4 +237,30 @@ UVP_TEST_CASE("tls stream handshakes over byte streams and exchanges data") {
 
   UVP_CHECK(write_done);
   UVP_CHECK_EQ(received, "ping");
+}
+
+UVP_TEST_CASE("tls listener adapts generic stream listener") {
+  uv::loop loop;
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string())
+    .alpn({"http/1.1"});
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+
+  auto secure = uvp::io::stream_listener{
+    uvp::tls::listener{
+      uvp::io::stream_listener{std::move(tcp)},
+      std::move(context),
+      uvp::tls::listener_options{}
+        .handshake_timeout(std::chrono::milliseconds{100})
+        .max_pending_handshakes(8)}};
+
+  UVP_CHECK(static_cast<bool>(secure));
+  UVP_CHECK(std::holds_alternative<uvp::io::tcp_endpoint>(secure.local_endpoint()));
 }
