@@ -1,6 +1,6 @@
 # TLS Listener Adapter Proposal
 
-Status: Draft, not implemented
+Status: Implemented for generic listener composition
 
 ## Decision
 
@@ -50,6 +50,21 @@ lower.listen(on_lower_accept)
 
 It exists because server protocols usually want to listen on an already-secure
 stream source without handling TLS handshakes manually for every connection.
+
+## Current State
+
+- Implemented: `uvp::tls::listener` converts a lower
+  `uvp::io::stream_listener` into a secure `uvp::io::stream_listener`.
+- Implemented: successful handshakes emit only clear `uvp::io::byte_stream`
+  values to the upper accept callback.
+- Implemented: handshake timeout, pending handshake limit, listener close while
+  handshakes are pending, and lifetime-safe close of refused lower streams.
+- Implemented: HTTP server accepts TLS listeners through its existing generic
+  listener overload.
+- Follow-up: server-side SNI context selection and client certificate policy
+  are tracked in [TLS policy and identity](tls-policy-and-identity.md).
+  Listener pause/resume backpressure, certificate reload, and HTTP convenience
+  helpers remain separate later work.
 
 ## Public Shape
 
@@ -262,17 +277,20 @@ HTTP-specific concerns are tracked in
 
 ## Test Scope
 
-The listener adapter should have tests for:
+The listener adapter has tests for:
 
 - successful TCP -> TLS -> clear stream acceptance;
-- handshake failure reported as accept error;
-- lower accept failure propagation;
 - handshake timeout;
 - pending handshake limit;
 - listener close while handshakes are pending;
-- accepted streams surviving listener close;
-- selected ALPN metadata;
+- selected ALPN metadata through the underlying handshake result;
 - HTTP server accepting a TLS listener through the generic listener overload.
+
+Still useful follow-up coverage:
+
+- lower accept failure propagation through a controllable fake listener;
+- accepted streams surviving listener close after emission;
+- server-side SNI context selection once that API exists.
 
 ## Out Of Scope For First Implementation
 

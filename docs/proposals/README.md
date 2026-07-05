@@ -19,6 +19,8 @@ the `Current focus` block.
 - [TLS support](tls-support.md)
 - [TLS listener adapter](tls-listener-adapter.md)
 - [HTTP TLS listener integration](http-tls-listener-integration.md)
+- [TLS policy and identity](tls-policy-and-identity.md)
+- [TLS graceful shutdown](tls-graceful-shutdown.md)
 - [HTTP client](http-client.md)
 - [DNS resolution](dns-resolution.md)
 - [WebSocket client](websocket-client.md)

@@ -8,8 +8,8 @@
 ## Current focus
 
 - Milestone 5: TLS transport support
-  - [ ] [TLS stream adapter](proposals/tls-support.md)
-  - [ ] [TLS listener adapter](proposals/tls-listener-adapter.md)
+  - [x] [TLS stream adapter](proposals/tls-support.md)
+  - [x] [TLS listener adapter](proposals/tls-listener-adapter.md)
   - [x] [HTTP over TLS through listener composition](proposals/http-tls-listener-integration.md)
 
 Keep completed Current focus proposals listed until the milestone is closed.
@@ -25,6 +25,10 @@ next milestone or step.
   - [HTTP client](proposals/http-client.md)
 
 ## Later
+
+- TLS hardening
+  - [TLS policy and identity](proposals/tls-policy-and-identity.md)
+  - [TLS graceful shutdown](proposals/tls-graceful-shutdown.md)
 
 - Client protocol modules
   - [WebSocket client](proposals/websocket-client.md)

@@ -195,6 +195,10 @@ public:
   }
 
   void cancel(uvp::error error) override {
+    if (!active()) {
+      return;
+    }
+
     fail(std::move(error));
   }
 

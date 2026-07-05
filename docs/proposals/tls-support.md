@@ -1,13 +1,20 @@
 # TLS Support Proposal
 
-Status: Draft, not implemented
+Status: Implemented for the initial OpenSSL-backed stream adapter
 
 ## Current State
 
 - Implemented: shared `uvp::io::byte_stream` and `uvp::io::stream_listener`
   abstractions.
-- Not implemented: `uvp::tls`, TLS contexts, OpenSSL integration, TLS stream
-  adapter, TLS listener, verification policy, ALPN, SNI, and TLS errors.
+- Implemented: `uvp::tls`, backend-private OpenSSL integration, server and
+  client contexts, TLS stream adaptation over `byte_stream`, ALPN, client SNI,
+  client peer verification, TLS errors, close-notify handling, cancellation,
+  write/read backpressure limits, and EOF/error exactly-once behavior.
+- Implemented: TLS listener composition and HTTP-over-TLS through generic
+  listener composition.
+- Follow-up: server-side SNI context selection, client certificate
+  authentication, configurable TLS version policy, session resumption, and a
+  full close-handshake timeout.
 - Related proposals: [TLS listener adapter](tls-listener-adapter.md) and
   [HTTP TLS listener integration](http-tls-listener-integration.md).
 
@@ -287,27 +294,21 @@ OpenSSL operation fails and mapped into stable uvpp-protocols errors.
 
 ## Build Integration
 
-TLS support should be optional at the CMake level until the project decides that
-OpenSSL is a mandatory dependency for the whole package:
+TLS currently uses OpenSSL SSL/Crypto as part of the package build:
 
 ```cmake
-option(UVPP_PROTOCOLS_WITH_OPENSSL "Build TLS support with OpenSSL" ON)
 find_package(OpenSSL REQUIRED COMPONENTS SSL Crypto)
 target_link_libraries(uvpp_protocols PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 ```
-
-If TLS is disabled, TLS headers can either be omitted from installation or
-provide a clear compile-time diagnostic. The rest of the project should remain
-buildable without OpenSSL.
 
 OpenSSL is the initial backend, but the public design should leave room for a
 future backend boundary. That does not require a runtime pluggable backend in
 the first milestone. It only requires that backend details stay out of public
 API and non-TLS modules.
 
-## Milestone Scope
+## Implemented Milestone Scope
 
-The first TLS milestone should include:
+The first TLS milestone includes:
 
 - backend-private OpenSSL RAII wrappers;
 - `server_context` and `client_context`;
@@ -317,19 +318,23 @@ The first TLS milestone should include:
 - SNI client configuration;
 - peer verification defaults for clients;
 - TLS error category and result types;
-- examples for one non-HTTP or STARTTLS-shaped usage sketch;
-- tests for handshake success, verification failure, fragmented records, echo,
-  close, and stream adaptation.
+- tests for handshake success, post-handshake cancellation no-op, verification
+  failure and configured CA success, required ALPN failure, write/read
+  backpressure, close-notify, truncated EOF, listener composition, listener
+  timeout/limit/close, and HTTP-over-TLS composition.
 
 The same milestone also tracks listener-level work in
 [TLS listener adapter](tls-listener-adapter.md) and HTTP composition work in
 [HTTP TLS listener integration](http-tls-listener-integration.md).
 
-Follow-up work:
+Follow-up work is split into dedicated proposals:
 
-- server-side SNI context selection;
-- client certificate authentication;
-- configurable close-handshake timeout;
-- session resumption;
-- key logging for debugging when explicitly enabled;
-- native OpenSSL escape hatches if real users need them.
+- [TLS policy and identity](tls-policy-and-identity.md): public TLS version
+  policy, server-side SNI context selection, and server-side client certificate
+  verification.
+- [TLS graceful shutdown](tls-graceful-shutdown.md): full bounded
+  close-handshake behavior beyond the initial send-and-close policy.
+
+Other possible later features include session resumption, key logging for
+debugging when explicitly enabled, OCSP stapling, certificate reload/ACME
+integration, and native OpenSSL escape hatches if real users need them.
