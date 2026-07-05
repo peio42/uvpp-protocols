@@ -1,8 +1,10 @@
 #include "test.hpp"
 
+#include <uvpp/protocols/http.hpp>
 #include <uvpp/protocols/io.hpp>
 #include <uvpp/protocols/tls.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <deque>
@@ -76,6 +78,109 @@ struct memory_endpoint {
   std::deque<std::vector<std::byte>> pending_reads;
   std::weak_ptr<memory_endpoint> peer;
   bool closed = false;
+};
+
+class tcp_client_stream final : public uvp::io::byte_stream::concept_ {
+public:
+  tcp_client_stream(uv::loop& loop, std::shared_ptr<uv::tcp> tcp)
+      : loop_(&loop), tcp_(std::move(tcp)) {}
+
+  uv::loop& loop() noexcept override {
+    return *loop_;
+  }
+
+  void read_start(uvp::io::read_callback on_read) override {
+    on_read_ = std::move(on_read);
+    tcp_->read_start(
+      [this](uv::tcp&, std::size_t suggested_size) {
+        read_buffer_.resize(std::max<std::size_t>(suggested_size, 4096));
+        return uv::buffer_view{read_buffer_.data(), read_buffer_.size()};
+      },
+      [this](uv::tcp&, uv::read_result result) {
+        if (!on_read_) {
+          return;
+        }
+
+        if (result.eof()) {
+          on_read_(uvp::io::read_result{{}, {}, true});
+          return;
+        }
+
+        if (!result) {
+          on_read_(uvp::io::read_result{{}, uvp::io::stream_error{result.status().error_code()}});
+          return;
+        }
+
+        on_read_(uvp::io::read_result{result.bytes()});
+      });
+  }
+
+  void read_stop() override {
+    tcp_->read_stop();
+  }
+
+  void write(std::span<const std::byte> bytes, uvp::io::write_callback on_write) override {
+    auto op = std::make_shared<write_operation>(bytes);
+    tcp_->write(op->request, op->payload, [op, callback = std::move(on_write)](uv::write_request&, uv::result result) mutable {
+      if (callback) {
+        callback(uvp::io::stream_error{result.error_code()});
+      }
+    });
+  }
+
+  void close(uvp::io::close_callback on_close) override {
+    if (closed_) {
+      if (on_close) {
+        on_close();
+      }
+      return;
+    }
+
+    closed_ = true;
+    if (tcp_->closing()) {
+      if (on_close) {
+        on_close();
+      }
+      return;
+    }
+
+    tcp_->close([callback = std::move(on_close)](uv::tcp&) mutable {
+      if (callback) {
+        callback();
+      }
+    });
+  }
+
+  uvp::io::endpoint local_endpoint() const override {
+    return {};
+  }
+
+  uvp::io::endpoint remote_endpoint() const override {
+    return {};
+  }
+
+  uv::tcp* tcp() noexcept override {
+    return tcp_.get();
+  }
+
+  uv::pipe* pipe() noexcept override {
+    return nullptr;
+  }
+
+private:
+  struct write_operation {
+    explicit write_operation(std::span<const std::byte> bytes)
+        : payload(bytes.begin(), bytes.end()) {}
+
+    uv::write_request request;
+    std::vector<std::byte> payload;
+  };
+
+  uv::loop* loop_;
+  std::shared_ptr<uv::tcp> tcp_;
+  uvp::io::read_callback on_read_;
+  std::vector<char> read_buffer_;
+  bool closed_ = false;
 };
 
 class memory_stream final : public uvp::io::byte_stream::concept_ {
@@ -263,4 +368,119 @@ UVP_TEST_CASE("tls listener adapts generic stream listener") {
 
   UVP_CHECK(static_cast<bool>(secure));
   UVP_CHECK(std::holds_alternative<uvp::io::tcp_endpoint>(secure.local_endpoint()));
+}
+
+UVP_TEST_CASE("http server serves requests over tls listener composition") {
+  uv::loop loop;
+  uvp::http::server server(loop);
+
+  server.get("/secure", [](uvp::http::request&, uvp::http::response& res) {
+    res.type("text/plain").text("tls ok");
+  });
+
+  const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
+  const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
+
+  auto context = uvp::tls::server_context{}
+    .certificate_chain_file(cert_path.string())
+    .private_key_file(key_path.string())
+    .alpn({"http/1.1"});
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto secure = uvp::io::stream_listener{
+    uvp::tls::listener{
+      uvp::io::stream_listener{std::move(tcp)},
+      std::move(context),
+      uvp::tls::listener_options{}
+        .handshake_timeout(std::chrono::seconds{2})
+        .max_pending_handshakes(8)}};
+  const auto port = std::get<uvp::io::tcp_endpoint>(secure.local_endpoint()).port;
+  server.listen(std::move(secure));
+
+  auto client = std::make_shared<uv::tcp>(loop);
+  uv::connect_request connect_request;
+  uv::timer timeout(loop);
+
+  auto tls_done = false;
+  auto write_done = false;
+  auto response_seen = false;
+  auto client_closed = false;
+  auto timed_out = false;
+  auto received = std::string{};
+  auto clear = uvp::io::byte_stream{};
+
+  timeout.start(std::chrono::seconds{3}, [&](uv::timer& timer) {
+    timed_out = true;
+    server.close();
+    if (!client_closed && !client->closing()) {
+      client->close([&](uv::tcp&) {
+        client_closed = true;
+      });
+    }
+    timer.close();
+  });
+
+  client->connect(
+    connect_request,
+    uv::ipv4{"127.0.0.1", static_cast<int>(port)},
+    [&](uv::connect_request&, uv::result status) {
+      UVP_REQUIRE(status);
+
+      auto lower = uvp::io::byte_stream{std::make_unique<tcp_client_stream>(loop, client)};
+      auto client_context = uvp::tls::client_context{}
+        .insecure_no_verify_peer()
+        .alpn({"http/1.1"});
+
+      uvp::tls::connect(std::move(lower), client_context, [&](uvp::tls::handshake_result handshake) {
+        UVP_REQUIRE(handshake);
+        UVP_CHECK_EQ(std::string(handshake.selected_alpn()), "http/1.1");
+        clear = std::move(handshake).stream();
+        tls_done = true;
+
+        clear.read_start([&](uvp::io::read_result read) {
+          if (read.eof()) {
+            return;
+          }
+          UVP_REQUIRE(read);
+
+          const auto bytes = read.bytes();
+          received.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+          if (received.find("\r\n\r\ntls ok") != std::string::npos) {
+            response_seen = true;
+            clear.read_stop();
+            timeout.close();
+            clear.close([&] {
+              client_closed = true;
+              server.close();
+            });
+          }
+        });
+
+        const auto request = std::string{
+          "GET /secure HTTP/1.1\r\n"
+          "Host: localhost\r\n"
+          "Connection: close\r\n"
+          "\r\n"};
+        clear.write(
+          std::as_bytes(std::span{request.data(), request.size()}),
+          [&](uvp::io::stream_error error) {
+            UVP_CHECK(!error);
+            write_done = true;
+          });
+      });
+    });
+
+  loop.run();
+
+  UVP_CHECK(!timed_out);
+  UVP_CHECK(tls_done);
+  UVP_CHECK(write_done);
+  UVP_CHECK(response_seen);
+  UVP_CHECK(client_closed);
+  UVP_CHECK(received.find("HTTP/1.1 200 OK\r\n") != std::string::npos);
+  UVP_CHECK(received.find("content-type: text/plain; charset=utf-8\r\n") != std::string::npos);
+  UVP_CHECK(received.find("content-length: 6\r\n") != std::string::npos);
+
+  loop.close();
 }

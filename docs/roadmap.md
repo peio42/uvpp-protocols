@@ -10,7 +10,7 @@
 - Milestone 5: TLS transport support
   - [ ] [TLS stream adapter](proposals/tls-support.md)
   - [ ] [TLS listener adapter](proposals/tls-listener-adapter.md)
-  - [ ] [HTTP over TLS through listener composition](proposals/http-tls-listener-integration.md)
+  - [x] [HTTP over TLS through listener composition](proposals/http-tls-listener-integration.md)
 
 Keep completed Current focus proposals listed until the milestone is closed.
 When a Current focus proposal is implemented, mark its line with `[x]` instead

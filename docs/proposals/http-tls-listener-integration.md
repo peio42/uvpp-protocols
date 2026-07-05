@@ -1,6 +1,6 @@
 # HTTP TLS Listener Integration Proposal
 
-Status: Draft
+Status: Implemented for generic listener composition
 
 ## Context
 
@@ -29,17 +29,19 @@ TLS owns handshake mechanics before HTTP receives a clear `byte_stream`.
 
 - Implemented: `http::server::listen(io::stream_listener)` and transport
   composition over `byte_stream`.
-- Not implemented: TLS listener adapter, HTTP examples for TLS listener
-  composition, and any optional HTTP convenience helper for TLS listeners.
+- Implemented: `http::server` accepts `uvp::tls::listener` through the generic
+  `io::stream_listener` path.
+- Implemented: integration coverage for TCP -> TLS listener -> HTTP server.
+- Not implemented: optional HTTP convenience helper for TLS listeners.
 
 ## Draft Scope
 
 - Ensure `http::server` accepts a TLS listener through the generic listener
-  path.
+  path. Implemented.
 - Document that TLS handshake errors are listener accept errors, not HTTP
   parser errors.
 - Preserve HTTP behavior for already-clear streams; no HTTP request object
-  should expose OpenSSL or TLS backend details.
+  exposes OpenSSL or TLS backend details.
 - Consider an optional convenience helper only after the generic path works.
 - Keep OpenSSL and TLS types out of the HTTP server core.
 
