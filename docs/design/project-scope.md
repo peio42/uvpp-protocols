@@ -45,6 +45,8 @@ The initial family of modules can grow in this order:
 
 - `uvp::http`: HTTP/1.1 server first, including response helpers such as
   Server-Sent Events, then client primitives.
+- `uvp::dns`: asynchronous host/service resolution for outbound protocol
+  clients.
 - `uvp::websocket`: WebSocket server/client sessions built on HTTP upgrade.
 - `uvp::tls`: TLS stream adapter over uvpp streams, with backend-specific
   providers such as OpenSSL or mbedTLS.

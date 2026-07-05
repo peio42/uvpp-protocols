@@ -8,7 +8,8 @@ Status: Draft, not implemented
   abstractions.
 - Not implemented: `uvp::tls`, TLS contexts, OpenSSL integration, TLS stream
   adapter, TLS listener, verification policy, ALPN, SNI, and TLS errors.
-- Related proposals: [HTTP TLS listener integration](http-tls-listener-integration.md).
+- Related proposals: [TLS listener adapter](tls-listener-adapter.md) and
+  [HTTP TLS listener integration](http-tls-listener-integration.md).
 
 ## Purpose
 
@@ -71,21 +72,11 @@ uvp::tls::connect(
   });
 ```
 
-Server listener support should be a generic adapter:
-
-```cpp
-auto plain = uvp::io::tcp_listener{loop}.bind("0.0.0.0", 443);
-
-uvp::io::stream_listener secure =
-  uvp::tls::listener{std::move(plain), server_context};
-
-uvp::http::server http(loop);
-http.listen(std::move(secure));
-```
-
-The listener is a convenience wrapper around the same `accept(byte_stream, ...)`
-path. It accepts a lower stream, completes the TLS server handshake, and then
-emits a clear `uvp::io::byte_stream` to its accept callback.
+Server listener support should be a generic adapter over this same
+`accept(byte_stream, ...)` operation. Its design is tracked separately in
+[TLS listener adapter](tls-listener-adapter.md) because listener ownership,
+handshake backpressure, accept errors, and close behavior need their own
+decisions.
 
 ## STARTTLS
 
@@ -322,15 +313,17 @@ The first TLS milestone should include:
 - `server_context` and `client_context`;
 - `accept(byte_stream, server_context, callback)`;
 - `connect(byte_stream, client_context, callback)`;
-- a generic `tls::listener` adapter over `io::stream_listener`;
 - ALPN configuration and selected-ALPN access;
 - SNI client configuration;
 - peer verification defaults for clients;
 - TLS error category and result types;
-- examples for HTTPS-style HTTP over TLS and one non-HTTP or STARTTLS-shaped
-  usage sketch;
+- examples for one non-HTTP or STARTTLS-shaped usage sketch;
 - tests for handshake success, verification failure, fragmented records, echo,
-  close, and listener adaptation.
+  close, and stream adaptation.
+
+The same milestone also tracks listener-level work in
+[TLS listener adapter](tls-listener-adapter.md) and HTTP composition work in
+[HTTP TLS listener integration](http-tls-listener-integration.md).
 
 Follow-up work:
 
