@@ -7,6 +7,22 @@ The core type is `uvp::io::byte_stream`: an asynchronous readable/writable byte
 stream with endpoint metadata and explicit close. TCP, Unix sockets, TLS, and
 future protocol layers can all adapt to this boundary.
 
+`byte_stream` also forwards uvpp/libuv handle liveness controls:
+
+```cpp
+stream.unref(); // idle stream no longer keeps loop.run() alive by itself
+stream.ref();   // active stream keeps the loop alive again
+
+if (stream.has_ref()) {
+  // the underlying transport currently keeps the loop alive
+}
+```
+
+These calls affect loop liveness only. `unref()` does not close the stream, and
+an unreferenced open stream must still be closed by its owner before closing the
+loop. Calling `ref()` or `unref()` on an invalid `byte_stream` is a no-op;
+`has_ref()` returns `false`.
+
 ## TCP Connector
 
 `uvp::io::tcp_connector` opens outbound TCP connections and returns a connected

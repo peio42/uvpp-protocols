@@ -141,6 +141,18 @@ public:
     }
   }
 
+  void ref() noexcept override {
+    stream_->ref();
+  }
+
+  void unref() noexcept override {
+    stream_->unref();
+  }
+
+  bool has_ref() const noexcept override {
+    return stream_->has_ref();
+  }
+
   uv::tcp* tcp() noexcept override {
     if constexpr (std::is_same_v<Stream, uv::tcp>) {
       return stream_.get();
@@ -492,6 +504,22 @@ endpoint byte_stream::local_endpoint() const {
 
 endpoint byte_stream::remote_endpoint() const {
   return self_->remote_endpoint();
+}
+
+void byte_stream::ref() noexcept {
+  if (self_) {
+    self_->ref();
+  }
+}
+
+void byte_stream::unref() noexcept {
+  if (self_) {
+    self_->unref();
+  }
+}
+
+bool byte_stream::has_ref() const noexcept {
+  return self_ ? self_->has_ref() : false;
 }
 
 byte_stream::operator bool() const noexcept {

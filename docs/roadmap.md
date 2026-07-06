@@ -11,7 +11,7 @@
 - Milestone 6: Client-side foundations
   - [x] [Shared URL module](proposals/shared-url-module.md)
   - [x] [DNS resolution](proposals/dns-resolution.md)
-  - [ ] [Byte stream lifetime controls](proposals/byte-stream-lifetime-controls.md)
+  - [x] [Byte stream lifetime controls](proposals/byte-stream-lifetime-controls.md)
   - [ ] [HTTP client](proposals/http-client.md)
 
 Keep completed Current focus proposals listed until the milestone is closed.

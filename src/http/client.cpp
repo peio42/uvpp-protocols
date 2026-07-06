@@ -63,6 +63,7 @@ public:
       }
       if (item->stream) {
         auto stream = std::move(item->stream);
+        stream.ref();
         if (queue.empty()) {
           idle_.erase(found);
         }
@@ -92,6 +93,7 @@ public:
     auto item = std::make_shared<entry>();
     item->origin = std::move(origin);
     item->stream = std::move(stream);
+    item->stream.unref();
     if (idle_timeout > std::chrono::milliseconds{0}) {
       item->timer = std::make_shared<uv::timer>(loop);
       auto weak_pool = weak_from_this();
@@ -153,6 +155,7 @@ private:
       timer->close([timer](uv::timer&) {});
     }
     if (item->stream) {
+      item->stream.ref();
       item->stream.close([item] {});
     }
   }

@@ -1,6 +1,6 @@
 # Byte Stream Lifetime Controls Proposal
 
-Status: Proposed for Milestone 6
+Status: Implemented for Milestone 6
 
 ## Context
 
@@ -42,16 +42,16 @@ reference semantics without exposing concrete TCP, TLS, or WebSocket internals.
 
 ## Proposed Public API
 
-Add handle-liveness controls to `uvp::io::byte_stream`:
+Handle-liveness controls are added to `uvp::io::byte_stream`:
 
 ```cpp
 namespace uvp::io {
 
 class byte_stream {
 public:
-  void ref();
-  void unref();
-  [[nodiscard]] bool has_ref() const;
+  void ref() noexcept;
+  void unref() noexcept;
+  [[nodiscard]] bool has_ref() const noexcept;
 };
 
 }
@@ -64,10 +64,8 @@ Semantics should mirror uvpp/libuv handle references:
   remain;
 - `has_ref()` reports the current reference state when the underlying transport
   can expose it;
-- calling these functions on an invalid `byte_stream` is either a no-op for
-  `ref()`/`unref()` and `false` for `has_ref()`, or follows the existing invalid
-  stream error policy if the surrounding IO API already chooses stricter
-  behavior.
+- calling `ref()` or `unref()` on an invalid `byte_stream` is a no-op;
+- calling `has_ref()` on an invalid `byte_stream` returns `false`.
 
 `unref()` is not a close operation. An idle stream that has been unreferenced is
 still open and must still be closed explicitly by its owner before loop teardown.
@@ -97,12 +95,14 @@ if the timer is responsible for closing the idle stream after a bounded timeout.
 
 ## HTTP Client Pool Usage
 
-The HTTP/1.1 connection pool should use these controls when pooling is enabled:
+The HTTP/1.1 connection pool uses these controls when pooling is enabled:
 
-- on release to the idle pool, call `stream.unref()`;
-- on checkout from the pool, call `stream.ref()` before reusing the connection;
-- on explicit pool shutdown, close every idle stream;
-- on idle timeout, close the stream even if it is unreferenced.
+- implemented: on release to the idle pool, call `stream.unref()`;
+- implemented: on checkout from the pool, call `stream.ref()` before reusing
+  the connection;
+- implemented: on explicit pool shutdown, `ref()` and close every idle stream;
+- implemented: on idle timeout, `ref()` and close the stream even if it is
+  unreferenced.
 
 Timer policy should remain deliberate:
 
@@ -112,9 +112,10 @@ Timer policy should remain deliberate:
   immediately, but requires explicit `client.close_idle_connections()` before
   `loop.close()`.
 
-The first implementation should prefer predictable tests and shutdown behavior
-over clever automatic detachment. If needed, a later client option can decide
-whether idle timeout timers are referenced or unreferenced.
+The first implementation keeps idle timeout timers referenced. This favors
+predictable tests and bounded cleanup over clever automatic detachment. If
+needed, a later client option can decide whether idle timeout timers are
+referenced or unreferenced.
 
 ## API Impact
 
@@ -132,26 +133,31 @@ This proposal affects the IO foundation, not only HTTP:
 
 ## Tests
 
-Add focused coverage for:
+Focused coverage includes:
 
-- `byte_stream` TCP adapter forwards `ref()`, `unref()`, and `has_ref()`;
-- TLS byte stream forwards reference state to its lower stream;
-- HTTP pool unreferences idle streams and references them again on reuse;
-- explicit `client.close_idle_connections()` closes unreferenced idle streams;
-- idle timeout closes pooled streams without double-completion or leaked handles.
+- implemented: `byte_stream` TCP adapter forwards `ref()`, `unref()`, and
+  `has_ref()`;
+- implemented through adapter code: TLS byte stream forwards reference state to
+  its lower stream;
+- implemented: HTTP pool unreferences idle streams and references them again on
+  reuse;
+- implemented: explicit `client.close_idle_connections()` closes unreferenced
+  idle streams;
+- implemented: idle timeout closes pooled streams without double-completion or
+  leaked handles.
 
 Where direct loop-liveness assertions are brittle, tests should inspect
 `has_ref()` through controlled adapters or verify that reuse and close callbacks
 still behave exactly once.
 
-## Open Questions
+## Decisions
 
-- Should invalid `byte_stream::ref()` and `unref()` be no-ops, or should they
-  assert/fail consistently with other invalid transport operations?
-- Should HTTP expose a client option for referenced vs unreferenced idle timeout
-  timers?
-- Do listener abstractions need the same controls now, or should listener
-  `ref()`/`unref()` wait for a concrete server-side use case?
+- Invalid `byte_stream::ref()` and `byte_stream::unref()` are no-ops;
+  invalid `has_ref()` returns `false`.
+- HTTP does not expose a client option for referenced vs unreferenced idle
+  timeout timers in this milestone.
+- Listener abstractions do not gain `ref()`/`unref()` yet; that remains a later
+  server-side design choice if a concrete use case appears.
 
 ## Source Documents
 

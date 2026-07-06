@@ -511,7 +511,7 @@ Suggested first implementation slice:
 6. [x] streaming response body;
 7. [x] streaming request body;
 8. [x] basic keep-alive and pool reuse for HTTP/1.1;
-9. byte-stream lifetime controls for idle pool liveness;
+9. [x] byte-stream lifetime controls for idle pool liveness;
 10. cancellation and phase-specific timeout coverage;
 11. redirects with conservative policy;
 12. proxy design spike or minimal HTTP CONNECT support.

@@ -111,7 +111,8 @@ Available:
   `https://` URLs with one-shot buffered requests, request/response streaming,
   opt-in keep-alive pooling, and phase timeouts are available.
 - `uvp::io`: byte-stream/listener transport abstractions and reusable outbound
-  TCP connection helpers with connect timeouts.
+  TCP connection helpers with connect timeouts and byte-stream handle liveness
+  controls.
 - `uvp::url`: shared parsed URL values and helpers for client-side protocol
   foundations, including default ports, origin keys, and HTTP request targets.
 - `uvp::tls`: TLS stream and listener adapters over uvpp byte streams, with
@@ -143,7 +144,9 @@ not force unrelated dependencies between modules.
 
 The current transport layer exposes `uvp::io::stream_listener`,
 `uvp::io::byte_stream`, and `uvp::io::tcp_connector`, with TCP, Unix socket, and
-TLS listener adapters. The HTTP server owns listeners and accepted sessions
+TLS listener adapters. `byte_stream` forwards uvpp/libuv `ref()`, `unref()`, and
+`has_ref()` so pooled or idle transports can manage loop liveness without
+exposing concrete handles. The HTTP server owns listeners and accepted sessions
 through these abstractions, while the HTTP client uses the connector side for
 outbound TCP. HTTP over Unix sockets, HTTP over TLS, and future protocol
 composition do not require a TCP-only public model.
