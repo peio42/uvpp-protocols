@@ -107,8 +107,9 @@ Available:
 - `uvp::dns`: asynchronous host/service resolution over libuv `getaddrinfo`,
   with typed address candidates and cancellable operations.
 - `uvp::http`: HTTP/1.1 server, multipart request bodies, Server-Sent Events
-  response helpers, and an initial one-shot HTTP/1.1 client for `http://` and
-  `https://` URLs with phase timeouts are available.
+  response helpers, and an initial HTTP/1.1 client for `http://` and
+  `https://` URLs with one-shot buffered requests, response streaming, and
+  phase timeouts are available.
 - `uvp::io`: byte-stream/listener transport abstractions and reusable outbound
   TCP connection helpers with connect timeouts.
 - `uvp::url`: shared parsed URL values and helpers for client-side protocol

@@ -1,7 +1,8 @@
 # HTTP Client Proposal
 
-Status: Initial HTTP/HTTPS one-shot client implemented; streaming, pooling,
-redirects, proxying, and broader timeout coverage remain open
+Status: Initial HTTP/HTTPS one-shot client and response streaming implemented;
+upload streaming, pooling, redirects, proxying, and broader timeout coverage
+remain open
 
 ## Decision
 
@@ -54,11 +55,15 @@ transport/session to the WebSocket module.
 - Implemented: HTTPS one-shot requests through `uvp::tls::connect()`, SNI from
   the URL host, hostname verification by default, configurable CA file/path,
   and ALPN `http/1.1`.
-- Implemented: initial one-shot client phase timeouts for DNS resolution, TCP
-  connect, response headers, and buffered response body.
+- Implemented: response-body streaming with `on_response_headers`, `on_data`,
+  and `on_complete`, covering content-length, chunked, EOF-delimited, and
+  bodyless responses without buffering the full body first.
+- Implemented: initial client phase timeouts for DNS resolution, TCP connect,
+  response headers, and response body transfer.
 - Drafted separately or still open: TLS stream/listener support, HTTP/2
   support, WebSocket client support, connection pooling, redirects, proxying,
-  broader phase timeouts, and streaming upload/download API.
+  broader phase timeouts, streaming upload API, and user-visible streaming
+  backpressure controls.
 
 ## Goals
 
@@ -152,6 +157,28 @@ The exact owning types still need naming, but the lifecycle should be explicit:
 - response data arrives as borrowed chunks with callback-scoped lifetime;
 - completion fires exactly once with success, cancellation, timeout, protocol
   failure, or transport failure.
+
+The initial implemented subset exposes response streaming only:
+
+```cpp
+auto req = client.stream_get("https://example.com/events");
+
+req.on_response_headers([](uvp::http::response_head const& h) {
+    // status, headers
+  })
+  .on_data([](std::span<std::byte const> chunk) {
+    // borrowed response body chunk
+  })
+  .on_complete([](uvp::result<void> done) {
+    // complete, cancelled, timed out, or failed
+  });
+
+auto op = req.start();
+```
+
+This is enough for large downloads and SSE-style clients, and gives the future
+WebSocket client a path to observe response headers before an upgrade handoff.
+Upload streaming remains the next API expansion for this section.
 
 ## Core Components
 
@@ -249,8 +276,11 @@ Parser direction:
   unterminated chunks, incomplete content-length bodies, and incomplete
   headers.
 
-Later streaming work may replace this with an incremental client parser adapter,
-likely backed by `llhttp`, without changing the high-level response vocabulary.
+The response-streaming path currently reuses a small incremental HTTP/1.1 client
+parser for status, headers, content-length, chunked, EOF-delimited, and
+bodyless responses. Future hardening may replace the internal parser with an
+adapter backed by `llhttp`, without changing the high-level response
+vocabulary.
 
 Writer direction:
 
@@ -366,8 +396,10 @@ Upload streaming:
 
 Download streaming:
 
-- deliver body chunks incrementally;
-- allow the user to stop reading and cancel the request;
+- implemented for response bodies with content-length, chunked, EOF-delimited,
+  and bodyless framing;
+- deliver body chunks incrementally as callback-scoped borrowed spans;
+- allow the user to stop the transfer by cancelling the request operation;
 - define whether unread bodies are drained, discarded, or make the connection
   unreusable;
 - support buffered collection as a wrapper over streaming.
@@ -378,10 +410,13 @@ Timeouts should be phase-aware:
 
 - implemented for the one-shot client: DNS resolution timeout, TCP connect
   timeout, response header timeout, and buffered response body timeout;
+- implemented for response streaming: DNS resolution timeout, TCP connect
+  timeout, response header timeout, and response body transfer timeout;
 - still open: overall request deadline;
 - still open: TLS handshake timeout integration for HTTPS;
 - still open: request header/body write timeout or idle timeout;
-- still open: streaming response body idle timeout;
+- still open: streaming response body idle timeout and pause-aware timeout
+  semantics;
 - pool checkout timeout.
 
 Timeout errors should include the phase where practical.
@@ -452,7 +487,7 @@ Suggested first implementation slice:
 3. [x] HTTP/1.1 one-shot `GET` over plain HTTP with buffered body limit;
 4. [x] outbound TCP connect helper extraction;
 5. [x] HTTPS via TLS connect and hostname verification;
-6. streaming response body;
+6. [x] streaming response body;
 7. streaming request body;
 8. basic keep-alive and pool reuse for HTTP/1.1;
 9. cancellation and phase-specific timeout coverage;

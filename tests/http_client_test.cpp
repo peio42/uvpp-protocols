@@ -158,6 +158,38 @@ void run_raw_client_response(std::string_view wire_response, Assert assert_resul
     std::move(assert_result));
 }
 
+template<class Configure>
+void run_raw_streaming_response(std::string_view wire_response, Configure configure_request) {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  std::optional<uvp::io::byte_stream> accepted;
+  auto payload = bytes(wire_response);
+
+  listener.listen([&](uvp::io::accept_result result) {
+    UVP_REQUIRE(result);
+    accepted.emplace(std::move(result).stream());
+    accepted->write(payload, [&](uvp::io::stream_error error) {
+      UVP_CHECK(!error);
+      accepted->close([&] {
+        accepted.reset();
+      });
+    });
+  });
+
+  uvp::http::client client(loop);
+  auto request = client.stream_get("http://127.0.0.1:" + std::to_string(port) + "/stream");
+  configure_request(request, listener);
+  auto operation = request.start();
+
+  UVP_CHECK(operation.valid());
+  loop.run();
+  loop.close();
+}
+
 } // namespace
 
 UVP_TEST_CASE("http client performs a plain get request") {
@@ -375,6 +407,110 @@ UVP_TEST_CASE("http client treats 204 and 304 responses as bodyless") {
       UVP_CHECK_EQ(result.value().status_code(), 304U);
       UVP_CHECK_EQ(result.value().body(), "");
     });
+}
+
+UVP_TEST_CASE("http client streams content-length response bodies") {
+  auto headers_seen = false;
+  auto completed = false;
+  auto body = std::string{};
+
+  run_raw_streaming_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 12\r\nX-Mode: stream\r\n\r\nhello stream",
+    [&](uvp::http::streaming_request& request, uvp::io::stream_listener& listener) {
+      request
+        .on_response_headers([&](const uvp::http::response_head& head) {
+          headers_seen = true;
+          UVP_CHECK_EQ(head.status_code, 200U);
+          UVP_CHECK_EQ(head.headers.get("x-mode"), "stream");
+        })
+        .on_data([&](std::span<const std::byte> chunk) {
+          body.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+        })
+        .on_complete([&](uvp::result<void> done) {
+          completed = true;
+          UVP_REQUIRE(done);
+          listener.close();
+        });
+    });
+
+  UVP_CHECK(headers_seen);
+  UVP_CHECK(completed);
+  UVP_CHECK_EQ(body, "hello stream");
+}
+
+UVP_TEST_CASE("http client streams chunked response bodies") {
+  auto completed = false;
+  auto chunks = 0;
+  auto body = std::string{};
+
+  run_raw_streaming_response(
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    "5\r\nhello\r\n"
+    "1\r\n \r\n"
+    "6\r\nstream\r\n"
+    "0\r\n\r\n",
+    [&](uvp::http::streaming_request& request, uvp::io::stream_listener& listener) {
+      request
+        .on_data([&](std::span<const std::byte> chunk) {
+          ++chunks;
+          body.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+        })
+        .on_complete([&](uvp::result<void> done) {
+          completed = true;
+          UVP_REQUIRE(done);
+          listener.close();
+        });
+    });
+
+  UVP_CHECK(completed);
+  UVP_CHECK_EQ(chunks, 3);
+  UVP_CHECK_EQ(body, "hello stream");
+}
+
+UVP_TEST_CASE("http client streams eof-delimited response bodies") {
+  auto completed = false;
+  auto body = std::string{};
+
+  run_raw_streaming_response(
+    "HTTP/1.1 200 OK\r\n\r\neof stream",
+    [&](uvp::http::streaming_request& request, uvp::io::stream_listener& listener) {
+      request
+        .on_data([&](std::span<const std::byte> chunk) {
+          body.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+        })
+        .on_complete([&](uvp::result<void> done) {
+          completed = true;
+          UVP_REQUIRE(done);
+          listener.close();
+        });
+    });
+
+  UVP_CHECK(completed);
+  UVP_CHECK_EQ(body, "eof stream");
+}
+
+UVP_TEST_CASE("http client reports streaming malformed responses on complete") {
+  auto completed = false;
+  auto saw_data = false;
+
+  run_raw_streaming_response(
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    "nope\r\n",
+    [&](uvp::http::streaming_request& request, uvp::io::stream_listener& listener) {
+      request
+        .on_data([&](std::span<const std::byte>) {
+          saw_data = true;
+        })
+        .on_complete([&](uvp::result<void> done) {
+          completed = true;
+          UVP_CHECK(!done);
+          UVP_CHECK_EQ(done.error().code, uvp::http::errc::client_malformed_response);
+          listener.close();
+        });
+    });
+
+  UVP_CHECK(completed);
+  UVP_CHECK(!saw_data);
 }
 
 UVP_TEST_CASE("http client times out waiting for response headers") {
