@@ -40,6 +40,8 @@ public:
       return "HTTP client TLS handshake failed";
     case errc::client_malformed_response:
       return "HTTP client response is malformed";
+    case errc::client_header_limit_exceeded:
+      return "HTTP client response header limit exceeded";
     case errc::client_body_limit_exceeded:
       return "HTTP client response body limit exceeded";
     case errc::client_cancelled:

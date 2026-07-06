@@ -33,8 +33,14 @@ Current limits:
 
 - pooling, redirects, proxying, and streaming request or response bodies are
   follow-up work;
-- responses are buffered and bounded by `client_options::max_body_bytes`;
+- responses are buffered and bounded by `client_options::max_header_bytes` and
+  `client_options::max_body_bytes`;
 - requests use `Connection: close`, so connections are not reused yet.
+
+The buffered parser handles status lines, headers, content-length bodies,
+chunked bodies, EOF-delimited bodies, and bodyless HEAD/204/304 responses.
+Malformed responses fail with `uvp::http::errc::client_malformed_response`;
+header and body limits have dedicated client errors.
 
 HTTPS uses `uvp::tls::connect()` internally. The client sets SNI and hostname
 verification from the URL host, loads default verify paths by default, and offers

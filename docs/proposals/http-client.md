@@ -45,8 +45,9 @@ transport/session to the WebSocket module.
   request/response objects, `uvp::io::byte_stream`, and listener composition.
 - Implemented: initial `uvp::http::client`, `client_options`, cancellable
   request operation, URL + DNS + TCP orchestration, HTTP/1.1 request writer,
-  buffered response parser, response body limit, and one-shot `GET` over
-  `http://` URLs.
+  buffered response parser, response header/body limits, malformed response
+  handling, chunked/content-length/EOF body handling, HEAD/204/304 no-body
+  semantics, and one-shot `GET` over `http://` URLs.
 - Implemented: reusable `uvp::io::tcp_connector` below HTTP, with sequential
   address attempts, typed connect errors, byte-stream conversion, and
   cancellation.
@@ -240,10 +241,16 @@ The first native milestone should implement HTTP/1.1.
 
 Parser direction:
 
-- reuse `llhttp` behind a private client response parser adapter if practical;
-- parse status line, headers, chunked body, content-length body, and EOF body;
-- enforce header/body limits;
-- detect malformed responses and conflicting framing.
+- implemented first as a buffered parser for the one-shot client;
+- parses status line, headers, chunked body, content-length body, and EOF body;
+- enforces header/body limits;
+- treats HEAD, 1xx, 204, and 304 responses as bodyless;
+- detects malformed status lines, malformed headers, invalid chunk sizes,
+  unterminated chunks, incomplete content-length bodies, and incomplete
+  headers.
+
+Later streaming work may replace this with an incremental client parser adapter,
+likely backed by `llhttp`, without changing the high-level response vocabulary.
 
 Writer direction:
 

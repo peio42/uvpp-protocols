@@ -20,6 +20,7 @@ enum class errc {
   client_connect_failed,
   client_tls_failed,
   client_malformed_response,
+  client_header_limit_exceeded,
   client_body_limit_exceeded,
   client_cancelled,
   client_timeout,

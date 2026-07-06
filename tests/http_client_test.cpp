@@ -105,6 +105,59 @@ std::filesystem::path write_test_file(std::string_view name, std::string_view co
   return path;
 }
 
+template<class Assert>
+void run_raw_client_response(
+  std::string_view wire_response,
+  uvp::http::method request_method,
+  uvp::http::client_options options,
+  Assert assert_result) {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  std::optional<uvp::io::byte_stream> accepted;
+  auto payload = bytes(wire_response);
+
+  listener.listen([&](uvp::io::accept_result result) {
+    UVP_REQUIRE(result);
+    accepted.emplace(std::move(result).stream());
+    accepted->write(payload, [&](uvp::io::stream_error error) {
+      UVP_CHECK(!error);
+      accepted->close([&] {
+        accepted.reset();
+      });
+    });
+  });
+
+  uvp::http::client client(loop, std::move(options));
+  auto completed = false;
+  auto request = client.fetch(
+    request_method,
+    "http://127.0.0.1:" + std::to_string(port) + "/raw",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      assert_result(std::move(result));
+      listener.close();
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
+template<class Assert>
+void run_raw_client_response(std::string_view wire_response, Assert assert_result) {
+  run_raw_client_response(
+    wire_response,
+    uvp::http::method::get,
+    uvp::http::client_options{},
+    std::move(assert_result));
+}
+
 } // namespace
 
 UVP_TEST_CASE("http client performs a plain get request") {
@@ -216,6 +269,112 @@ UVP_TEST_CASE("http client rejects unsupported schemes") {
   loop.close();
 
   UVP_CHECK(completed);
+}
+
+UVP_TEST_CASE("http client rejects malformed response status line") {
+  run_raw_client_response("NOTHTTP\r\nContent-Length: 0\r\n\r\n", [](uvp::result<uvp::http::response> result) {
+    UVP_CHECK(!result);
+    UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_malformed_response);
+  });
+}
+
+UVP_TEST_CASE("http client rejects malformed response header line") {
+  run_raw_client_response("HTTP/1.1 200 OK\r\nbroken-header\r\n\r\n", [](uvp::result<uvp::http::response> result) {
+    UVP_CHECK(!result);
+    UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_malformed_response);
+  });
+}
+
+UVP_TEST_CASE("http client enforces response header limit") {
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nX-Large: abcdefghijklmnopqrstuvwxyz\r\n\r\n",
+    uvp::http::method::get,
+    uvp::http::client_options{.max_header_bytes = 24},
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_header_limit_exceeded);
+    });
+}
+
+UVP_TEST_CASE("http client enforces response body limit") {
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef",
+    uvp::http::method::get,
+    uvp::http::client_options{.max_body_bytes = 5},
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_body_limit_exceeded);
+    });
+}
+
+UVP_TEST_CASE("http client accepts eof-delimited response bodies") {
+  run_raw_client_response("HTTP/1.1 200 OK\r\n\r\nhello eof", [](uvp::result<uvp::http::response> result) {
+    UVP_REQUIRE(result);
+    UVP_CHECK_EQ(result.value().status_code(), 200U);
+    UVP_CHECK_EQ(result.value().body(), "hello eof");
+  });
+}
+
+UVP_TEST_CASE("http client decodes chunked responses with extensions and trailers") {
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    "5;kind=text\r\nhello\r\n"
+    "6\r\n world\r\n"
+    "0\r\nX-Trailer: yes\r\n\r\n",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().body(), "hello world");
+    });
+}
+
+UVP_TEST_CASE("http client rejects invalid chunk sizes") {
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    "zz\r\nhello\r\n0\r\n\r\n",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_malformed_response);
+    });
+}
+
+UVP_TEST_CASE("http client rejects unterminated chunk bodies") {
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    "5\r\nhello0\r\n\r\n",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_malformed_response);
+    });
+}
+
+UVP_TEST_CASE("http client treats head responses as bodyless") {
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nignored body",
+    uvp::http::method::head,
+    uvp::http::client_options{},
+    [](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().status_code(), 200U);
+      UVP_CHECK_EQ(result.value().body(), "");
+    });
+}
+
+UVP_TEST_CASE("http client treats 204 and 304 responses as bodyless") {
+  run_raw_client_response(
+    "HTTP/1.1 204 No Content\r\nContent-Length: 12\r\n\r\nignored body",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().status_code(), 204U);
+      UVP_CHECK_EQ(result.value().body(), "");
+    });
+
+  run_raw_client_response(
+    "HTTP/1.1 304 Not Modified\r\nContent-Length: 12\r\n\r\nignored body",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().status_code(), 304U);
+      UVP_CHECK_EQ(result.value().body(), "");
+    });
 }
 
 UVP_TEST_CASE("http client times out waiting for response headers") {

@@ -62,6 +62,13 @@ namespace {
   return ec == std::errc{} && ptr == last;
 }
 
+[[nodiscard]] bool response_must_not_have_body(http::method request_method, unsigned int status_code) noexcept {
+  return request_method == http::method::head ||
+         (status_code >= 100 && status_code < 200) ||
+         status_code == 204 ||
+         status_code == 304;
+}
+
 [[nodiscard]] bool decode_chunked(std::string_view encoded, std::string& out, std::string& error) {
   std::size_t offset = 0;
   while (true) {
@@ -84,6 +91,15 @@ namespace {
 
     offset = line_end + 2;
     if (chunk_size == 0) {
+      const auto trailer_end = encoded.find("\r\n\r\n", offset);
+      if (trailer_end == std::string_view::npos) {
+        error = "chunk trailers are incomplete";
+        return false;
+      }
+      if (trailer_end + 4 != encoded.size()) {
+        error = "unexpected bytes after chunked body";
+        return false;
+      }
       return true;
     }
 
@@ -102,10 +118,17 @@ namespace {
   }
 }
 
-[[nodiscard]] uvp::result<http::response> parse_response(std::string_view bytes, std::size_t max_body_bytes) {
+[[nodiscard]] uvp::result<http::response> parse_response(
+  http::method request_method,
+  std::string_view bytes,
+  std::size_t max_header_bytes,
+  std::size_t max_body_bytes) {
   const auto header_end = bytes.find("\r\n\r\n");
   if (header_end == std::string_view::npos) {
     return make_client_error(errc::client_malformed_response, "response headers are incomplete");
+  }
+  if (header_end + 4 > max_header_bytes) {
+    return make_client_error(errc::client_header_limit_exceeded);
   }
 
   const auto header_block = bytes.substr(0, header_end);
@@ -132,7 +155,7 @@ namespace {
     const auto end = line_end == std::string_view::npos ? header_block.size() : line_end;
     const auto line = header_block.substr(line_offset, end - line_offset);
     const auto colon = line.find(':');
-    if (colon == std::string_view::npos) {
+    if (colon == std::string_view::npos || colon == 0) {
       return make_client_error(errc::client_malformed_response, "response header line is invalid");
     }
     response_headers.add(line.substr(0, colon), trim(line.substr(colon + 1)));
@@ -145,7 +168,9 @@ namespace {
   auto body = std::string{};
   const auto raw_body = bytes.substr(header_end + 4);
   const auto transfer_encoding = lowercase(response_headers.get("transfer-encoding"));
-  if (transfer_encoding.find("chunked") != std::string::npos) {
+  if (response_must_not_have_body(request_method, status_code)) {
+    body.clear();
+  } else if (transfer_encoding.find("chunked") != std::string::npos) {
     auto error = std::string{};
     if (!decode_chunked(raw_body, body, error)) {
       return make_client_error(errc::client_malformed_response, std::move(error));
@@ -154,6 +179,9 @@ namespace {
     auto content_length = 0U;
     if (!parse_uint(length, content_length)) {
       return make_client_error(errc::client_malformed_response, "content-length is invalid");
+    }
+    if (content_length > max_body_bytes) {
+      return make_client_error(errc::client_body_limit_exceeded);
     }
     if (raw_body.size() < content_length) {
       return make_client_error(errc::client_malformed_response, "response body is incomplete");
@@ -456,7 +484,7 @@ private:
     }
 
     if (result.eof()) {
-      auto parsed = parse_response(received_, options_.max_body_bytes);
+      auto parsed = parse_response(method_, received_, options_.max_header_bytes, options_.max_body_bytes);
       close_stream();
       complete(std::move(parsed));
       return;
@@ -469,9 +497,21 @@ private:
     }
 
     received_.append(reinterpret_cast<const char*>(result.bytes().data()), result.bytes().size());
-    if (!response_headers_complete_ && received_.find("\r\n\r\n") != std::string::npos) {
+    const auto header_end = received_.find("\r\n\r\n");
+    if (!response_headers_complete_ && header_end != std::string::npos) {
+      if (header_end + 4 > options_.max_header_bytes) {
+        close_stream();
+        complete(make_client_error(errc::client_header_limit_exceeded));
+        return;
+      }
       response_headers_complete_ = true;
       start_phase_timeout(timeout_phase::response_body, options_.response_body_timeout);
+    }
+
+    if (!response_headers_complete_ && received_.size() > options_.max_header_bytes) {
+      close_stream();
+      complete(make_client_error(errc::client_header_limit_exceeded));
+      return;
     }
 
     if (received_.size() > options_.max_header_bytes + options_.max_body_bytes + 4096) {
