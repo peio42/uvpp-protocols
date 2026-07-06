@@ -285,6 +285,151 @@ UVP_TEST_CASE("http client performs an https get request") {
   UVP_CHECK(completed);
 }
 
+UVP_TEST_CASE("http client reuses an idle HTTP connection for the same origin") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  auto remote_ports = std::vector<unsigned int>{};
+  server.get("/one", [&](uvp::http::request& req, uvp::http::response& res) {
+    remote_ports.push_back(std::get<uvp::io::tcp_endpoint>(req.connection().remote_endpoint()).port);
+    res.text("one");
+  });
+  server.get("/two", [&](uvp::http::request& req, uvp::http::response& res) {
+    remote_ports.push_back(std::get<uvp::io::tcp_endpoint>(req.connection().remote_endpoint()).port);
+    res.text("two");
+  });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .max_idle_connections_per_origin = 1,
+    });
+
+  auto completed = false;
+  std::optional<uvp::http::request_operation> second;
+  auto first = client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/one",
+    [&](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().body(), "one");
+      second.emplace(client.get(
+        "http://127.0.0.1:" + std::to_string(port) + "/two",
+        [&](uvp::result<uvp::http::response> second_result) {
+          completed = true;
+          UVP_REQUIRE(second_result);
+          UVP_CHECK_EQ(second_result.value().body(), "two");
+          client.close_idle_connections();
+          server.close();
+        }));
+    });
+
+  UVP_CHECK(first.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+  UVP_REQUIRE(remote_ports.size() == 2U);
+  UVP_CHECK_EQ(remote_ports[0], remote_ports[1]);
+}
+
+UVP_TEST_CASE("http client does not reuse responses marked connection close") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  auto remote_ports = std::vector<unsigned int>{};
+  server.get("/one", [&](uvp::http::request& req, uvp::http::response& res) {
+    remote_ports.push_back(std::get<uvp::io::tcp_endpoint>(req.connection().remote_endpoint()).port);
+    res.header("connection", "close");
+    res.text("one");
+  });
+  server.get("/two", [&](uvp::http::request& req, uvp::http::response& res) {
+    remote_ports.push_back(std::get<uvp::io::tcp_endpoint>(req.connection().remote_endpoint()).port);
+    res.text("two");
+  });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .max_idle_connections_per_origin = 1,
+    });
+
+  auto completed = false;
+  std::optional<uvp::http::request_operation> second;
+  auto first = client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/one",
+    [&](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().body(), "one");
+      second.emplace(client.get(
+        "http://127.0.0.1:" + std::to_string(port) + "/two",
+        [&](uvp::result<uvp::http::response> second_result) {
+          completed = true;
+          UVP_REQUIRE(second_result);
+          UVP_CHECK_EQ(second_result.value().body(), "two");
+          client.close_idle_connections();
+          server.close();
+        }));
+    });
+
+  UVP_CHECK(first.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+  UVP_REQUIRE(remote_ports.size() == 2U);
+  UVP_CHECK(remote_ports[0] != remote_ports[1]);
+}
+
+UVP_TEST_CASE("http client closes idle pooled connections after timeout") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  server.get("/one", [](uvp::http::request&, uvp::http::response& res) {
+    res.text("one");
+  });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .max_idle_connections_per_origin = 1,
+      .idle_connection_timeout = std::chrono::milliseconds{1},
+    });
+
+  auto completed = false;
+  auto request = client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/one",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().body(), "one");
+      server.close();
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
 UVP_TEST_CASE("http client rejects unsupported schemes") {
   uv::loop loop;
   uvp::http::client client(loop);

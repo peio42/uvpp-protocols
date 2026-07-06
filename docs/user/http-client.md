@@ -97,8 +97,9 @@ transfer cap.
 
 Current limits:
 
-- pooling, redirects, and proxying are follow-up work;
-- requests use `Connection: close`, so connections are not reused yet;
+- redirects and proxying are follow-up work;
+- HTTP/1.1 keep-alive pooling is opt-in because idle streams keep the uvpp loop
+  alive until they are closed or their idle timeout fires;
 - response streaming currently supports cancellation through the returned
   request body writer, but does not yet expose user-controlled response
   pause/resume backpressure;
@@ -127,6 +128,8 @@ uvp::http::client client(
     .max_header_bytes = 64 * 1024,
     .max_body_bytes = 4 * 1024 * 1024,
     .max_pending_request_body_bytes = 2 * 1024 * 1024,
+    .max_idle_connections_per_origin = 2,
+    .idle_connection_timeout = std::chrono::seconds{15},
     .dns_timeout = std::chrono::seconds{2},
     .connect_timeout = std::chrono::seconds{3},
     .response_header_timeout = std::chrono::seconds{5},
@@ -143,3 +146,10 @@ Requests are cancellable:
 ```cpp
 op.cancel();
 ```
+
+When `max_idle_connections_per_origin` is greater than zero, reusable
+HTTP/1.1 responses are returned to the client pool after the response body is
+fully consumed. The client does not reuse responses marked `Connection: close`
+or responses whose body is delimited only by transport EOF. Call
+`client.close_idle_connections()` during shutdown if you do not want to wait for
+idle timers.

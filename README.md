@@ -109,7 +109,7 @@ Available:
 - `uvp::http`: HTTP/1.1 server, multipart request bodies, Server-Sent Events
   response helpers, and an initial HTTP/1.1 client for `http://` and
   `https://` URLs with one-shot buffered requests, request/response streaming,
-  and phase timeouts are available.
+  opt-in keep-alive pooling, and phase timeouts are available.
 - `uvp::io`: byte-stream/listener transport abstractions and reusable outbound
   TCP connection helpers with connect timeouts.
 - `uvp::url`: shared parsed URL values and helpers for client-side protocol

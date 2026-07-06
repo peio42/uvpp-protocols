@@ -13,6 +13,7 @@ the `Current focus` block.
 
 - [Shared URL module](shared-url-module.md)
 - [DNS resolution](dns-resolution.md)
+- [Byte stream lifetime controls](byte-stream-lifetime-controls.md)
 - [HTTP client](http-client.md)
 - [SSE automatic heartbeat scheduling](sse-automatic-heartbeats.md)
 - [TLS policy and identity](tls-policy-and-identity.md)

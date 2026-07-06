@@ -61,12 +61,15 @@ transport/session to the WebSocket module.
 - Implemented: request-body streaming for fixed `Content-Length` and
   HTTP/1.1 chunked uploads, upload queue backpressure, request headers, and
   cancellation while the upload is still open.
+- Implemented: opt-in HTTP/1.1 keep-alive pool keyed by origin, reuse after
+  response consumption, `Connection: close` handling, idle timeout, explicit
+  idle close, and per-origin idle connection limit.
 - Implemented: initial client phase timeouts for DNS resolution, TCP connect,
   response headers, and response body transfer.
-- Drafted separately or still open: TLS stream/listener support, HTTP/2
-  support, WebSocket client support, connection pooling, redirects, proxying,
-  broader phase timeouts, response pause/resume controls, and more advanced
-  upload/response concurrency.
+- Drafted separately or still open: byte-stream lifetime controls for cleaner
+  idle pool liveness, TLS stream/listener support, HTTP/2 support, WebSocket
+  client support, redirects, proxying, broader phase timeouts, response
+  pause/resume controls, and more advanced upload/response concurrency.
 
 ## Goals
 
@@ -304,24 +307,31 @@ time per connection.
 
 ### Connection Pool
 
-Connection pooling should be designed in the first client proposal even if it
-lands after the simplest request path.
+Connection pooling is implemented for the initial HTTP/1.1 client as an opt-in
+pool. It is disabled by default so existing code that runs the loop until idle
+does not keep idle sockets alive unexpectedly.
+
+Clean idle-pool liveness depends on
+[byte stream lifetime controls](byte-stream-lifetime-controls.md). Once
+`uvp::io::byte_stream` forwards `ref()`, `unref()`, and `has_ref()`, the pool can
+mark idle transports as unreferenced without closing them, then reference them
+again when checked out for reuse.
 
 Pool key should include at least:
 
-- scheme;
-- host;
-- port;
+- implemented now: scheme;
+- implemented now: host;
+- implemented now: port;
 - proxy identity, once proxying exists;
 - TLS verification and ALPN-relevant policy.
 
 HTTP/1.1 pool behavior:
 
-- one in-flight request per connection;
-- reuse only after the previous response is fully consumed or discarded safely;
-- honor `Connection: close`;
-- close idle connections after an idle timeout;
-- bound total connections and per-origin connections.
+- implemented: one in-flight request per connection;
+- implemented: reuse only after the previous response is fully consumed;
+- implemented: honor `Connection: close`;
+- implemented: close idle connections after an idle timeout;
+- implemented: bound idle connections per origin.
 
 HTTP/2 pool behavior, later:
 
@@ -500,10 +510,11 @@ Suggested first implementation slice:
 5. [x] HTTPS via TLS connect and hostname verification;
 6. [x] streaming response body;
 7. [x] streaming request body;
-8. basic keep-alive and pool reuse for HTTP/1.1;
-9. cancellation and phase-specific timeout coverage;
-10. redirects with conservative policy;
-11. proxy design spike or minimal HTTP CONNECT support.
+8. [x] basic keep-alive and pool reuse for HTTP/1.1;
+9. byte-stream lifetime controls for idle pool liveness;
+10. cancellation and phase-specific timeout coverage;
+11. redirects with conservative policy;
+12. proxy design spike or minimal HTTP CONNECT support.
 
 HTTP/2 should follow only after ALPN, pooling, and stream ownership are settled.
 
@@ -521,6 +532,7 @@ HTTP/2 should follow only after ALPN, pooling, and stream ownership are settled.
 ## Source Documents
 
 - [DNS resolution](dns-resolution.md)
+- [Byte stream lifetime controls](byte-stream-lifetime-controls.md)
 - [Shared URL module](shared-url-module.md)
 - [TLS support](../archive/tls-support.md)
 - [HTTP/2 support](http2-support.md)

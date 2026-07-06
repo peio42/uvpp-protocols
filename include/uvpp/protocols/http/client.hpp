@@ -19,6 +19,7 @@ class loop;
 namespace uvp::http {
 
 namespace detail {
+class connection_pool;
 struct request_operation_state;
 class streaming_request_state;
 } // namespace detail
@@ -27,6 +28,8 @@ struct client_options {
   std::size_t max_header_bytes = 64 * 1024;
   std::size_t max_body_bytes = 4 * 1024 * 1024;
   std::size_t max_pending_request_body_bytes = 2 * 1024 * 1024;
+  std::size_t max_idle_connections_per_origin = 0;
+  std::chrono::milliseconds idle_connection_timeout = std::chrono::seconds{30};
   std::chrono::milliseconds dns_timeout{0};
   std::chrono::milliseconds connect_timeout{0};
   std::chrono::milliseconds response_header_timeout{0};
@@ -119,10 +122,12 @@ public:
   [[nodiscard]] streaming_request request(http::method method, std::string_view url);
   [[nodiscard]] streaming_request stream(http::method method, std::string_view url);
   [[nodiscard]] streaming_request stream_get(std::string_view url);
+  void close_idle_connections() noexcept;
 
 private:
   uv::loop* loop_;
   client_options options_;
+  std::shared_ptr<detail::connection_pool> pool_;
 };
 
 } // namespace uvp::http

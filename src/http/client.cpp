@@ -23,6 +23,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <utility>
 
 namespace uvp::http {
@@ -32,6 +33,131 @@ namespace detail {
 struct request_operation_state {
   virtual ~request_operation_state() = default;
   virtual void cancel() noexcept = 0;
+};
+
+class connection_pool : public std::enable_shared_from_this<connection_pool> {
+public:
+  struct entry {
+    std::string origin;
+    uvp::io::byte_stream stream;
+    std::shared_ptr<uv::timer> timer;
+  };
+
+  std::optional<uvp::io::byte_stream> take(const std::string& origin) {
+    auto found = idle_.find(origin);
+    if (found == idle_.end()) {
+      return std::nullopt;
+    }
+
+    auto& queue = found->second;
+    while (!queue.empty()) {
+      auto item = std::move(queue.front());
+      queue.pop_front();
+      if (item->timer && !item->timer->closing()) {
+        try {
+          item->timer->stop();
+        } catch (...) {
+        }
+        auto timer = std::move(item->timer);
+        timer->close([timer](uv::timer&) {});
+      }
+      if (item->stream) {
+        auto stream = std::move(item->stream);
+        if (queue.empty()) {
+          idle_.erase(found);
+        }
+        return stream;
+      }
+    }
+
+    idle_.erase(found);
+    return std::nullopt;
+  }
+
+  void release(
+    uv::loop& loop,
+    std::string origin,
+    uvp::io::byte_stream stream,
+    std::size_t max_idle,
+    std::chrono::milliseconds idle_timeout) {
+    if (!stream || max_idle == 0) {
+      if (stream) {
+        auto item = std::make_shared<entry>();
+        item->stream = std::move(stream);
+        close_entry(item);
+      }
+      return;
+    }
+
+    auto item = std::make_shared<entry>();
+    item->origin = std::move(origin);
+    item->stream = std::move(stream);
+    if (idle_timeout > std::chrono::milliseconds{0}) {
+      item->timer = std::make_shared<uv::timer>(loop);
+      auto weak_pool = weak_from_this();
+      std::weak_ptr<entry> weak_item = item;
+      item->timer->start(idle_timeout, [weak_pool, weak_item](uv::timer&) {
+        if (auto pool = weak_pool.lock()) {
+          if (auto locked = weak_item.lock()) {
+            pool->expire(locked);
+          }
+        }
+      });
+    }
+
+    auto& queue = idle_[item->origin];
+    queue.push_back(item);
+    while (queue.size() > max_idle) {
+      auto evicted = std::move(queue.front());
+      queue.pop_front();
+      close_entry(evicted);
+    }
+  }
+
+  void close_all() noexcept {
+    for (auto& [_, queue] : idle_) {
+      for (auto& item : queue) {
+        close_entry(item);
+      }
+    }
+    idle_.clear();
+  }
+
+private:
+  void expire(const std::shared_ptr<entry>& item) {
+    auto found = idle_.find(item->origin);
+    if (found != idle_.end()) {
+      auto& queue = found->second;
+      queue.erase(
+        std::remove_if(
+          queue.begin(),
+          queue.end(),
+          [&](const std::shared_ptr<entry>& candidate) {
+            return candidate == item;
+          }),
+        queue.end());
+      if (queue.empty()) {
+        idle_.erase(found);
+      }
+    }
+    close_entry(item);
+  }
+
+  void close_entry(const std::shared_ptr<entry>& item) noexcept {
+    if (item->timer && !item->timer->closing()) {
+      try {
+        item->timer->stop();
+      } catch (...) {
+      }
+      auto timer = std::move(item->timer);
+      timer->close([timer](uv::timer&) {});
+    }
+    if (item->stream) {
+      item->stream.close([item] {});
+    }
+  }
+
+  std::unordered_map<std::string, std::deque<std::shared_ptr<entry>>> idle_;
 };
 
 } // namespace detail
@@ -79,6 +205,29 @@ namespace {
          (status_code >= 100 && status_code < 200) ||
          status_code == 204 ||
          status_code == 304;
+}
+
+[[nodiscard]] std::string origin_key(const uvp::url& value) {
+  auto key = std::string{value.scheme()};
+  key += "://";
+  key += value.hostname();
+  key += ':';
+  auto port = effective_port(value);
+  key += port ? std::to_string(port.value()) : std::string{value.port()};
+  return key;
+}
+
+[[nodiscard]] bool connection_requests_close(const http::headers& headers) {
+  const auto connection = lowercase(headers.get("connection"));
+  return connection.find("close") != std::string::npos;
+}
+
+[[nodiscard]] bool response_has_reusable_framing(http::method request_method, const http::response_head& head) {
+  if (response_must_not_have_body(request_method, head.status_code)) {
+    return true;
+  }
+  const auto transfer_encoding = lowercase(head.headers.get("transfer-encoding"));
+  return transfer_encoding.find("chunked") != std::string::npos || !head.headers.get("content-length").empty();
 }
 
 void append_ascii(std::vector<std::byte>& out, std::string_view value) {
@@ -282,9 +431,16 @@ struct parsed_response_head {
 
 class request_state : public detail::request_operation_state, public std::enable_shared_from_this<request_state> {
 public:
-  request_state(uv::loop& loop, client_options options, http::method method, std::string_view url, client_callback callback)
+  request_state(
+    uv::loop& loop,
+    client_options options,
+    std::shared_ptr<detail::connection_pool> pool,
+    http::method method,
+    std::string_view url,
+    client_callback callback)
       : loop_(&loop),
         options_(options),
+        pool_(std::move(pool)),
         method_(method),
         url_input_(url),
         callback_(std::move(callback)),
@@ -308,6 +464,13 @@ public:
     auto endpoint = uvp::authority_endpoint(url_);
     if (!endpoint) {
       complete(wrap_client_error(errc::client_invalid_url, endpoint.error()));
+      return request_operation{shared_from_this()};
+    }
+
+    origin_key_ = origin_key(url_);
+    if (auto pooled = pool_->take(origin_key_)) {
+      stream_ = std::move(*pooled);
+      write_buffered_request();
       return request_operation{shared_from_this()};
     }
 
@@ -527,7 +690,11 @@ private:
       request += ':';
       request += url_.port();
     }
-    request += "\r\nUser-Agent: uvpp-protocols/0\r\nAccept: */*\r\nConnection: close\r\n\r\n";
+    request += "\r\nUser-Agent: uvpp-protocols/0\r\nAccept: */*\r\n";
+    if (options_.max_idle_connections_per_origin == 0) {
+      request += "Connection: close\r\n";
+    }
+    request += "\r\n";
 
     write_payload_.resize(request.size());
     std::memcpy(write_payload_.data(), request.data(), request.size());
@@ -560,9 +727,7 @@ private:
     }
 
     if (result.eof()) {
-      auto parsed = parse_response(method_, received_, options_.max_header_bytes, options_.max_body_bytes);
-      close_stream();
-      complete(std::move(parsed));
+      try_complete_buffered_response(true);
       return;
     }
 
@@ -573,27 +738,125 @@ private:
     }
 
     received_.append(reinterpret_cast<const char*>(result.bytes().data()), result.bytes().size());
+    try_complete_buffered_response(false);
+  }
+
+  void try_complete_buffered_response(bool eof) {
     const auto header_end = received_.find("\r\n\r\n");
-    if (!response_headers_complete_ && header_end != std::string::npos) {
-      if (header_end + 4 > options_.max_header_bytes) {
+    if (header_end == std::string::npos) {
+      if (received_.size() > options_.max_header_bytes) {
         close_stream();
         complete(make_client_error(errc::client_header_limit_exceeded));
         return;
       }
+      if (eof) {
+        close_stream();
+        complete(make_client_error(errc::client_malformed_response, "response headers are incomplete"));
+      }
+      return;
+    }
+
+    if (header_end + 4 > options_.max_header_bytes) {
+      close_stream();
+      complete(make_client_error(errc::client_header_limit_exceeded));
+      return;
+    }
+    if (!response_headers_complete_) {
       response_headers_complete_ = true;
       start_phase_timeout(timeout_phase::response_body, options_.response_body_timeout);
     }
 
-    if (!response_headers_complete_ && received_.size() > options_.max_header_bytes) {
+    auto parsed_head = parse_response_head(received_, options_.max_header_bytes);
+    if (!parsed_head) {
       close_stream();
-      complete(make_client_error(errc::client_header_limit_exceeded));
+      complete(parsed_head.error());
+      return;
+    }
+
+    const auto& head = parsed_head.value().head;
+    const auto body_offset = parsed_head.value().body_offset;
+    auto reusable = options_.max_idle_connections_per_origin > 0 &&
+                    !connection_requests_close(head.headers) &&
+                    response_has_reusable_framing(method_, head);
+
+    if (response_must_not_have_body(method_, head.status_code)) {
+      complete_buffered_response(parse_response(method_, received_.substr(0, body_offset), options_.max_header_bytes, options_.max_body_bytes), reusable);
+      return;
+    }
+
+    const auto raw_body = std::string_view{received_}.substr(body_offset);
+    const auto transfer_encoding = lowercase(head.headers.get("transfer-encoding"));
+    if (transfer_encoding.find("chunked") != std::string::npos) {
+      auto decoded = std::string{};
+      auto error = std::string{};
+      if (decode_chunked(raw_body, decoded, error)) {
+        complete_buffered_response(parse_response(method_, received_, options_.max_header_bytes, options_.max_body_bytes), reusable);
+        return;
+      }
+      if (error.find("invalid") != std::string::npos || error.find("not terminated") != std::string::npos ||
+          error.find("unexpected bytes") != std::string::npos) {
+        close_stream();
+        complete(make_client_error(errc::client_malformed_response, std::move(error)));
+        return;
+      }
+      if (eof) {
+        close_stream();
+        complete(make_client_error(errc::client_malformed_response, std::move(error)));
+      }
+      return;
+    }
+
+    if (const auto length = head.headers.get("content-length"); !length.empty()) {
+      auto content_length = 0U;
+      if (!parse_uint(length, content_length)) {
+        close_stream();
+        complete(make_client_error(errc::client_malformed_response, "content-length is invalid"));
+        return;
+      }
+      if (content_length > options_.max_body_bytes) {
+        close_stream();
+        complete(make_client_error(errc::client_body_limit_exceeded));
+        return;
+      }
+      if (raw_body.size() < content_length) {
+        if (eof) {
+          close_stream();
+          complete(make_client_error(errc::client_malformed_response, "response body is incomplete"));
+        }
+        return;
+      }
+      complete_buffered_response(
+        parse_response(method_, received_.substr(0, body_offset + content_length), options_.max_header_bytes, options_.max_body_bytes),
+        reusable);
       return;
     }
 
     if (received_.size() > options_.max_header_bytes + options_.max_body_bytes + 4096) {
       close_stream();
       complete(make_client_error(errc::client_body_limit_exceeded));
+      return;
     }
+    if (eof) {
+      complete_buffered_response(parse_response(method_, received_, options_.max_header_bytes, options_.max_body_bytes), false);
+    }
+  }
+
+  void complete_buffered_response(uvp::result<http::response> result, bool reusable) {
+    if (reusable && result && stream_) {
+      try {
+        stream_.read_stop();
+      } catch (...) {
+      }
+      pool_->release(
+        *loop_,
+        origin_key_,
+        std::move(stream_),
+        options_.max_idle_connections_per_origin,
+        options_.idle_connection_timeout);
+    } else {
+      close_stream();
+    }
+    complete(std::move(result));
   }
 
   void close_stream() noexcept {
@@ -617,9 +880,11 @@ private:
 
   uv::loop* loop_;
   client_options options_;
+  std::shared_ptr<detail::connection_pool> pool_;
   http::method method_;
   std::string url_input_;
   client_callback callback_;
+  std::string origin_key_;
   uvp::url url_;
   uvp::dns::resolver resolver_;
   uvp::io::tcp_connector connector_;
@@ -645,9 +910,15 @@ class streaming_request_state final
     : public request_operation_state,
       public std::enable_shared_from_this<streaming_request_state> {
 public:
-  streaming_request_state(uv::loop& loop, client_options options, http::method method, std::string_view url)
+  streaming_request_state(
+    uv::loop& loop,
+    client_options options,
+    std::shared_ptr<detail::connection_pool> pool,
+    http::method method,
+    std::string_view url)
       : loop_(&loop),
         options_(std::move(options)),
+        pool_(std::move(pool)),
         method_(method),
         url_input_(url),
         resolver_(loop),
@@ -794,6 +1065,13 @@ public:
     auto endpoint = uvp::authority_endpoint(url_);
     if (!endpoint) {
       complete(wrap_client_error(errc::client_invalid_url, endpoint.error()));
+      return request_body_writer{shared_from_this()};
+    }
+
+    origin_key_ = origin_key(url_);
+    if (auto pooled = pool_->take(origin_key_)) {
+      stream_ = std::move(*pooled);
+      write_request();
       return request_body_writer{shared_from_this()};
     }
 
@@ -1045,7 +1323,9 @@ private:
       request += "Accept: */*\r\n";
     }
     if (!request_headers_.contains("connection")) {
-      request += "Connection: close\r\n";
+      if (options_.max_idle_connections_per_origin == 0) {
+        request += "Connection: close\r\n";
+      }
     }
     for (const auto& [name, value] : request_headers_) {
       if (http::headers::names_equal(name, "host")) {
@@ -1211,8 +1491,7 @@ private:
 
       if (response_must_not_have_body(method_, response_head_.status_code)) {
         body_mode_ = body_mode::none;
-        close_stream();
-        complete_success();
+        finish_response_success();
         return;
       }
 
@@ -1266,8 +1545,7 @@ private:
     }
 
     if (!completed_ && remaining_content_length_ == 0) {
-      close_stream();
-      complete_success();
+      finish_response_success();
     }
   }
 
@@ -1294,8 +1572,7 @@ private:
       if (chunk_size == 0) {
         if (buffer_.substr(data_offset, 2) == "\r\n") {
           buffer_.erase(0, data_offset + 2);
-          close_stream();
-          complete_success();
+          finish_response_success();
           return;
         }
         const auto trailer_end = buffer_.find("\r\n\r\n", data_offset);
@@ -1303,8 +1580,7 @@ private:
           return;
         }
         buffer_.erase(0, trailer_end + 4);
-        close_stream();
-        complete_success();
+        finish_response_success();
         return;
       }
 
@@ -1396,6 +1672,27 @@ private:
     complete(uvp::result<void>{});
   }
 
+  void finish_response_success() {
+    if (options_.max_idle_connections_per_origin > 0 &&
+        !connection_requests_close(response_head_.headers) &&
+        response_has_reusable_framing(method_, response_head_) &&
+        stream_) {
+      try {
+        stream_.read_stop();
+      } catch (...) {
+      }
+      pool_->release(
+        *loop_,
+        origin_key_,
+        std::move(stream_),
+        options_.max_idle_connections_per_origin,
+        options_.idle_connection_timeout);
+    } else {
+      close_stream();
+    }
+    complete_success();
+  }
+
   void complete(uvp::result<void> result) {
     if (completed_) {
       return;
@@ -1411,8 +1708,10 @@ private:
 
   uv::loop* loop_;
   client_options options_;
+  std::shared_ptr<detail::connection_pool> pool_;
   http::method method_;
   std::string url_input_;
+  std::string origin_key_;
   uvp::url url_;
   uvp::dns::resolver resolver_;
   uvp::io::tcp_connector connector_;
@@ -1598,20 +1897,20 @@ client::client(uv::loop& loop)
     : client(loop, client_options{}) {}
 
 client::client(uv::loop& loop, client_options options)
-    : loop_(&loop), options_(options) {}
+    : loop_(&loop), options_(options), pool_(std::make_shared<detail::connection_pool>()) {}
 
 request_operation client::get(std::string_view url, client_callback callback) {
   return fetch(http::method::get, url, std::move(callback));
 }
 
 request_operation client::fetch(http::method method, std::string_view url, client_callback callback) {
-  auto state = std::make_shared<request_state>(*loop_, options_, method, url, std::move(callback));
+  auto state = std::make_shared<request_state>(*loop_, options_, pool_, method, url, std::move(callback));
   return state->start();
 }
 
 streaming_request client::request(http::method method, std::string_view url) {
   return streaming_request{
-    std::make_shared<detail::streaming_request_state>(*loop_, options_, method, url)};
+    std::make_shared<detail::streaming_request_state>(*loop_, options_, pool_, method, url)};
 }
 
 streaming_request client::stream(http::method method, std::string_view url) {
@@ -1620,6 +1919,12 @@ streaming_request client::stream(http::method method, std::string_view url) {
 
 streaming_request client::stream_get(std::string_view url) {
   return stream(http::method::get, url);
+}
+
+void client::close_idle_connections() noexcept {
+  if (pool_) {
+    pool_->close_all();
+  }
 }
 
 } // namespace uvp::http
