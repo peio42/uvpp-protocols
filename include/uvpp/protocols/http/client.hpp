@@ -26,6 +26,7 @@ class streaming_request_state;
 struct client_options {
   std::size_t max_header_bytes = 64 * 1024;
   std::size_t max_body_bytes = 4 * 1024 * 1024;
+  std::size_t max_pending_request_body_bytes = 2 * 1024 * 1024;
   std::chrono::milliseconds dns_timeout{0};
   std::chrono::milliseconds connect_timeout{0};
   std::chrono::milliseconds response_header_timeout{0};
@@ -45,6 +46,7 @@ struct response_head {
 using response_headers_callback = std::function<void(const response_head&)>;
 using response_data_callback = std::function<void(std::span<const std::byte>)>;
 using response_complete_callback = std::function<void(uvp::result<void>)>;
+using request_body_drain_callback = std::function<void()>;
 
 class request_operation {
 public:
@@ -58,10 +60,37 @@ private:
   std::shared_ptr<detail::request_operation_state> state_;
 };
 
+class request_body_writer {
+public:
+  request_body_writer() = default;
+  explicit request_body_writer(std::shared_ptr<detail::streaming_request_state> state);
+
+  request_body_writer& on_drain(request_body_drain_callback callback) &;
+  request_body_writer&& on_drain(request_body_drain_callback callback) &&;
+
+  [[nodiscard]] stream_write_result write(const char* chunk);
+  [[nodiscard]] stream_write_result write(std::string_view chunk);
+  [[nodiscard]] stream_write_result write(std::span<const std::byte> chunk);
+  [[nodiscard]] stream_write_result write(std::string chunk);
+  void end();
+  void cancel() noexcept;
+
+  [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(state_); }
+
+private:
+  std::shared_ptr<detail::streaming_request_state> state_;
+};
+
 class streaming_request {
 public:
   streaming_request() = default;
 
+  streaming_request& header(std::string_view name, std::string_view value) &;
+  streaming_request&& header(std::string_view name, std::string_view value) &&;
+  streaming_request& content_length(std::size_t bytes) &;
+  streaming_request&& content_length(std::size_t bytes) &&;
+  streaming_request& chunked() &;
+  streaming_request&& chunked() &&;
   streaming_request& on_response_headers(response_headers_callback callback) &;
   streaming_request&& on_response_headers(response_headers_callback callback) &&;
   streaming_request& on_data(response_data_callback callback) &;
@@ -69,7 +98,7 @@ public:
   streaming_request& on_complete(response_complete_callback callback) &;
   streaming_request&& on_complete(response_complete_callback callback) &&;
 
-  [[nodiscard]] request_operation start();
+  [[nodiscard]] request_body_writer start();
   [[nodiscard]] bool valid() const noexcept { return static_cast<bool>(state_); }
 
 private:
@@ -87,6 +116,7 @@ public:
 
   [[nodiscard]] request_operation get(std::string_view url, client_callback callback);
   [[nodiscard]] request_operation fetch(http::method method, std::string_view url, client_callback callback);
+  [[nodiscard]] streaming_request request(http::method method, std::string_view url);
   [[nodiscard]] streaming_request stream(http::method method, std::string_view url);
   [[nodiscard]] streaming_request stream_get(std::string_view url);
 

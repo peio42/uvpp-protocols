@@ -48,6 +48,8 @@ public:
       return "HTTP client request was cancelled";
     case errc::client_timeout:
       return "HTTP client request timed out";
+    case errc::client_request_body_failed:
+      return "HTTP client request body failed";
     }
     return "unknown HTTP protocol error";
   }

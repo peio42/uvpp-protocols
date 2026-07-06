@@ -7,8 +7,8 @@ Start here:
 
 - [DNS](dns.md): asynchronous host/service resolution and cancellable address
   candidate operations.
-- [HTTP client](http-client.md): one-shot buffered and response-streaming
-  HTTP/1.1 requests over `http://` and `https://` URLs.
+- [HTTP client](http-client.md): one-shot buffered and streaming HTTP/1.1
+  requests over `http://` and `https://` URLs.
 - [HTTP server](http-server.md): routing, request body policies, responses,
   streaming, and errors.
 - [IO](io.md): byte streams, listeners, and outbound TCP connection helpers.

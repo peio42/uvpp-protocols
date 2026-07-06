@@ -1,8 +1,8 @@
 # HTTP Client Proposal
 
-Status: Initial HTTP/HTTPS one-shot client and response streaming implemented;
-upload streaming, pooling, redirects, proxying, and broader timeout coverage
-remain open
+Status: Initial HTTP/HTTPS one-shot client plus request and response streaming
+implemented; pooling, redirects, proxying, and broader timeout coverage remain
+open
 
 ## Decision
 
@@ -58,12 +58,15 @@ transport/session to the WebSocket module.
 - Implemented: response-body streaming with `on_response_headers`, `on_data`,
   and `on_complete`, covering content-length, chunked, EOF-delimited, and
   bodyless responses without buffering the full body first.
+- Implemented: request-body streaming for fixed `Content-Length` and
+  HTTP/1.1 chunked uploads, upload queue backpressure, request headers, and
+  cancellation while the upload is still open.
 - Implemented: initial client phase timeouts for DNS resolution, TCP connect,
   response headers, and response body transfer.
 - Drafted separately or still open: TLS stream/listener support, HTTP/2
   support, WebSocket client support, connection pooling, redirects, proxying,
-  broader phase timeouts, streaming upload API, and user-visible streaming
-  backpressure controls.
+  broader phase timeouts, response pause/resume controls, and more advanced
+  upload/response concurrency.
 
 ## Goals
 
@@ -158,12 +161,16 @@ The exact owning types still need naming, but the lifecycle should be explicit:
 - completion fires exactly once with success, cancellation, timeout, protocol
   failure, or transport failure.
 
-The initial implemented subset exposes response streaming only:
+The initial implemented subset exposes request and response streaming:
 
 ```cpp
-auto req = client.stream_get("https://example.com/events");
+auto req = client.request(
+  uvp::http::method::post,
+  "https://example.com/upload");
 
-req.on_response_headers([](uvp::http::response_head const& h) {
+req.content_length(total_size)
+  .header("content-type", "application/octet-stream")
+  .on_response_headers([](uvp::http::response_head const& h) {
     // status, headers
   })
   .on_data([](std::span<std::byte const> chunk) {
@@ -173,12 +180,15 @@ req.on_response_headers([](uvp::http::response_head const& h) {
     // complete, cancelled, timed out, or failed
   });
 
-auto op = req.start();
+auto body = req.start();
+body.write(chunk1);
+body.write(chunk2);
+body.end();
 ```
 
-This is enough for large downloads and SSE-style clients, and gives the future
-WebSocket client a path to observe response headers before an upgrade handoff.
-Upload streaming remains the next API expansion for this section.
+This is enough for large downloads, SSE-style clients, and fixed or chunked
+uploads. It also gives the future WebSocket client a path to observe response
+headers before an upgrade handoff.
 
 ## Core Components
 
@@ -389,9 +399,10 @@ SOCKS proxying can remain out of scope until there is a concrete need.
 
 Upload streaming:
 
-- support fixed-length and chunked request bodies;
-- provide backpressure through asynchronous write callbacks or a bounded queue;
-- allow upload cancellation while response headers may or may not have arrived;
+- implemented for fixed-length and chunked request bodies;
+- implemented with bounded queue backpressure through `stream_write_result` and
+  `on_drain`;
+- implemented upload cancellation before the response path begins;
 - surface write-side failures once.
 
 Download streaming:
@@ -488,7 +499,7 @@ Suggested first implementation slice:
 4. [x] outbound TCP connect helper extraction;
 5. [x] HTTPS via TLS connect and hostname verification;
 6. [x] streaming response body;
-7. streaming request body;
+7. [x] streaming request body;
 8. basic keep-alive and pool reuse for HTTP/1.1;
 9. cancellation and phase-specific timeout coverage;
 10. redirects with conservative policy;

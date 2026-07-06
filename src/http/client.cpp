@@ -10,12 +10,15 @@
 #include <uvpp/handles/timer.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
+#include <deque>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -76,6 +79,44 @@ namespace {
          (status_code >= 100 && status_code < 200) ||
          status_code == 204 ||
          status_code == 304;
+}
+
+void append_ascii(std::vector<std::byte>& out, std::string_view value) {
+  const auto offset = out.size();
+  out.resize(offset + value.size());
+  if (!value.empty()) {
+    std::memcpy(out.data() + offset, value.data(), value.size());
+  }
+}
+
+[[nodiscard]] std::vector<std::byte> to_bytes(std::string_view value) {
+  auto out = std::vector<std::byte>(value.size());
+  if (!value.empty()) {
+    std::memcpy(out.data(), value.data(), value.size());
+  }
+  return out;
+}
+
+[[nodiscard]] std::vector<std::byte> serialize_chunk(std::span<const std::byte> chunk) {
+  auto size_buffer = std::array<char, 2 * sizeof(std::size_t)>{};
+  const auto [ptr, ec] = std::to_chars(
+    size_buffer.data(),
+    size_buffer.data() + size_buffer.size(),
+    chunk.size(),
+    16);
+  auto out = std::vector<std::byte>{};
+  if (ec != std::errc{}) {
+    return out;
+  }
+  append_ascii(out, std::string_view{size_buffer.data(), static_cast<std::size_t>(ptr - size_buffer.data())});
+  append_ascii(out, "\r\n");
+  const auto offset = out.size();
+  out.resize(offset + chunk.size());
+  if (!chunk.empty()) {
+    std::memcpy(out.data() + offset, chunk.data(), chunk.size());
+  }
+  append_ascii(out, "\r\n");
+  return out;
 }
 
 struct parsed_response_head {
@@ -418,7 +459,7 @@ private:
     }
 
     stream_ = std::move(stream);
-    write_request();
+    write_buffered_request();
   }
 
   void start_tls(uvp::io::byte_stream lower) {
@@ -472,10 +513,10 @@ private:
     }
 
     stream_ = std::move(result).stream();
-    write_request();
+    write_buffered_request();
   }
 
-  void write_request() {
+  void write_buffered_request() {
     auto request = std::string{};
     request += http::to_string(method_);
     request += ' ';
@@ -612,6 +653,28 @@ public:
         resolver_(loop),
         connector_(loop) {}
 
+  void header(std::string_view name, std::string_view value) {
+    if (!started_) {
+      request_headers_.set(name, value);
+    }
+  }
+
+  void content_length(std::size_t bytes) {
+    if (started_) {
+      return;
+    }
+    upload_mode_ = upload_mode::content_length;
+    content_length_ = bytes;
+    request_headers_.set("content-length", std::to_string(bytes));
+  }
+
+  void chunked() {
+    if (started_) {
+      return;
+    }
+    enable_chunked_upload();
+  }
+
   void on_response_headers(response_headers_callback callback) {
     on_headers_ = std::move(callback);
   }
@@ -624,24 +687,114 @@ public:
     on_complete_ = std::move(callback);
   }
 
-  request_operation start() {
+  void on_drain(request_body_drain_callback callback) {
+    on_drain_ = std::move(callback);
+  }
+
+  stream_write_result write(std::string payload) {
+    if (payload.empty()) {
+      return stream_write_result::ready();
+    }
+    if (completed_ || upload_ended_) {
+      return stream_write_result::rejected(std::make_error_code(std::errc::not_connected));
+    }
+    if (upload_backpressured_) {
+      return stream_write_result::rejected(std::make_error_code(std::errc::operation_would_block));
+    }
+    if (headers_written_ && upload_mode_ == upload_mode::none) {
+      return stream_write_result::rejected(std::make_error_code(std::errc::invalid_argument));
+    }
+    if (upload_mode_ == upload_mode::none) {
+      if (headers_started_) {
+        return stream_write_result::rejected(std::make_error_code(std::errc::invalid_argument));
+      }
+      enable_chunked_upload();
+    }
+
+    auto wire = std::vector<std::byte>{};
+    if (upload_mode_ == upload_mode::content_length) {
+      if (!content_length_ || accepted_upload_body_bytes_ + payload.size() > *content_length_) {
+        return stream_write_result::rejected(std::make_error_code(std::errc::invalid_argument));
+      }
+      accepted_upload_body_bytes_ += payload.size();
+      wire = to_bytes(payload);
+    } else if (upload_mode_ == upload_mode::chunked) {
+      accepted_upload_body_bytes_ += payload.size();
+      wire = serialize_chunk(std::as_bytes(std::span{payload.data(), payload.size()}));
+    } else {
+      return stream_write_result::rejected(std::make_error_code(std::errc::invalid_argument));
+    }
+
+    pending_upload_wire_bytes_ += wire.size();
+    upload_writes_.push_back(pending_upload_write{std::move(wire)});
+    flush_upload_writes();
+
+    if (options_.max_pending_request_body_bytes > 0 &&
+        pending_upload_wire_bytes_ >= options_.max_pending_request_body_bytes) {
+      upload_backpressured_ = true;
+      return stream_write_result::backpressure();
+    }
+    return stream_write_result::ready();
+  }
+
+  stream_write_result write(std::span<const std::byte> payload) {
+    auto copy = std::string{};
+    copy.resize(payload.size());
+    if (!payload.empty()) {
+      std::memcpy(copy.data(), payload.data(), payload.size());
+    }
+    return write(std::move(copy));
+  }
+
+  void end() {
+    if (completed_ || upload_ended_) {
+      return;
+    }
+
+    if (upload_mode_ == upload_mode::none) {
+      upload_ended_ = true;
+      if (headers_written_) {
+        begin_response_read();
+      }
+      return;
+    }
+
+    if (upload_mode_ == upload_mode::content_length) {
+      if (!content_length_ || accepted_upload_body_bytes_ != *content_length_) {
+        fail_request_body("content-length request body size mismatch");
+        return;
+      }
+    } else if (upload_mode_ == upload_mode::chunked) {
+      pending_upload_wire_bytes_ += 5;
+      upload_writes_.push_back(pending_upload_write{to_bytes("0\r\n\r\n")});
+    }
+
+    upload_ended_ = true;
+    flush_upload_writes();
+    if (headers_written_ && upload_writes_.empty() && !upload_writing_) {
+      begin_response_read();
+    }
+  }
+
+  request_body_writer start() {
+    started_ = true;
     auto parsed = uvp::parse_url(url_input_);
     if (!parsed) {
       complete(wrap_client_error(errc::client_invalid_url, parsed.error()));
-      return request_operation{shared_from_this()};
+      return request_body_writer{shared_from_this()};
     }
 
     url_ = std::move(parsed).value();
     const auto scheme = uvp::scheme_id(url_);
     if (scheme != uvp::url_scheme::http && scheme != uvp::url_scheme::https) {
       complete(make_client_error(errc::client_unsupported_scheme));
-      return request_operation{shared_from_this()};
+      return request_body_writer{shared_from_this()};
     }
 
     auto endpoint = uvp::authority_endpoint(url_);
     if (!endpoint) {
       complete(wrap_client_error(errc::client_invalid_url, endpoint.error()));
-      return request_operation{shared_from_this()};
+      return request_body_writer{shared_from_this()};
     }
 
     auto self = shared_from_this();
@@ -655,7 +808,7 @@ public:
       });
     start_phase_timeout(timeout_phase::dns, options_.dns_timeout);
 
-    return request_operation{std::move(self)};
+    return request_body_writer{std::move(self)};
   }
 
   void cancel() noexcept override {
@@ -686,6 +839,22 @@ private:
     chunked,
     eof,
   };
+
+  enum class upload_mode {
+    none,
+    content_length,
+    chunked,
+  };
+
+  struct pending_upload_write {
+    std::vector<std::byte> payload;
+  };
+
+  void enable_chunked_upload() {
+    upload_mode_ = upload_mode::chunked;
+    content_length_.reset();
+    request_headers_.set("transfer-encoding", "chunked");
+  }
 
   void start_phase_timeout(timeout_phase phase, std::chrono::milliseconds duration) {
     stop_phase_timeout();
@@ -868,31 +1037,127 @@ private:
       request += ':';
       request += url_.port();
     }
-    request += "\r\nUser-Agent: uvpp-protocols/0\r\nAccept: */*\r\nConnection: close\r\n\r\n";
+    request += "\r\n";
+    if (!request_headers_.contains("user-agent")) {
+      request += "User-Agent: uvpp-protocols/0\r\n";
+    }
+    if (!request_headers_.contains("accept")) {
+      request += "Accept: */*\r\n";
+    }
+    if (!request_headers_.contains("connection")) {
+      request += "Connection: close\r\n";
+    }
+    for (const auto& [name, value] : request_headers_) {
+      if (http::headers::names_equal(name, "host")) {
+        continue;
+      }
+      request += name;
+      request += ": ";
+      request += value;
+      request += "\r\n";
+    }
+    request += "\r\n";
 
+    headers_started_ = true;
+    if (upload_mode_ == upload_mode::content_length && content_length_ == 0) {
+      upload_ended_ = true;
+    }
     write_payload_.resize(request.size());
     std::memcpy(write_payload_.data(), request.data(), request.size());
     auto self = shared_from_this();
     stream_.write(write_payload_, [self](uvp::io::stream_error result) {
-      self->on_written(result);
+      self->on_request_headers_written(result);
     });
   }
 
-  void on_written(uvp::io::stream_error result) {
+  void on_request_headers_written(uvp::io::stream_error result) {
     if (completed_) {
       return;
     }
     if (result) {
-      complete(make_client_error(errc::client_connect_failed, result.message()));
+      complete(make_client_error(errc::client_request_body_failed, result.message()));
       return;
     }
 
+    headers_written_ = true;
+    if (upload_mode_ == upload_mode::none || upload_ended_) {
+      if (upload_writes_.empty() && !upload_writing_) {
+        begin_response_read();
+        return;
+      }
+    }
+    flush_upload_writes();
+  }
+
+  void flush_upload_writes() {
+    if (completed_ || !headers_written_ || upload_writing_ || upload_writes_.empty()) {
+      return;
+    }
+
+    upload_writing_ = true;
+    auto self = shared_from_this();
+    stream_.write(upload_writes_.front().payload, [self](uvp::io::stream_error result) {
+      self->on_upload_written(result);
+    });
+  }
+
+  void on_upload_written(uvp::io::stream_error result) {
+    if (completed_) {
+      return;
+    }
+    upload_writing_ = false;
+    if (result) {
+      fail_request_body(result.message());
+      return;
+    }
+
+    if (!upload_writes_.empty()) {
+      pending_upload_wire_bytes_ -= std::min(pending_upload_wire_bytes_, upload_writes_.front().payload.size());
+      upload_writes_.pop_front();
+    }
+    notify_upload_drain_if_needed();
+
+    if (!upload_writes_.empty()) {
+      flush_upload_writes();
+      return;
+    }
+    if (upload_ended_) {
+      begin_response_read();
+    }
+  }
+
+  void notify_upload_drain_if_needed() {
+    if (!upload_backpressured_) {
+      return;
+    }
+    const auto low_watermark = options_.max_pending_request_body_bytes / 2;
+    if (pending_upload_wire_bytes_ > low_watermark) {
+      return;
+    }
+
+    upload_backpressured_ = false;
+    if (on_drain_) {
+      on_drain_();
+    }
+  }
+
+  void begin_response_read() {
+    if (completed_ || reading_response_) {
+      return;
+    }
+
+    reading_response_ = true;
     auto self = shared_from_this();
     stream_.read_start(
       [self](uvp::io::read_result result) {
         self->on_read(result);
       });
     start_phase_timeout(timeout_phase::response_header, options_.response_header_timeout);
+  }
+
+  void fail_request_body(std::string detail) {
+    close_stream();
+    complete(make_client_error(errc::client_request_body_failed, std::move(detail)));
   }
 
   void on_read(uvp::io::read_result result) {
@@ -1159,13 +1424,27 @@ private:
   response_headers_callback on_headers_;
   response_data_callback on_data_;
   response_complete_callback on_complete_;
+  request_body_drain_callback on_drain_;
+  http::headers request_headers_;
   http::response_head response_head_;
   std::vector<std::byte> write_payload_;
+  std::deque<pending_upload_write> upload_writes_;
   std::string buffer_;
+  std::optional<std::size_t> content_length_;
   std::size_t remaining_content_length_ = 0;
   std::size_t delivered_body_bytes_ = 0;
+  std::size_t accepted_upload_body_bytes_ = 0;
+  std::size_t pending_upload_wire_bytes_ = 0;
   timeout_phase timeout_phase_ = timeout_phase::none;
   body_mode body_mode_ = body_mode::unknown;
+  upload_mode upload_mode_ = upload_mode::none;
+  bool started_ = false;
+  bool headers_started_ = false;
+  bool headers_written_ = false;
+  bool upload_writing_ = false;
+  bool upload_ended_ = false;
+  bool upload_backpressured_ = false;
+  bool reading_response_ = false;
   bool headers_seen_ = false;
   bool cancelled_ = false;
   bool timed_out_ = false;
@@ -1184,8 +1463,93 @@ void request_operation::cancel() noexcept {
   state_->cancel();
 }
 
+request_body_writer::request_body_writer(std::shared_ptr<detail::streaming_request_state> state)
+    : state_(std::move(state)) {}
+
+request_body_writer& request_body_writer::on_drain(request_body_drain_callback callback) & {
+  if (state_) {
+    state_->on_drain(std::move(callback));
+  }
+  return *this;
+}
+
+request_body_writer&& request_body_writer::on_drain(request_body_drain_callback callback) && {
+  on_drain(std::move(callback));
+  return std::move(*this);
+}
+
+stream_write_result request_body_writer::write(const char* chunk) {
+  return write(std::string_view{chunk});
+}
+
+stream_write_result request_body_writer::write(std::string_view chunk) {
+  return write(std::string{chunk});
+}
+
+stream_write_result request_body_writer::write(std::span<const std::byte> chunk) {
+  if (!state_) {
+    return stream_write_result::rejected(std::make_error_code(std::errc::not_connected));
+  }
+  return state_->write(chunk);
+}
+
+stream_write_result request_body_writer::write(std::string chunk) {
+  if (!state_) {
+    return stream_write_result::rejected(std::make_error_code(std::errc::not_connected));
+  }
+  return state_->write(std::move(chunk));
+}
+
+void request_body_writer::end() {
+  if (state_) {
+    state_->end();
+  }
+}
+
+void request_body_writer::cancel() noexcept {
+  if (state_) {
+    state_->cancel();
+  }
+}
+
 streaming_request::streaming_request(std::shared_ptr<detail::streaming_request_state> state)
     : state_(std::move(state)) {}
+
+streaming_request& streaming_request::header(std::string_view name, std::string_view value) & {
+  if (state_) {
+    state_->header(name, value);
+  }
+  return *this;
+}
+
+streaming_request&& streaming_request::header(std::string_view name, std::string_view value) && {
+  header(name, value);
+  return std::move(*this);
+}
+
+streaming_request& streaming_request::content_length(std::size_t bytes) & {
+  if (state_) {
+    state_->content_length(bytes);
+  }
+  return *this;
+}
+
+streaming_request&& streaming_request::content_length(std::size_t bytes) && {
+  content_length(bytes);
+  return std::move(*this);
+}
+
+streaming_request& streaming_request::chunked() & {
+  if (state_) {
+    state_->chunked();
+  }
+  return *this;
+}
+
+streaming_request&& streaming_request::chunked() && {
+  chunked();
+  return std::move(*this);
+}
 
 streaming_request& streaming_request::on_response_headers(response_headers_callback callback) & {
   if (state_) {
@@ -1223,7 +1587,7 @@ streaming_request&& streaming_request::on_complete(response_complete_callback ca
   return std::move(*this);
 }
 
-request_operation streaming_request::start() {
+request_body_writer streaming_request::start() {
   if (!state_) {
     return {};
   }
@@ -1245,9 +1609,13 @@ request_operation client::fetch(http::method method, std::string_view url, clien
   return state->start();
 }
 
-streaming_request client::stream(http::method method, std::string_view url) {
+streaming_request client::request(http::method method, std::string_view url) {
   return streaming_request{
     std::make_shared<detail::streaming_request_state>(*loop_, options_, method, url)};
+}
+
+streaming_request client::stream(http::method method, std::string_view url) {
+  return request(method, url);
 }
 
 streaming_request client::stream_get(std::string_view url) {

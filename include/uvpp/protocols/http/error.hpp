@@ -24,6 +24,7 @@ enum class errc {
   client_body_limit_exceeded,
   client_cancelled,
   client_timeout,
+  client_request_body_failed,
 };
 
 std::error_code make_error_code(errc value) noexcept;

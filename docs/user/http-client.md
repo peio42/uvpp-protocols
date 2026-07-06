@@ -1,8 +1,8 @@
 # HTTP Client
 
 `uvp::http::client` provides the first uvpp-native client path: one-shot
-buffered requests and response-body streaming over HTTP/1.1 `http://` and
-`https://` URLs.
+buffered requests, request-body streaming, and response-body streaming over
+HTTP/1.1 `http://` and `https://` URLs.
 
 ```cpp
 #include <uvpp/protocols/http.hpp>
@@ -54,6 +54,39 @@ request
 auto op = request.start();
 ```
 
+Use the same streaming request object for uploads. Fixed-length bodies set
+`Content-Length`; chunked bodies set `Transfer-Encoding: chunked`:
+
+```cpp
+auto request = client.request(
+  uvp::http::method::post,
+  "https://api.example.com/upload");
+
+request
+  .content_length(12)
+  .header("content-type", "text/plain")
+  .on_response_headers([](const uvp::http::response_head& head) {
+    auto status = head.status_code;
+  })
+  .on_data([](std::span<const std::byte> chunk) {
+    // Response body chunk.
+  })
+  .on_complete([](uvp::result<void> done) {
+    // Upload and download finished, cancelled, timed out, or failed.
+  });
+
+auto body = request.start();
+body.write("hello ");
+body.write("stream");
+body.end();
+```
+
+For unknown-size uploads, call `.chunked()` instead of `.content_length(n)`.
+If the queued upload bytes exceed
+`client_options::max_pending_request_body_bytes`, `write()` returns a
+backpressure result. Wait for `body.on_drain(...)` before writing more. The
+returned body writer also exposes `cancel()`.
+
 The parser handles status lines, headers, content-length bodies, chunked bodies,
 EOF-delimited bodies, and bodyless HEAD/204/304 responses. Malformed responses
 fail with `uvp::http::errc::client_malformed_response`; header and body limits
@@ -64,12 +97,13 @@ transfer cap.
 
 Current limits:
 
-- pooling, redirects, proxying, and streaming request bodies are follow-up
-  work;
+- pooling, redirects, and proxying are follow-up work;
 - requests use `Connection: close`, so connections are not reused yet;
 - response streaming currently supports cancellation through the returned
-  `request_operation`, but does not yet expose user-controlled pause/resume
-  backpressure.
+  request body writer, but does not yet expose user-controlled response
+  pause/resume backpressure;
+- this first upload streaming slice starts response reading after the request
+  body is ended.
 
 HTTPS uses `uvp::tls::connect()` internally. The client sets SNI and hostname
 verification from the URL host, loads default verify paths by default, and offers
@@ -92,6 +126,7 @@ uvp::http::client client(
   uvp::http::client_options{
     .max_header_bytes = 64 * 1024,
     .max_body_bytes = 4 * 1024 * 1024,
+    .max_pending_request_body_bytes = 2 * 1024 * 1024,
     .dns_timeout = std::chrono::seconds{2},
     .connect_timeout = std::chrono::seconds{3},
     .response_header_timeout = std::chrono::seconds{5},

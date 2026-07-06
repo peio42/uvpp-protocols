@@ -513,6 +513,200 @@ UVP_TEST_CASE("http client reports streaming malformed responses on complete") {
   UVP_CHECK(!saw_data);
 }
 
+UVP_TEST_CASE("http client streams fixed request bodies") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  server.post(
+    "/upload",
+    uvp::http::body::stream{},
+    [](uvp::http::request&, uvp::http::response& res, uvp::http::request_body_stream& body) {
+      auto received = std::make_shared<std::string>();
+      body
+        .on_data([received](std::span<const std::byte> chunk) {
+          received->append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+        })
+        .on_end([&res, received] {
+          res.header("x-upload", "fixed");
+          res.text(*received);
+        });
+    });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(loop);
+  auto completed = false;
+  auto body = std::string{};
+  auto request = client.request(uvp::http::method::post, "http://127.0.0.1:" + std::to_string(port) + "/upload");
+  request
+    .content_length(12)
+    .header("content-type", "text/plain")
+    .on_response_headers([](const uvp::http::response_head& head) {
+      UVP_CHECK_EQ(head.status_code, 200U);
+      UVP_CHECK_EQ(head.headers.get("x-upload"), "fixed");
+    })
+    .on_data([&](std::span<const std::byte> chunk) {
+      body.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+    })
+    .on_complete([&](uvp::result<void> done) {
+      completed = true;
+      UVP_REQUIRE(done);
+      server.close();
+    });
+
+  auto upload = request.start();
+  UVP_REQUIRE(upload.valid());
+  UVP_CHECK(upload.write("hello "));
+  UVP_CHECK(upload.write("stream"));
+  upload.end();
+
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+  UVP_CHECK_EQ(body, "hello stream");
+}
+
+UVP_TEST_CASE("http client streams chunked request bodies") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  server.put(
+    "/upload",
+    uvp::http::body::stream{},
+    [](uvp::http::request&, uvp::http::response& res, uvp::http::request_body_stream& body) {
+      auto received = std::make_shared<std::string>();
+      body
+        .on_data([received](std::span<const std::byte> chunk) {
+          received->append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+        })
+        .on_end([&res, received] {
+          res.header("x-upload", "chunked");
+          res.text(*received);
+        });
+    });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(loop);
+  auto completed = false;
+  auto body = std::string{};
+  auto request = client.request(uvp::http::method::put, "http://127.0.0.1:" + std::to_string(port) + "/upload");
+  request
+    .chunked()
+    .on_response_headers([](const uvp::http::response_head& head) {
+      UVP_CHECK_EQ(head.status_code, 200U);
+      UVP_CHECK_EQ(head.headers.get("x-upload"), "chunked");
+    })
+    .on_data([&](std::span<const std::byte> chunk) {
+      body.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+    })
+    .on_complete([&](uvp::result<void> done) {
+      completed = true;
+      UVP_REQUIRE(done);
+      server.close();
+    });
+
+  auto upload = request.start();
+  UVP_REQUIRE(upload.valid());
+  UVP_CHECK(upload.write("chunked "));
+  UVP_CHECK(upload.write("upload"));
+  upload.end();
+
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+  UVP_CHECK_EQ(body, "chunked upload");
+}
+
+UVP_TEST_CASE("http client applies request body backpressure") {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .max_pending_request_body_bytes = 8,
+    });
+  auto completed = false;
+  auto request = client.request(uvp::http::method::post, "http://127.0.0.1:" + std::to_string(port) + "/upload");
+  request
+    .chunked()
+    .on_complete([&](uvp::result<void> done) {
+      completed = true;
+      UVP_CHECK(!done);
+      UVP_CHECK_EQ(done.error().code, uvp::http::errc::client_cancelled);
+      listener.close();
+    });
+
+  auto upload = request.start();
+  auto first = upload.write("abcdef");
+  UVP_CHECK(first.accepted());
+  UVP_CHECK(!first.should_continue());
+  auto second = upload.write("g");
+  UVP_CHECK(!second.accepted());
+  upload.cancel();
+
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
+UVP_TEST_CASE("http client cancels while request body upload is open") {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  std::optional<uvp::io::byte_stream> accepted;
+
+  listener.listen([&](uvp::io::accept_result result) {
+    UVP_REQUIRE(result);
+    accepted.emplace(std::move(result).stream());
+  });
+
+  uvp::http::client client(loop);
+  auto completed = false;
+  auto request = client.request(uvp::http::method::post, "http://127.0.0.1:" + std::to_string(port) + "/upload");
+  request
+    .chunked()
+    .on_complete([&](uvp::result<void> done) {
+      completed = true;
+      UVP_CHECK(!done);
+      UVP_CHECK_EQ(done.error().code, uvp::http::errc::client_cancelled);
+      if (accepted) {
+        accepted->close([&] {
+          accepted.reset();
+        });
+      }
+      listener.close();
+    });
+
+  auto upload = request.start();
+  UVP_CHECK(upload.write("still uploading"));
+  upload.cancel();
+
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
 UVP_TEST_CASE("http client times out waiting for response headers") {
   uv::loop loop;
 
