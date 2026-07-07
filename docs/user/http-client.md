@@ -97,9 +97,9 @@ transfer cap.
 
 Current limits:
 
-- redirects and proxying are follow-up work;
-- HTTP/1.1 keep-alive pooling is opt-in because idle streams keep the uvpp loop
-  alive until they are closed or their idle timeout fires;
+- proxying and automatic redirects for streaming requests are follow-up work;
+- HTTP/1.1 keep-alive pooling is opt-in; idle pooled streams are unreferenced,
+  while idle timeout timers remain referenced so cleanup is bounded;
 - response streaming currently supports cancellation through the returned
   request body writer, but does not yet expose user-controlled response
   pause/resume backpressure;
@@ -129,17 +129,32 @@ uvp::http::client client(
     .max_body_bytes = 4 * 1024 * 1024,
     .max_pending_request_body_bytes = 2 * 1024 * 1024,
     .max_idle_connections_per_origin = 2,
+    .max_redirects = 5,
     .idle_connection_timeout = std::chrono::seconds{15},
     .dns_timeout = std::chrono::seconds{2},
     .connect_timeout = std::chrono::seconds{3},
+    .tls_handshake_timeout = std::chrono::seconds{3},
+    .request_body_timeout = std::chrono::seconds{10},
     .response_header_timeout = std::chrono::seconds{5},
     .response_body_timeout = std::chrono::seconds{30},
+    .follow_redirects = true,
     .tls_default_verify_paths = true,
   });
 ```
 
 If a phase expires, the request completes with
 `uvp::http::errc::client_timeout`. The error detail names the timed-out phase.
+`request_body_timeout` covers the request write/upload phase, including a
+streaming upload left open before response reading begins.
+
+Redirect following is disabled by default. When `follow_redirects` is enabled,
+the one-shot client follows `301`, `302`, `303`, `307`, and `308` responses for
+`GET` and `HEAD` requests up to `max_redirects`. `Location` may be absolute or
+relative to the current URL. Redirects to non-HTTP(S) schemes, missing or
+invalid `Location` values, redirect loops beyond the limit, and redirects for
+methods that are not replayed automatically fail with
+`uvp::http::errc::client_redirect_failed`. Streaming requests do not
+auto-follow redirects in this slice.
 
 Requests are cancellable:
 

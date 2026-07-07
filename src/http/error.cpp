@@ -50,6 +50,8 @@ public:
       return "HTTP client request timed out";
     case errc::client_request_body_failed:
       return "HTTP client request body failed";
+    case errc::client_redirect_failed:
+      return "HTTP client redirect failed";
     }
     return "unknown HTTP protocol error";
   }

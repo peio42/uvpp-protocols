@@ -29,11 +29,15 @@ struct client_options {
   std::size_t max_body_bytes = 4 * 1024 * 1024;
   std::size_t max_pending_request_body_bytes = 2 * 1024 * 1024;
   std::size_t max_idle_connections_per_origin = 0;
+  std::size_t max_redirects = 5;
   std::chrono::milliseconds idle_connection_timeout = std::chrono::seconds{30};
   std::chrono::milliseconds dns_timeout{0};
   std::chrono::milliseconds connect_timeout{0};
+  std::chrono::milliseconds tls_handshake_timeout{0};
+  std::chrono::milliseconds request_body_timeout{0};
   std::chrono::milliseconds response_header_timeout{0};
   std::chrono::milliseconds response_body_timeout{0};
+  bool follow_redirects = false;
   bool tls_default_verify_paths = true;
   std::string tls_ca_file;
   std::string tls_ca_path;

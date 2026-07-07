@@ -32,6 +32,7 @@ next milestone or step.
   - [TLS graceful shutdown](proposals/tls-graceful-shutdown.md)
 
 - HTTP API polish
+  - [HTTP redirect policy extensions](proposals/http-redirect-policy-extensions.md)
   - [Fluent temporary route builder overloads](proposals/fluent-temporary-route-builders.md)
   - [Route-level hooks](proposals/route-level-hooks.md)
   - [Route options body mode](proposals/route-options-body-mode.md)

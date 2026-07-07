@@ -17,6 +17,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -208,6 +209,18 @@ namespace {
          (status_code >= 100 && status_code < 200) ||
          status_code == 204 ||
          status_code == 304;
+}
+
+[[nodiscard]] bool response_is_redirect(unsigned int status_code) noexcept {
+  return status_code == 301 ||
+         status_code == 302 ||
+         status_code == 303 ||
+         status_code == 307 ||
+         status_code == 308;
+}
+
+[[nodiscard]] bool method_can_follow_redirect(http::method method) noexcept {
+  return method == http::method::get || method == http::method::head;
 }
 
 [[nodiscard]] std::string origin_key(const uvp::url& value) {
@@ -452,6 +465,10 @@ public:
 
   request_operation start() {
     auto parsed = uvp::parse_url(url_input_);
+    return start(std::move(parsed));
+  }
+
+  request_operation start(uvp::result<uvp::url> parsed) {
     if (!parsed) {
       complete(wrap_client_error(errc::client_invalid_url, parsed.error()));
       return request_operation{shared_from_this()};
@@ -508,6 +525,8 @@ private:
   enum class timeout_phase {
     none,
     dns,
+    tls_handshake,
+    request_body,
     response_header,
     response_body,
   };
@@ -562,6 +581,10 @@ private:
     switch (phase) {
     case timeout_phase::dns:
       return "DNS resolution timed out";
+    case timeout_phase::tls_handshake:
+      return "TLS handshake timed out";
+    case timeout_phase::request_body:
+      return "request body timed out";
     case timeout_phase::response_header:
       return "response headers timed out";
     case timeout_phase::response_body:
@@ -643,6 +666,7 @@ private:
         context.ca_path(options_.tls_ca_path);
       }
 
+      start_phase_timeout(timeout_phase::tls_handshake, options_.tls_handshake_timeout);
       auto self = shared_from_this();
       tls_operation_ = uvp::tls::connect(
         std::move(lower),
@@ -702,6 +726,7 @@ private:
     write_payload_.resize(request.size());
     std::memcpy(write_payload_.data(), request.data(), request.size());
     auto self = shared_from_this();
+    start_phase_timeout(timeout_phase::request_body, options_.request_body_timeout);
     stream_.write(write_payload_, [self](uvp::io::stream_error result) {
       self->on_written(result);
     });
@@ -845,6 +870,11 @@ private:
   }
 
   void complete_buffered_response(uvp::result<http::response> result, bool reusable) {
+    if (result && should_follow_redirect(result.value())) {
+      follow_redirect(result.value(), reusable);
+      return;
+    }
+
     if (reusable && result && stream_) {
       try {
         stream_.read_stop();
@@ -860,6 +890,89 @@ private:
       close_stream();
     }
     complete(std::move(result));
+  }
+
+  bool should_follow_redirect(const http::response& response) const noexcept {
+    return options_.follow_redirects && response_is_redirect(response.status_code());
+  }
+
+  void follow_redirect(const http::response& response, bool reusable) {
+    if (!method_can_follow_redirect(method_)) {
+      close_or_release_current(reusable);
+      complete(make_client_error(
+        errc::client_redirect_failed,
+        "redirect method is not replayable"));
+      return;
+    }
+    if (redirects_followed_ >= options_.max_redirects) {
+      close_or_release_current(reusable);
+      complete(make_client_error(errc::client_redirect_failed, "too many redirects"));
+      return;
+    }
+
+    const auto location = trim(response.headers().get("location"));
+    if (location.empty()) {
+      close_or_release_current(reusable);
+      complete(make_client_error(errc::client_redirect_failed, "redirect location is missing"));
+      return;
+    }
+
+    auto redirected = uvp::parse_url(location, url_.href());
+    if (!redirected) {
+      close_or_release_current(reusable);
+      complete(wrap_client_error(errc::client_redirect_failed, redirected.error()));
+      return;
+    }
+
+    const auto scheme = uvp::scheme_id(redirected.value());
+    if (scheme != uvp::url_scheme::http && scheme != uvp::url_scheme::https) {
+      close_or_release_current(reusable);
+      complete(make_client_error(errc::client_redirect_failed, "redirect scheme is unsupported"));
+      return;
+    }
+
+    received_.clear();
+    response_headers_complete_ = false;
+    ++redirects_followed_;
+
+    auto self = shared_from_this();
+    close_or_release_current(reusable, [self, redirected = std::move(redirected)]() mutable {
+      self->start(std::move(redirected));
+    });
+  }
+
+  void close_or_release_current(bool reusable) {
+    close_or_release_current(reusable, {});
+  }
+
+  void close_or_release_current(bool reusable, std::function<void()> after) {
+    stop_phase_timeout();
+    if (reusable && stream_) {
+      try {
+        stream_.read_stop();
+      } catch (...) {
+      }
+      pool_->release(
+        *loop_,
+        origin_key_,
+        std::move(stream_),
+        options_.max_idle_connections_per_origin,
+        options_.idle_connection_timeout);
+      if (after) {
+        after();
+      }
+      return;
+    }
+    if (stream_ && after) {
+      stream_.close([callback = std::move(after)]() mutable {
+        callback();
+      });
+      return;
+    }
+    close_stream();
+    if (after) {
+      after();
+    }
   }
 
   void close_stream() noexcept {
@@ -898,6 +1011,7 @@ private:
   std::shared_ptr<uv::timer> timeout_timer_;
   std::vector<std::byte> write_payload_;
   std::string received_;
+  std::size_t redirects_followed_ = 0;
   timeout_phase timeout_phase_ = timeout_phase::none;
   bool response_headers_complete_ = false;
   bool cancelled_ = false;
@@ -1109,6 +1223,8 @@ private:
   enum class timeout_phase {
     none,
     dns,
+    tls_handshake,
+    request_body,
     response_header,
     response_body,
   };
@@ -1187,6 +1303,10 @@ private:
     switch (phase) {
     case timeout_phase::dns:
       return "DNS resolution timed out";
+    case timeout_phase::tls_handshake:
+      return "TLS handshake timed out";
+    case timeout_phase::request_body:
+      return "request body timed out";
     case timeout_phase::response_header:
       return "response headers timed out";
     case timeout_phase::response_body:
@@ -1268,6 +1388,7 @@ private:
         context.ca_path(options_.tls_ca_path);
       }
 
+      start_phase_timeout(timeout_phase::tls_handshake, options_.tls_handshake_timeout);
       auto self = shared_from_this();
       tls_operation_ = uvp::tls::connect(
         std::move(lower),
@@ -1348,6 +1469,7 @@ private:
     write_payload_.resize(request.size());
     std::memcpy(write_payload_.data(), request.data(), request.size());
     auto self = shared_from_this();
+    start_phase_timeout(timeout_phase::request_body, options_.request_body_timeout);
     stream_.write(write_payload_, [self](uvp::io::stream_error result) {
       self->on_request_headers_written(result);
     });

@@ -554,6 +554,161 @@ UVP_TEST_CASE("http client treats 204 and 304 responses as bodyless") {
     });
 }
 
+UVP_TEST_CASE("http client returns redirect responses when following is disabled") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  server.get("/old", [](uvp::http::request&, uvp::http::response& res) {
+    res.status(302).header("location", "/new").end();
+  });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(loop);
+  auto completed = false;
+  auto request = client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/old",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().status_code(), 302U);
+      UVP_CHECK_EQ(result.value().headers().get("location"), "/new");
+      server.close();
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
+UVP_TEST_CASE("http client follows relative redirects for one-shot GET") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  server.get("/old", [](uvp::http::request&, uvp::http::response& res) {
+    res.status(302).header("location", "/new").end();
+  });
+  server.get("/new", [](uvp::http::request&, uvp::http::response& res) {
+    res.text("redirected");
+  });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .follow_redirects = true,
+    });
+
+  auto completed = false;
+  auto request = client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/old",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().status_code(), 200U);
+      UVP_CHECK_EQ(result.value().body(), "redirected");
+      server.close();
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
+UVP_TEST_CASE("http client fails redirects to unsupported schemes") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  server.get("/old", [](uvp::http::request&, uvp::http::response& res) {
+    res.status(302).header("location", "ftp://example.com/file").end();
+  });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .follow_redirects = true,
+    });
+
+  auto completed = false;
+  auto request = client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/old",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_redirect_failed);
+      server.close();
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
+UVP_TEST_CASE("http client enforces redirect limit") {
+  uv::loop loop;
+
+  uvp::http::server server(loop);
+  server.get("/one", [](uvp::http::request&, uvp::http::response& res) {
+    res.status(302).header("location", "/two").end();
+  });
+  server.get("/two", [](uvp::http::request&, uvp::http::response& res) {
+    res.status(302).header("location", "/three").end();
+  });
+  server.get("/three", [](uvp::http::request&, uvp::http::response& res) {
+    res.text("too far");
+  });
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  server.listen(std::move(listener));
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .max_redirects = 1,
+      .follow_redirects = true,
+    });
+
+  auto completed = false;
+  auto request = client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/one",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_redirect_failed);
+      server.close();
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
 UVP_TEST_CASE("http client streams content-length response bodies") {
   auto headers_seen = false;
   auto completed = false;
@@ -852,6 +1007,48 @@ UVP_TEST_CASE("http client cancels while request body upload is open") {
   UVP_CHECK(completed);
 }
 
+UVP_TEST_CASE("http client cancels while waiting for response headers exactly once") {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  std::optional<uvp::io::byte_stream> accepted;
+  std::optional<uvp::http::request_operation> request;
+  uvp::http::client client(loop);
+
+  listener.listen([&](uvp::io::accept_result result) {
+    UVP_REQUIRE(result);
+    accepted.emplace(std::move(result).stream());
+    UVP_REQUIRE(request.has_value());
+    request->cancel();
+  });
+
+  auto completions = 0;
+  request.emplace(client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/cancel-headers",
+    [&](uvp::result<uvp::http::response> result) {
+      ++completions;
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_cancelled);
+      if (accepted) {
+        accepted->close([&] {
+          accepted.reset();
+          listener.close();
+        });
+      } else {
+        listener.close();
+      }
+    }));
+
+  UVP_CHECK(request->valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK_EQ(completions, 1);
+}
+
 UVP_TEST_CASE("http client times out waiting for response headers") {
   uv::loop loop;
 
@@ -938,6 +1135,100 @@ UVP_TEST_CASE("http client times out waiting for response body") {
     });
 
   UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
+UVP_TEST_CASE("http client times out during TLS handshake") {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  std::optional<uvp::io::byte_stream> accepted;
+
+  listener.listen([&](uvp::io::accept_result result) {
+    UVP_REQUIRE(result);
+    accepted.emplace(std::move(result).stream());
+  });
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .tls_handshake_timeout = std::chrono::milliseconds{10},
+      .tls_default_verify_paths = false,
+    });
+
+  auto completed = false;
+  auto request = client.get(
+    "https://127.0.0.1:" + std::to_string(port) + "/slow-handshake",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_timeout);
+      if (accepted) {
+        accepted->close([&] {
+          accepted.reset();
+          listener.close();
+        });
+      } else {
+        listener.close();
+      }
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
+UVP_TEST_CASE("http client times out while request body remains open") {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  std::optional<uvp::io::byte_stream> accepted;
+
+  listener.listen([&](uvp::io::accept_result result) {
+    UVP_REQUIRE(result);
+    accepted.emplace(std::move(result).stream());
+  });
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .request_body_timeout = std::chrono::milliseconds{10},
+    });
+
+  auto completed = false;
+  auto request = client.request(
+    uvp::http::method::post,
+    "http://127.0.0.1:" + std::to_string(port) + "/slow-upload");
+  request
+    .chunked()
+    .on_complete([&](uvp::result<void> done) {
+      completed = true;
+      UVP_CHECK(!done);
+      UVP_CHECK_EQ(done.error().code, uvp::http::errc::client_timeout);
+      if (accepted) {
+        accepted->close([&] {
+          accepted.reset();
+          listener.close();
+        });
+      } else {
+        listener.close();
+      }
+    });
+
+  auto body = request.start();
+  UVP_CHECK(body.valid());
+
   loop.run();
   loop.close();
 

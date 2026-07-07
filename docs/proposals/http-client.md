@@ -1,8 +1,8 @@
 # HTTP Client Proposal
 
 Status: Initial HTTP/HTTPS one-shot client plus request and response streaming
-implemented; pooling, redirects, proxying, and broader timeout coverage remain
-open
+implemented; pooling, conservative redirects, and phase timeouts implemented;
+proxying and advanced timeout policies remain open
 
 ## Decision
 
@@ -64,11 +64,11 @@ transport/session to the WebSocket module.
 - Implemented: opt-in HTTP/1.1 keep-alive pool keyed by origin, reuse after
   response consumption, `Connection: close` handling, idle timeout, explicit
   idle close, and per-origin idle connection limit.
-- Implemented: initial client phase timeouts for DNS resolution, TCP connect,
-  response headers, and response body transfer.
-- Drafted separately or still open: byte-stream lifetime controls for cleaner
-  idle pool liveness, TLS stream/listener support, HTTP/2 support, WebSocket
-  client support, redirects, proxying, broader phase timeouts, response
+- Implemented: client phase timeouts for DNS resolution, TCP connect, TLS
+  handshake, request write/upload, response headers, and response body transfer.
+- Implemented: byte-stream lifetime controls for cleaner idle pool liveness.
+- Drafted separately or still open: HTTP/2 support, WebSocket client support,
+  proxying, overall request deadlines, redirect policy extensions, response
   pause/resume controls, and more advanced upload/response concurrency.
 
 ## Goals
@@ -378,15 +378,30 @@ HTTP session.
 
 Initial policy:
 
-- disabled or conservative by default unless the API opts into automatic
-  redirects;
-- maximum redirect count;
-- preserve method only where HTTP semantics require it;
-- convert `POST` to `GET` for 301/302/303 only if the chosen policy allows the
+- implemented for the one-shot client as opt-in behavior through
+  `client_options::follow_redirects`;
+- implemented maximum redirect count through `client_options::max_redirects`;
+- implemented for `GET` and `HEAD` only;
+- implemented for `301`, `302`, `303`, `307`, and `308`;
+- implemented absolute and relative `Location` values through the shared URL
+  resolver;
+- implemented re-running URL validation, DNS, TCP, TLS, and pool selection for
+  each redirect target;
+- implemented failure on unsupported schemes, missing/invalid `Location`, too
+  many redirects, or methods that are not replayed automatically.
+
+Still open:
+
+- convert `POST` to `GET` for 301/302/303 only if a future policy allows the
   browser-compatible behavior;
-- strip sensitive headers when origin changes;
-- re-run DNS, proxy, TLS, and pool selection for each redirect target;
-- fail on unsupported schemes.
+- strip sensitive headers when origin changes once one-shot custom request
+  headers exist;
+- expose redirect history or final URL metadata.
+
+Follow-up redirect behavior is tracked in
+[HTTP redirect policy extensions](http-redirect-policy-extensions.md). It should
+come after proxy support because proxy identity and credential handling affect
+redirect safety.
 
 Streaming uploads should not be automatically replayed unless the body source
 is explicitly replayable.
@@ -430,12 +445,12 @@ Download streaming:
 Timeouts should be phase-aware:
 
 - implemented for the one-shot client: DNS resolution timeout, TCP connect
-  timeout, response header timeout, and buffered response body timeout;
+  timeout, TLS handshake timeout, request write timeout, response header
+  timeout, and buffered response body timeout;
 - implemented for response streaming: DNS resolution timeout, TCP connect
-  timeout, response header timeout, and response body transfer timeout;
+  timeout, TLS handshake timeout, request body/upload timeout, response header
+  timeout, and response body transfer timeout;
 - still open: overall request deadline;
-- still open: TLS handshake timeout integration for HTTPS;
-- still open: request header/body write timeout or idle timeout;
 - still open: streaming response body idle timeout and pause-aware timeout
   semantics;
 - pool checkout timeout.
@@ -512,8 +527,8 @@ Suggested first implementation slice:
 7. [x] streaming request body;
 8. [x] basic keep-alive and pool reuse for HTTP/1.1;
 9. [x] byte-stream lifetime controls for idle pool liveness;
-10. cancellation and phase-specific timeout coverage;
-11. redirects with conservative policy;
+10. [x] cancellation and phase-specific timeout coverage;
+11. [x] redirects with conservative policy;
 12. proxy design spike or minimal HTTP CONNECT support.
 
 HTTP/2 should follow only after ALPN, pooling, and stream ownership are settled.
