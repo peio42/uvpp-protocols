@@ -1,8 +1,8 @@
 # HTTP Client Proposal
 
 Status: Initial HTTP/HTTPS one-shot client plus request and response streaming
-implemented; pooling, conservative redirects, and phase timeouts implemented;
-proxying and advanced timeout policies remain open
+implemented; pooling, conservative redirects, HTTP forward proxying, and phase
+timeouts implemented; CONNECT proxying and advanced timeout policies remain open
 
 ## Decision
 
@@ -67,9 +67,13 @@ transport/session to the WebSocket module.
 - Implemented: client phase timeouts for DNS resolution, TCP connect, TLS
   handshake, request write/upload, response headers, and response body transfer.
 - Implemented: byte-stream lifetime controls for cleaner idle pool liveness.
+- Implemented: explicit HTTP forward proxy support for one-shot `http://`
+  requests, including absolute-form request targets and explicit
+  `Proxy-Authorization`.
 - Drafted separately or still open: HTTP/2 support, WebSocket client support,
-  proxying, overall request deadlines, redirect policy extensions, response
-  pause/resume controls, and more advanced upload/response concurrency.
+  CONNECT/SOCKS proxy routes, overall request deadlines, redirect policy
+  extensions, response pause/resume controls, and more advanced upload/response
+  concurrency.
 
 ## Goals
 
@@ -412,10 +416,12 @@ Proxy support should be planned but split by route semantics.
 
 Needed shapes:
 
-- HTTP proxy for clear HTTP requests using absolute-form request targets;
+- implemented: HTTP proxy for clear one-shot HTTP requests using absolute-form
+  request targets;
+- implemented: explicit `Proxy-Authorization` header support;
 - HTTPS through HTTP proxy via `CONNECT`;
 - proxy authentication hooks later;
-- pool key includes proxy identity;
+- implemented: pool key includes proxy identity;
 - `NO_PROXY` or environment behavior only if explicitly adopted.
 
 SOCKS proxying can remain out of scope until there is a concrete need.
@@ -535,7 +541,7 @@ Suggested first implementation slice:
 9. [x] byte-stream lifetime controls for idle pool liveness;
 10. [x] cancellation and phase-specific timeout coverage;
 11. [x] redirects with conservative policy;
-12. proxy design spike or minimal HTTP CONNECT support.
+12. [x] HTTP forward proxy support and tunnel proxy design split.
 
 HTTP/2 should follow only after ALPN, pooling, and stream ownership are settled.
 

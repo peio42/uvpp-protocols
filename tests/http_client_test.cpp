@@ -158,6 +158,65 @@ void run_raw_client_response(std::string_view wire_response, Assert assert_resul
     std::move(assert_result));
 }
 
+template<class AssertRequest, class AssertResult>
+void run_raw_forward_proxy_get(
+  std::string_view target_url,
+  uvp::http::client_options options,
+  std::string_view wire_response,
+  AssertRequest assert_request,
+  AssertResult assert_result) {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  std::optional<uvp::io::byte_stream> accepted;
+  auto request_bytes = std::string{};
+  auto response = bytes(wire_response);
+  auto responded = false;
+
+  listener.listen([&](uvp::io::accept_result result) {
+    UVP_REQUIRE(result);
+    accepted.emplace(std::move(result).stream());
+    accepted->read_start([&](uvp::io::read_result read) {
+      if (responded) {
+        return;
+      }
+      UVP_REQUIRE(read);
+      request_bytes.append(reinterpret_cast<const char*>(read.bytes().data()), read.bytes().size());
+      if (request_bytes.find("\r\n\r\n") == std::string::npos) {
+        return;
+      }
+
+      responded = true;
+      assert_request(request_bytes);
+      accepted->write(response, [&](uvp::io::stream_error error) {
+        UVP_CHECK(!error);
+        accepted->close([&] {
+          accepted.reset();
+        });
+      });
+    });
+  });
+
+  options.proxy.url = "http://127.0.0.1:" + std::to_string(port);
+  uvp::http::client client(loop, std::move(options));
+  auto completed = false;
+  auto request = client.get(target_url, [&](uvp::result<uvp::http::response> result) {
+    completed = true;
+    assert_result(std::move(result));
+    listener.close();
+  });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+  UVP_CHECK(responded);
+}
+
 template<class Configure>
 void run_raw_streaming_response(std::string_view wire_response, Configure configure_request) {
   uv::loop loop;
@@ -219,6 +278,65 @@ UVP_TEST_CASE("http client performs a plain get request") {
       UVP_CHECK_EQ(result.value().body(), "hello client");
       server.close();
     });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
+UVP_TEST_CASE("http client sends absolute-form requests through an HTTP forward proxy") {
+  run_raw_forward_proxy_get(
+    "http://example.test/resource?q=1",
+    uvp::http::client_options{},
+    "HTTP/1.1 200 OK\r\nContent-Length: 12\r\n\r\nproxied body",
+    [](const std::string& request) {
+      UVP_CHECK(request.find("GET http://example.test/resource?q=1 HTTP/1.1\r\n") == 0);
+      UVP_CHECK(request.find("\r\nHost: example.test\r\n") != std::string::npos);
+      UVP_CHECK(request.find("\r\nProxy-Authorization:") == std::string::npos);
+    },
+    [](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().status_code(), 200U);
+      UVP_CHECK_EQ(result.value().body(), "proxied body");
+    });
+}
+
+UVP_TEST_CASE("http client sends explicit proxy authorization") {
+  auto options = uvp::http::client_options{};
+  options.proxy.basic_auth("user", "pass");
+
+  run_raw_forward_proxy_get(
+    "http://example.test/private",
+    std::move(options),
+    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
+    [](const std::string& request) {
+      UVP_CHECK(request.find("GET http://example.test/private HTTP/1.1\r\n") == 0);
+      UVP_CHECK(
+        request.find("\r\nProxy-Authorization: Basic dXNlcjpwYXNz\r\n") !=
+        std::string::npos);
+    },
+    [](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().body(), "ok");
+    });
+}
+
+UVP_TEST_CASE("http client rejects HTTPS over HTTP proxy before CONNECT support") {
+  uv::loop loop;
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .proxy = uvp::http::proxy_options{.url = "http://127.0.0.1:9"},
+    });
+
+  auto completed = false;
+  auto request = client.get("https://example.test/private", [&](uvp::result<uvp::http::response> result) {
+    completed = true;
+    UVP_CHECK(!result);
+    UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_proxy_failed);
+  });
 
   UVP_CHECK(request.valid());
   loop.run();
@@ -811,6 +929,30 @@ UVP_TEST_CASE("http client reports streaming malformed responses on complete") {
 
   UVP_CHECK(completed);
   UVP_CHECK(!saw_data);
+}
+
+UVP_TEST_CASE("http client rejects streaming requests when proxy is configured") {
+  uv::loop loop;
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .proxy = uvp::http::proxy_options{.url = "http://127.0.0.1:9"},
+    });
+
+  auto completed = false;
+  auto request = client.stream_get("http://example.test/stream");
+  request.on_complete([&](uvp::result<void> done) {
+    completed = true;
+    UVP_CHECK(!done);
+    UVP_CHECK_EQ(done.error().code, uvp::http::errc::client_proxy_failed);
+  });
+
+  auto body = request.start();
+  UVP_CHECK(body.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
 }
 
 UVP_TEST_CASE("http client streams fixed request bodies") {

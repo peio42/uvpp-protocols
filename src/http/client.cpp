@@ -223,6 +223,27 @@ namespace {
   return method == http::method::get || method == http::method::head;
 }
 
+[[nodiscard]] std::string base64_encode(std::string_view input) {
+  static constexpr auto alphabet =
+    std::string_view{"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"};
+
+  auto out = std::string{};
+  out.reserve(((input.size() + 2) / 3) * 4);
+
+  for (std::size_t offset = 0; offset < input.size(); offset += 3) {
+    const auto b0 = static_cast<unsigned char>(input[offset]);
+    const auto b1 = offset + 1 < input.size() ? static_cast<unsigned char>(input[offset + 1]) : 0U;
+    const auto b2 = offset + 2 < input.size() ? static_cast<unsigned char>(input[offset + 2]) : 0U;
+
+    out.push_back(alphabet[(b0 >> 2) & 0x3f]);
+    out.push_back(alphabet[((b0 & 0x03) << 4) | ((b1 >> 4) & 0x0f)]);
+    out.push_back(offset + 1 < input.size() ? alphabet[((b1 & 0x0f) << 2) | ((b2 >> 6) & 0x03)] : '=');
+    out.push_back(offset + 2 < input.size() ? alphabet[b2 & 0x3f] : '=');
+  }
+
+  return out;
+}
+
 [[nodiscard]] std::string origin_key(const uvp::url& value) {
   auto key = std::string{value.scheme()};
   key += "://";
@@ -487,7 +508,13 @@ public:
       return request_operation{shared_from_this()};
     }
 
-    origin_key_ = origin_key(url_);
+    auto connect_endpoint = select_connect_endpoint(scheme);
+    if (!connect_endpoint) {
+      complete(connect_endpoint.error());
+      return request_operation{shared_from_this()};
+    }
+
+    origin_key_ = connection_pool_key();
     if (auto pooled = pool_->take(origin_key_)) {
       stream_ = std::move(*pooled);
       write_buffered_request();
@@ -497,8 +524,8 @@ public:
     auto self = shared_from_this();
     dns_operation_ = resolver_.resolve(
       uvp::dns::query{}
-        .host(endpoint.value().host)
-        .port(endpoint.value().port)
+        .host(connect_endpoint.value().host)
+        .port(connect_endpoint.value().port)
         .family(uvp::dns::address_family::any),
       [self](uvp::result<uvp::dns::address_list> result) mutable {
         self->on_resolved(std::move(result));
@@ -593,6 +620,50 @@ private:
       break;
     }
     return "request timed out";
+  }
+
+  uvp::result<uvp::url_authority_endpoint> select_connect_endpoint(uvp::url_scheme target_scheme) {
+    using_forward_proxy_ = false;
+    proxy_key_.clear();
+    proxy_url_ = {};
+
+    if (options_.proxy.url.empty()) {
+      return uvp::authority_endpoint(url_);
+    }
+
+    if (target_scheme != uvp::url_scheme::http) {
+      return make_client_error(
+        errc::client_proxy_failed,
+        "HTTP CONNECT proxying is not implemented");
+    }
+
+    auto parsed_proxy = uvp::parse_url(options_.proxy.url);
+    if (!parsed_proxy) {
+      return wrap_client_error(errc::client_proxy_failed, parsed_proxy.error());
+    }
+
+    proxy_url_ = std::move(parsed_proxy).value();
+    if (uvp::scheme_id(proxy_url_) != uvp::url_scheme::http) {
+      return make_client_error(errc::client_proxy_failed, "proxy scheme is unsupported");
+    }
+
+    auto endpoint = uvp::authority_endpoint(proxy_url_);
+    if (!endpoint) {
+      return wrap_client_error(errc::client_proxy_failed, endpoint.error());
+    }
+
+    using_forward_proxy_ = true;
+    proxy_key_ = origin_key(proxy_url_);
+    return endpoint.value();
+  }
+
+  [[nodiscard]] std::string connection_pool_key() const {
+    auto key = origin_key(url_);
+    if (using_forward_proxy_) {
+      key += " via ";
+      key += proxy_key_;
+    }
+    return key;
   }
 
   void on_resolved(uvp::result<uvp::dns::address_list> result) {
@@ -710,7 +781,7 @@ private:
     auto request = std::string{};
     request += http::to_string(method_);
     request += ' ';
-    request += uvp::origin_form_target(url_);
+    request += using_forward_proxy_ ? uvp::absolute_form_target(url_) : uvp::origin_form_target(url_);
     request += " HTTP/1.1\r\nHost: ";
     request += url_.host();
     if (url_.has_port()) {
@@ -718,6 +789,11 @@ private:
       request += url_.port();
     }
     request += "\r\nUser-Agent: uvpp-protocols/0\r\nAccept: */*\r\n";
+    if (using_forward_proxy_ && !options_.proxy.authorization.empty()) {
+      request += "Proxy-Authorization: ";
+      request += options_.proxy.authorization;
+      request += "\r\n";
+    }
     if (options_.max_idle_connections_per_origin == 0) {
       request += "Connection: close\r\n";
     }
@@ -1001,7 +1077,9 @@ private:
   std::string url_input_;
   client_callback callback_;
   std::string origin_key_;
+  std::string proxy_key_;
   uvp::url url_;
+  uvp::url proxy_url_;
   uvp::dns::resolver resolver_;
   uvp::io::tcp_connector connector_;
   uvp::dns::resolve_operation dns_operation_;
@@ -1014,6 +1092,7 @@ private:
   std::size_t redirects_followed_ = 0;
   timeout_phase timeout_phase_ = timeout_phase::none;
   bool response_headers_complete_ = false;
+  bool using_forward_proxy_ = false;
   bool cancelled_ = false;
   bool timed_out_ = false;
   bool completed_ = false;
@@ -1176,6 +1255,13 @@ public:
     const auto scheme = uvp::scheme_id(url_);
     if (scheme != uvp::url_scheme::http && scheme != uvp::url_scheme::https) {
       complete(make_client_error(errc::client_unsupported_scheme));
+      return request_body_writer{shared_from_this()};
+    }
+
+    if (!options_.proxy.url.empty()) {
+      complete(make_client_error(
+        errc::client_proxy_failed,
+        "HTTP proxying is not implemented for streaming requests"));
       return request_body_writer{shared_from_this()};
     }
 
@@ -1876,6 +1962,20 @@ private:
 };
 
 } // namespace detail
+
+proxy_options& proxy_options::basic_auth(std::string_view username, std::string_view password) & {
+  auto credentials = std::string{username};
+  credentials += ':';
+  credentials += password;
+  authorization = "Basic ";
+  authorization += base64_encode(credentials);
+  return *this;
+}
+
+proxy_options&& proxy_options::basic_auth(std::string_view username, std::string_view password) && {
+  basic_auth(username, password);
+  return std::move(*this);
+}
 
 request_operation::request_operation(std::shared_ptr<detail::request_operation_state> state)
     : state_(std::move(state)) {}

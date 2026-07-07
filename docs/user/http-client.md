@@ -97,7 +97,8 @@ transfer cap.
 
 Current limits:
 
-- proxying and automatic redirects for streaming requests are follow-up work;
+- HTTPS through proxy `CONNECT`, SOCKS, proxy environment variables, and
+  proxying or automatic redirects for streaming requests are follow-up work;
 - HTTP/1.1 keep-alive pooling is opt-in; idle pooled streams are unreferenced,
   while idle timeout timers remain referenced so cleanup is bounded;
 - response streaming currently supports cancellation through the returned
@@ -117,6 +118,22 @@ uvp::http::client client(
     .tls_ca_file = "local-test-ca.pem",
   });
 ```
+
+One-shot `http://` requests can use an explicit HTTP forward proxy. The client
+connects to the proxy and sends the request target in absolute-form:
+
+```cpp
+auto options = uvp::http::client_options{};
+options.proxy.url = "http://127.0.0.1:8080";
+options.proxy.basic_auth("user", "password");
+
+uvp::http::client client(loop, std::move(options));
+```
+
+For this slice, proxy authentication is explicit: set
+`proxy.authorization` directly, or use `proxy.basic_auth(...)` to create a
+`Proxy-Authorization: Basic ...` value. HTTPS through an HTTP proxy requires
+`CONNECT` and is not enabled yet.
 
 Timeouts are phase-scoped and disabled by default. Configure the phases needed
 by the application:
@@ -139,6 +156,10 @@ uvp::http::client client(
     .response_body_timeout = std::chrono::seconds{30},
     .follow_redirects = true,
     .tls_default_verify_paths = true,
+    .proxy = uvp::http::proxy_options{
+      .url = "http://127.0.0.1:8080",
+      .authorization = "Basic ...",
+    },
   });
 ```
 

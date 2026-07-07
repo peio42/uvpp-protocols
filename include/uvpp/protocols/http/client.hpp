@@ -24,6 +24,14 @@ struct request_operation_state;
 class streaming_request_state;
 } // namespace detail
 
+struct proxy_options {
+  std::string url;
+  std::string authorization;
+
+  proxy_options& basic_auth(std::string_view username, std::string_view password) &;
+  proxy_options&& basic_auth(std::string_view username, std::string_view password) &&;
+};
+
 struct client_options {
   std::size_t max_header_bytes = 64 * 1024;
   std::size_t max_body_bytes = 4 * 1024 * 1024;
@@ -39,6 +47,7 @@ struct client_options {
   std::chrono::milliseconds response_body_timeout{0};
   bool follow_redirects = false;
   bool tls_default_verify_paths = true;
+  proxy_options proxy;
   std::string tls_ca_file;
   std::string tls_ca_path;
 };

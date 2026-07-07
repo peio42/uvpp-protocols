@@ -52,6 +52,8 @@ public:
       return "HTTP client request body failed";
     case errc::client_redirect_failed:
       return "HTTP client redirect failed";
+    case errc::client_proxy_failed:
+      return "HTTP client proxy failed";
     }
     return "unknown HTTP protocol error";
   }
