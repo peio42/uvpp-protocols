@@ -408,7 +408,7 @@ is explicitly replayable.
 
 ### Proxying
 
-Proxy support should be planned but not required for the first milestone.
+Proxy support should be planned but split by route semantics.
 
 Needed shapes:
 
@@ -419,6 +419,12 @@ Needed shapes:
 - `NO_PROXY` or environment behavior only if explicitly adopted.
 
 SOCKS proxying can remain out of scope until there is a concrete need.
+
+Clear HTTP forward proxying belongs in the HTTP client milestone because it
+changes the HTTP request target rather than producing a transparent connection
+to the origin. Tunnel-style proxy routes are tracked separately in
+[Outbound connector and proxy routes](outbound-connector-and-proxy-routes.md)
+so other protocols can reuse the same `byte_stream` factory later.
 
 ### Upload and Download Streaming
 

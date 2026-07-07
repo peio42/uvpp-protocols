@@ -39,6 +39,9 @@ next milestone or step.
   - [Route options parameter constraints](proposals/route-options-parameter-constraints.md)
   - [Stream body error ownership](proposals/stream-body-error-ownership.md)
 
+- Client transport foundations
+  - [Outbound connector and proxy routes](proposals/outbound-connector-and-proxy-routes.md)
+
 - Protocol client modules
   - [SMTP client](proposals/smtp-support.md)
   - [Redis client](proposals/redis-support.md)

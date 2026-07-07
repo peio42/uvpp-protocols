@@ -15,6 +15,7 @@ the `Current focus` block.
 - [DNS resolution](dns-resolution.md)
 - [Byte stream lifetime controls](byte-stream-lifetime-controls.md)
 - [HTTP client](http-client.md)
+- [Outbound connector and proxy routes](outbound-connector-and-proxy-routes.md)
 - [HTTP redirect policy extensions](http-redirect-policy-extensions.md)
 - [SSE automatic heartbeat scheduling](sse-automatic-heartbeats.md)
 - [TLS policy and identity](tls-policy-and-identity.md)
