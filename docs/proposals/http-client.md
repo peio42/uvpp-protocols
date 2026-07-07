@@ -467,6 +467,9 @@ Timeouts should be phase-aware:
   semantics;
 - pool checkout timeout.
 
+Flow-control and deadline extensions are tracked separately in
+[HTTP client flow control and deadlines](http-client-flow-control-and-deadlines.md).
+
 Timeout errors should include the phase where practical.
 
 ### Errors and Categories
