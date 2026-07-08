@@ -98,3 +98,16 @@ UVP_TEST_CASE("url resolves simple relative references against a base") {
   UVP_CHECK_EQ(absolute.value().href(), "https://api.example.com/v1/users/42?active=1");
   UVP_CHECK_EQ(root_relative.value().href(), "https://api.example.com/health");
 }
+
+UVP_TEST_CASE("url resolves relative references that contain colons") {
+  auto root_relative = uvp::parse_url("/a:b", "https://api.example.com/v1/index.html");
+  auto path_relative = uvp::parse_url("users/42:edit", "https://api.example.com/v1/index.html");
+  auto query_relative = uvp::parse_url("users?next=/a:b", "https://api.example.com/v1/index.html");
+
+  UVP_REQUIRE(root_relative);
+  UVP_REQUIRE(path_relative);
+  UVP_REQUIRE(query_relative);
+  UVP_CHECK_EQ(root_relative.value().href(), "https://api.example.com/a:b");
+  UVP_CHECK_EQ(path_relative.value().href(), "https://api.example.com/v1/users/42:edit");
+  UVP_CHECK_EQ(query_relative.value().href(), "https://api.example.com/v1/users?next=/a:b");
+}

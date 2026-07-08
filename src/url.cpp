@@ -124,6 +124,16 @@ public:
   return pos == std::string_view::npos ? value.size() : pos;
 }
 
+[[nodiscard]] bool has_absolute_scheme(std::string_view value) noexcept {
+  const auto scheme_end = value.find(':');
+  if (scheme_end == std::string_view::npos) {
+    return false;
+  }
+
+  const auto first_path_query_or_fragment = first_of_or_end(value, "/?#");
+  return scheme_end < first_path_query_or_fragment && valid_scheme(value.substr(0, scheme_end));
+}
+
 } // namespace
 
 class url_parser {
@@ -303,7 +313,7 @@ result<url> parse_url(std::string_view input) {
 }
 
 result<url> parse_url(std::string_view input, std::string_view base) {
-  if (input.find(':') != std::string_view::npos) {
+  if (has_absolute_scheme(input)) {
     return url_parser::parse_absolute(input);
   }
 

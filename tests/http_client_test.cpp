@@ -100,8 +100,15 @@ std::filesystem::path test_temp_directory() {
 
 std::filesystem::path write_test_file(std::string_view name, std::string_view content) {
   auto path = test_temp_directory() / name;
-  auto file = std::ofstream(path);
-  file << content;
+  auto file = std::ofstream(path, std::ios::binary);
+  if (!file) {
+    throw std::runtime_error{"failed to open test file for writing: " + path.string()};
+  }
+
+  file.write(content.data(), static_cast<std::streamsize>(content.size()));
+  if (!file) {
+    throw std::runtime_error{"failed to write test file: " + path.string()};
+  }
   return path;
 }
 
