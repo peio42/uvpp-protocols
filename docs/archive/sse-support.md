@@ -33,7 +33,7 @@ Automatic heartbeat scheduling is also outside this first implementation. It
 needs an owned timer tied to the HTTP response slot or another long-lived SSE
 state object, which is a broader lifetime decision than formatting SSE frames.
 That follow-up is tracked in
-[SSE automatic heartbeat scheduling](sse-automatic-heartbeats.md).
+[SSE automatic heartbeat scheduling](../proposals/sse-automatic-heartbeats.md).
 
 ## Public API Shape
 
@@ -230,7 +230,7 @@ wait for `on_drain()` before sending more heartbeat or domain frames.
 Automatic heartbeat comments can be added later behind an explicit user option,
 but the first SSE helper should not add a timer-owning state machine just for
 that feature. See
-[SSE automatic heartbeat scheduling](sse-automatic-heartbeats.md).
+[SSE automatic heartbeat scheduling](../proposals/sse-automatic-heartbeats.md).
 
 ## Last-Event-ID
 

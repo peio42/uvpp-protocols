@@ -1,6 +1,6 @@
 # SSE Automatic Heartbeat Scheduling Proposal
 
-Status: Draft, follow-up to [Server-Sent Events support](sse-support.md)
+Status: Draft, follow-up to [Server-Sent Events support](../archive/sse-support.md)
 
 ## Context
 

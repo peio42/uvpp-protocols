@@ -79,6 +79,7 @@ struct memory_endpoint {
   std::deque<std::vector<std::byte>> pending_reads;
   std::weak_ptr<memory_endpoint> peer;
   bool closed = false;
+  bool referenced = true;
 };
 
 class tcp_client_stream final : public uvp::io::byte_stream::concept_ {
@@ -158,6 +159,18 @@ public:
 
   uvp::io::endpoint remote_endpoint() const override {
     return {};
+  }
+
+  void ref() noexcept override {
+    tcp_->ref();
+  }
+
+  void unref() noexcept override {
+    tcp_->unref();
+  }
+
+  bool has_ref() const noexcept override {
+    return tcp_->has_ref();
   }
 
   uv::tcp* tcp() noexcept override {
@@ -244,6 +257,18 @@ public:
 
   uvp::io::endpoint remote_endpoint() const override {
     return {};
+  }
+
+  void ref() noexcept override {
+    state_->referenced = true;
+  }
+
+  void unref() noexcept override {
+    state_->referenced = false;
+  }
+
+  bool has_ref() const noexcept override {
+    return state_->referenced;
   }
 
   uv::tcp* tcp() noexcept override {

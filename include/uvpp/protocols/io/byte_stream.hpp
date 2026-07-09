@@ -51,6 +51,9 @@ public:
     virtual void close(close_callback on_close) = 0;
     virtual endpoint local_endpoint() const = 0;
     virtual endpoint remote_endpoint() const = 0;
+    virtual void ref() noexcept = 0;
+    virtual void unref() noexcept = 0;
+    virtual bool has_ref() const noexcept = 0;
     virtual uv::tcp* tcp() noexcept = 0;
     virtual uv::pipe* pipe() noexcept = 0;
   };
@@ -73,6 +76,10 @@ public:
 
   [[nodiscard]] endpoint local_endpoint() const;
   [[nodiscard]] endpoint remote_endpoint() const;
+
+  void ref() noexcept;
+  void unref() noexcept;
+  [[nodiscard]] bool has_ref() const noexcept;
 
   [[nodiscard]] explicit operator bool() const noexcept;
 

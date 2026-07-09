@@ -1,6 +1,8 @@
 # HTTP Client Proposal
 
-Status: Draft, not implemented
+Status: Initial HTTP/HTTPS one-shot client plus request and response streaming
+implemented; pooling, conservative redirects, HTTP forward proxying, and phase
+timeouts implemented; CONNECT proxying and advanced timeout policies remain open
 
 ## Decision
 
@@ -42,11 +44,36 @@ transport/session to the WebSocket module.
 
 - Implemented: HTTP/1.1 server, shared HTTP method/status/header vocabulary,
   request/response objects, `uvp::io::byte_stream`, and listener composition.
-- Drafted separately: TLS stream/listener support, shared URL module, HTTP/2
-  support, and WebSocket client support.
-- Not implemented: public HTTP client API, DNS resolution, outbound TCP connect
-  helper, client TLS integration, connection pooling, request writer, response
-  parser, redirects, proxying, or streaming upload/download API.
+- Implemented: initial `uvp::http::client`, `client_options`, cancellable
+  request operation, URL + DNS + TCP orchestration, HTTP/1.1 request writer,
+  buffered response parser, response header/body limits, malformed response
+  handling, chunked/content-length/EOF body handling, HEAD/204/304 no-body
+  semantics, and one-shot `GET` over `http://` URLs.
+- Implemented: reusable `uvp::io::tcp_connector` below HTTP, with sequential
+  address attempts, typed connect errors, byte-stream conversion, and
+  cancellation.
+- Implemented: HTTPS one-shot requests through `uvp::tls::connect()`, SNI from
+  the URL host, hostname verification by default, configurable CA file/path,
+  and ALPN `http/1.1`.
+- Implemented: response-body streaming with `on_response_headers`, `on_data`,
+  and `on_complete`, covering content-length, chunked, EOF-delimited, and
+  bodyless responses without buffering the full body first.
+- Implemented: request-body streaming for fixed `Content-Length` and
+  HTTP/1.1 chunked uploads, upload queue backpressure, request headers, and
+  cancellation while the upload is still open.
+- Implemented: opt-in HTTP/1.1 keep-alive pool keyed by origin, reuse after
+  response consumption, `Connection: close` handling, idle timeout, explicit
+  idle close, and per-origin idle connection limit.
+- Implemented: client phase timeouts for DNS resolution, TCP connect, TLS
+  handshake, request write/upload, response headers, and response body transfer.
+- Implemented: byte-stream lifetime controls for cleaner idle pool liveness.
+- Implemented: explicit HTTP forward proxy support for one-shot `http://`
+  requests, including absolute-form request targets and explicit
+  `Proxy-Authorization`.
+- Drafted separately or still open: HTTP/2 support, WebSocket client support,
+  CONNECT/SOCKS proxy routes, overall request deadlines, redirect policy
+  extensions, response pause/resume controls, and more advanced upload/response
+  concurrency.
 
 ## Goals
 
@@ -141,6 +168,35 @@ The exact owning types still need naming, but the lifecycle should be explicit:
 - completion fires exactly once with success, cancellation, timeout, protocol
   failure, or transport failure.
 
+The initial implemented subset exposes request and response streaming:
+
+```cpp
+auto req = client.request(
+  uvp::http::method::post,
+  "https://example.com/upload");
+
+req.content_length(total_size)
+  .header("content-type", "application/octet-stream")
+  .on_response_headers([](uvp::http::response_head const& h) {
+    // status, headers
+  })
+  .on_data([](std::span<std::byte const> chunk) {
+    // borrowed response body chunk
+  })
+  .on_complete([](uvp::result<void> done) {
+    // complete, cancelled, timed out, or failed
+  });
+
+auto body = req.start();
+body.write(chunk1);
+body.write(chunk2);
+body.end();
+```
+
+This is enough for large downloads, SSE-style clients, and fixed or chunked
+uploads. It also gives the future WebSocket client a path to observe response
+headers before an upgrade handoff.
+
 ## Core Components
 
 ### URL and Request Target
@@ -177,7 +233,7 @@ Initial HTTP client needs:
 
 ### Sockets and Connection
 
-The client needs an outbound connection helper over uvpp TCP:
+The client uses an outbound connection helper over uvpp TCP:
 
 ```text
 resolve host
@@ -186,16 +242,20 @@ resolve host
       -> HTTP session
 ```
 
-The connection layer should own:
+The reusable `uvp::io::tcp_connector` owns:
 
 - TCP connect attempts;
 - remote/local endpoint metadata;
-- connect timeout;
 - cancellation before or during connect;
 - conversion to `uvp::io::byte_stream`.
 
 Connection establishment should be factored below HTTP so SMTP, Redis, MQTT, or
 database adapters can reuse the same direction later.
+
+Open hardening:
+
+- Happy Eyeballs / IPv6-IPv4 racing;
+- richer diagnostics for the last failed candidate.
 
 ### TLS and ALPN
 
@@ -225,10 +285,19 @@ The first native milestone should implement HTTP/1.1.
 
 Parser direction:
 
-- reuse `llhttp` behind a private client response parser adapter if practical;
-- parse status line, headers, chunked body, content-length body, and EOF body;
-- enforce header/body limits;
-- detect malformed responses and conflicting framing.
+- implemented first as a buffered parser for the one-shot client;
+- parses status line, headers, chunked body, content-length body, and EOF body;
+- enforces header/body limits;
+- treats HEAD, 1xx, 204, and 304 responses as bodyless;
+- detects malformed status lines, malformed headers, invalid chunk sizes,
+  unterminated chunks, incomplete content-length bodies, and incomplete
+  headers.
+
+The response-streaming path currently reuses a small incremental HTTP/1.1 client
+parser for status, headers, content-length, chunked, EOF-delimited, and
+bodyless responses. Future hardening may replace the internal parser with an
+adapter backed by `llhttp`, without changing the high-level response
+vocabulary.
 
 Writer direction:
 
@@ -242,24 +311,31 @@ time per connection.
 
 ### Connection Pool
 
-Connection pooling should be designed in the first client proposal even if it
-lands after the simplest request path.
+Connection pooling is implemented for the initial HTTP/1.1 client as an opt-in
+pool. It is disabled by default so existing code that runs the loop until idle
+does not keep idle sockets alive unexpectedly.
+
+Clean idle-pool liveness depends on
+[byte stream lifetime controls](byte-stream-lifetime-controls.md). Once
+`uvp::io::byte_stream` forwards `ref()`, `unref()`, and `has_ref()`, the pool can
+mark idle transports as unreferenced without closing them, then reference them
+again when checked out for reuse.
 
 Pool key should include at least:
 
-- scheme;
-- host;
-- port;
+- implemented now: scheme;
+- implemented now: host;
+- implemented now: port;
 - proxy identity, once proxying exists;
 - TLS verification and ALPN-relevant policy.
 
 HTTP/1.1 pool behavior:
 
-- one in-flight request per connection;
-- reuse only after the previous response is fully consumed or discarded safely;
-- honor `Connection: close`;
-- close idle connections after an idle timeout;
-- bound total connections and per-origin connections.
+- implemented: one in-flight request per connection;
+- implemented: reuse only after the previous response is fully consumed;
+- implemented: honor `Connection: close`;
+- implemented: close idle connections after an idle timeout;
+- implemented: bound idle connections per origin.
 
 HTTP/2 pool behavior, later:
 
@@ -306,46 +382,72 @@ HTTP session.
 
 Initial policy:
 
-- disabled or conservative by default unless the API opts into automatic
-  redirects;
-- maximum redirect count;
-- preserve method only where HTTP semantics require it;
-- convert `POST` to `GET` for 301/302/303 only if the chosen policy allows the
+- implemented for the one-shot client as opt-in behavior through
+  `client_options::follow_redirects`;
+- implemented maximum redirect count through `client_options::max_redirects`;
+- implemented for `GET` and `HEAD` only;
+- implemented for `301`, `302`, `303`, `307`, and `308`;
+- implemented absolute and relative `Location` values through the shared URL
+  resolver;
+- implemented re-running URL validation, DNS, TCP, TLS, and pool selection for
+  each redirect target;
+- implemented failure on unsupported schemes, missing/invalid `Location`, too
+  many redirects, or methods that are not replayed automatically.
+
+Still open:
+
+- convert `POST` to `GET` for 301/302/303 only if a future policy allows the
   browser-compatible behavior;
-- strip sensitive headers when origin changes;
-- re-run DNS, proxy, TLS, and pool selection for each redirect target;
-- fail on unsupported schemes.
+- strip sensitive headers when origin changes once one-shot custom request
+  headers exist;
+- expose redirect history or final URL metadata.
+
+Follow-up redirect behavior is tracked in
+[HTTP redirect policy extensions](http-redirect-policy-extensions.md). It should
+come after proxy support because proxy identity and credential handling affect
+redirect safety.
 
 Streaming uploads should not be automatically replayed unless the body source
 is explicitly replayable.
 
 ### Proxying
 
-Proxy support should be planned but not required for the first milestone.
+Proxy support should be planned but split by route semantics.
 
 Needed shapes:
 
-- HTTP proxy for clear HTTP requests using absolute-form request targets;
+- implemented: HTTP proxy for clear one-shot HTTP requests using absolute-form
+  request targets;
+- implemented: explicit `Proxy-Authorization` header support;
 - HTTPS through HTTP proxy via `CONNECT`;
 - proxy authentication hooks later;
-- pool key includes proxy identity;
+- implemented: pool key includes proxy identity;
 - `NO_PROXY` or environment behavior only if explicitly adopted.
 
 SOCKS proxying can remain out of scope until there is a concrete need.
+
+Clear HTTP forward proxying belongs in the HTTP client milestone because it
+changes the HTTP request target rather than producing a transparent connection
+to the origin. Tunnel-style proxy routes are tracked separately in
+[Outbound connector and proxy routes](outbound-connector-and-proxy-routes.md)
+so other protocols can reuse the same `byte_stream` factory later.
 
 ### Upload and Download Streaming
 
 Upload streaming:
 
-- support fixed-length and chunked request bodies;
-- provide backpressure through asynchronous write callbacks or a bounded queue;
-- allow upload cancellation while response headers may or may not have arrived;
+- implemented for fixed-length and chunked request bodies;
+- implemented with bounded queue backpressure through `stream_write_result` and
+  `on_drain`;
+- implemented upload cancellation before the response path begins;
 - surface write-side failures once.
 
 Download streaming:
 
-- deliver body chunks incrementally;
-- allow the user to stop reading and cancel the request;
+- implemented for response bodies with content-length, chunked, EOF-delimited,
+  and bodyless framing;
+- deliver body chunks incrementally as callback-scoped borrowed spans;
+- allow the user to stop the transfer by cancelling the request operation;
 - define whether unread bodies are drained, discarded, or make the connection
   unreusable;
 - support buffered collection as a wrapper over streaming.
@@ -354,14 +456,19 @@ Download streaming:
 
 Timeouts should be phase-aware:
 
-- overall request deadline;
-- DNS resolution timeout;
-- TCP connect timeout;
-- TLS handshake timeout;
-- request header/body write timeout or idle timeout;
-- response header timeout;
-- response body idle timeout;
+- implemented for the one-shot client: DNS resolution timeout, TCP connect
+  timeout, TLS handshake timeout, request write timeout, response header
+  timeout, and buffered response body timeout;
+- implemented for response streaming: DNS resolution timeout, TCP connect
+  timeout, TLS handshake timeout, request body/upload timeout, response header
+  timeout, and response body transfer timeout;
+- still open: overall request deadline;
+- still open: streaming response body idle timeout and pause-aware timeout
+  semantics;
 - pool checkout timeout.
+
+Flow-control and deadline extensions are tracked separately in
+[HTTP client flow control and deadlines](http-client-flow-control-and-deadlines.md).
 
 Timeout errors should include the phase where practical.
 
@@ -426,16 +533,18 @@ Constraints:
 
 Suggested first implementation slice:
 
-1. shared URL dependency usable by HTTP client;
-2. DNS resolution API and outbound TCP connect helper;
-3. HTTP/1.1 one-shot `GET` over plain HTTP with buffered body limit;
-4. HTTPS via TLS connect and hostname verification;
-5. streaming response body;
-6. streaming request body;
-7. basic keep-alive and pool reuse for HTTP/1.1;
-8. cancellation and phase-specific timeout coverage;
-9. redirects with conservative policy;
-10. proxy design spike or minimal HTTP CONNECT support.
+1. [x] shared URL dependency usable by HTTP client;
+2. [x] DNS resolution API;
+3. [x] HTTP/1.1 one-shot `GET` over plain HTTP with buffered body limit;
+4. [x] outbound TCP connect helper extraction;
+5. [x] HTTPS via TLS connect and hostname verification;
+6. [x] streaming response body;
+7. [x] streaming request body;
+8. [x] basic keep-alive and pool reuse for HTTP/1.1;
+9. [x] byte-stream lifetime controls for idle pool liveness;
+10. [x] cancellation and phase-specific timeout coverage;
+11. [x] redirects with conservative policy;
+12. [x] HTTP forward proxy support and tunnel proxy design split.
 
 HTTP/2 should follow only after ALPN, pooling, and stream ownership are settled.
 
@@ -453,8 +562,9 @@ HTTP/2 should follow only after ALPN, pooling, and stream ownership are settled.
 ## Source Documents
 
 - [DNS resolution](dns-resolution.md)
+- [Byte stream lifetime controls](byte-stream-lifetime-controls.md)
 - [Shared URL module](shared-url-module.md)
-- [TLS support](tls-support.md)
+- [TLS support](../archive/tls-support.md)
 - [HTTP/2 support](http2-support.md)
 - [Protocol composition](../design/protocol-composition.md)
 - [Dependency decisions](../design/dependency-decisions.md)

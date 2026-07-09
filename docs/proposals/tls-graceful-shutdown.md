@@ -128,5 +128,5 @@ Integration tests:
 
 ## Related Documents
 
-- [TLS support](tls-support.md)
-- [TLS listener adapter](tls-listener-adapter.md)
+- [TLS support](../archive/tls-support.md)
+- [TLS listener adapter](../archive/tls-listener-adapter.md)

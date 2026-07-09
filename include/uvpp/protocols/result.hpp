@@ -61,4 +61,38 @@ private:
   std::variant<T, uvp::error> value_;
 };
 
+template<>
+class result<void> {
+public:
+  result() = default;
+  result(uvp::error value) : error_(std::move(value)), ok_(false) {}
+
+  [[nodiscard]] bool has_value() const noexcept { return ok_; }
+  explicit operator bool() const noexcept { return has_value(); }
+
+  void value() const {
+    if (!has_value()) {
+      throw std::logic_error("uvp::result has no value");
+    }
+  }
+
+  [[nodiscard]] uvp::error& error() & {
+    if (has_value()) {
+      throw std::logic_error("uvp::result has no error");
+    }
+    return error_;
+  }
+
+  [[nodiscard]] const uvp::error& error() const& {
+    if (has_value()) {
+      throw std::logic_error("uvp::result has no error");
+    }
+    return error_;
+  }
+
+private:
+  uvp::error error_;
+  bool ok_ = true;
+};
+
 } // namespace uvp

@@ -28,6 +28,32 @@ public:
       return "multipart body ended unexpectedly";
     case errc::multipart_limit_exceeded:
       return "multipart limit exceeded";
+    case errc::client_invalid_url:
+      return "HTTP client URL is invalid";
+    case errc::client_unsupported_scheme:
+      return "HTTP client URL scheme is unsupported";
+    case errc::client_dns_failed:
+      return "HTTP client DNS resolution failed";
+    case errc::client_connect_failed:
+      return "HTTP client connection failed";
+    case errc::client_tls_failed:
+      return "HTTP client TLS handshake failed";
+    case errc::client_malformed_response:
+      return "HTTP client response is malformed";
+    case errc::client_header_limit_exceeded:
+      return "HTTP client response header limit exceeded";
+    case errc::client_body_limit_exceeded:
+      return "HTTP client response body limit exceeded";
+    case errc::client_cancelled:
+      return "HTTP client request was cancelled";
+    case errc::client_timeout:
+      return "HTTP client request timed out";
+    case errc::client_request_body_failed:
+      return "HTTP client request body failed";
+    case errc::client_redirect_failed:
+      return "HTTP client redirect failed";
+    case errc::client_proxy_failed:
+      return "HTTP client proxy failed";
     }
     return "unknown HTTP protocol error";
   }

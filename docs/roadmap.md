@@ -2,15 +2,17 @@
 
 ## Target
 
-- Stable HTTP/WebSocket server foundation for small services, local agents, and
-  protocol gateways.
+- Composable protocol foundations for uvpp applications: HTTP/WebSocket server
+  support, TLS transport composition, and uvpp-native client-side building
+  blocks for URL parsing, DNS, outbound connections, and HTTP.
 
 ## Current focus
 
-- Milestone 5: TLS transport support
-  - [x] [TLS stream adapter](proposals/tls-support.md)
-  - [x] [TLS listener adapter](proposals/tls-listener-adapter.md)
-  - [x] [HTTP over TLS through listener composition](proposals/http-tls-listener-integration.md)
+- Milestone 6: Client-side foundations
+  - [x] [Shared URL module](proposals/shared-url-module.md)
+  - [x] [DNS resolution](proposals/dns-resolution.md)
+  - [x] [Byte stream lifetime controls](proposals/byte-stream-lifetime-controls.md)
+  - [x] [HTTP client](proposals/http-client.md)
 
 Keep completed Current focus proposals listed until the milestone is closed.
 When a Current focus proposal is implemented, mark its line with `[x]` instead
@@ -19,10 +21,9 @@ next milestone or step.
 
 ## Next
 
-- Client-side foundations
-  - [Shared URL module](proposals/shared-url-module.md)
-  - [DNS resolution](proposals/dns-resolution.md)
-  - [HTTP client](proposals/http-client.md)
+- Milestone 7: Client protocol expansion
+  - [WebSocket client](proposals/websocket-client.md)
+  - [HTTP/2 design spike](proposals/http2-support.md)
 
 ## Later
 
@@ -30,15 +31,17 @@ next milestone or step.
   - [TLS policy and identity](proposals/tls-policy-and-identity.md)
   - [TLS graceful shutdown](proposals/tls-graceful-shutdown.md)
 
-- Client protocol modules
-  - [WebSocket client](proposals/websocket-client.md)
-
 - HTTP API polish
+  - [HTTP redirect policy extensions](proposals/http-redirect-policy-extensions.md)
+  - [HTTP client flow control and deadlines](proposals/http-client-flow-control-and-deadlines.md)
   - [Fluent temporary route builder overloads](proposals/fluent-temporary-route-builders.md)
   - [Route-level hooks](proposals/route-level-hooks.md)
   - [Route options body mode](proposals/route-options-body-mode.md)
   - [Route options parameter constraints](proposals/route-options-parameter-constraints.md)
   - [Stream body error ownership](proposals/stream-body-error-ownership.md)
+
+- Client transport foundations
+  - [Outbound connector and proxy routes](proposals/outbound-connector-and-proxy-routes.md)
 
 - Protocol client modules
   - [SMTP client](proposals/smtp-support.md)
@@ -47,6 +50,5 @@ next milestone or step.
 
 ## Separate Design Needed
 
-- [HTTP/2 design spike](proposals/http2-support.md)
 - [HTTP/3 and QUIC](proposals/http3-quic-support.md)
 - [Database client adapters](proposals/database-adapters.md)

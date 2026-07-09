@@ -3,7 +3,9 @@
 #include <uvpp/protocols/io.hpp>
 #include <uvpp/protocols/json.hpp>
 #include <uvpp/protocols/result.hpp>
+#include <uvpp/protocols/url.hpp>
 
+#include <uvpp/protocols/http/client.hpp>
 #include <uvpp/protocols/http/connection.hpp>
 #include <uvpp/protocols/http/error.hpp>
 #include <uvpp/protocols/http/headers.hpp>

@@ -72,5 +72,5 @@ on automatic `413` responses.
 
 ## Related
 
-- [Multipart handling](multipart-handling.md)
+- [Multipart handling](../archive/multipart-handling.md)
 - [Route body limit inheritance](route-body-limit-inheritance.md)

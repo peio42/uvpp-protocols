@@ -62,7 +62,7 @@ stream source without handling TLS handshakes manually for every connection.
 - Implemented: HTTP server accepts TLS listeners through its existing generic
   listener overload.
 - Follow-up: server-side SNI context selection and client certificate policy
-  are tracked in [TLS policy and identity](tls-policy-and-identity.md).
+  are tracked in [TLS policy and identity](../proposals/tls-policy-and-identity.md).
   Listener pause/resume backpressure, certificate reload, and HTTP convenience
   helpers remain separate later work.
 

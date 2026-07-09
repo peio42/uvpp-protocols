@@ -117,6 +117,10 @@ public:
   endpoint local_endpoint() const;
   endpoint remote_endpoint() const;
 
+  void ref() noexcept;
+  void unref() noexcept;
+  bool has_ref() const noexcept;
+
   explicit operator bool() const noexcept;
 
 private:
@@ -141,6 +145,13 @@ copy or move it into their own parser, frame, body, or message buffers.
 Writes must retain payload memory until the uvpp write callback completes.
 That retention belongs to the byte-stream implementation or to the protocol
 session, not to `llhttp`.
+
+`ref()`, `unref()`, and `has_ref()` forward uvpp/libuv handle liveness through
+the type-erased transport. They let higher-level protocol owners keep idle
+transports open without necessarily keeping `loop.run()` alive. These functions
+do not transfer ownership and `unref()` is never a substitute for `close()`.
+Invalid streams treat `ref()` and `unref()` as no-ops and return `false` from
+`has_ref()`.
 
 ## Stream Listener
 
@@ -292,7 +303,7 @@ tcp_listener
 ```
 
 TLS is not implemented yet; the proposed shape is tracked in
-[TLS support](../proposals/tls-support.md).
+[TLS support](../archive/tls-support.md).
 
 WebSocket starts as an HTTP upgrade. After upgrade, the HTTP session transfers
 or wraps the underlying `byte_stream` into a WebSocket session.

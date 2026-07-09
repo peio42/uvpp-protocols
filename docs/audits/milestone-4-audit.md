@@ -17,7 +17,7 @@ They were re-verified against the current `milestone-4` tip:
 |---|---|---|
 | 1 | `multipart_stream` with no `on_error()` handler + `res.defer()` already called could leave the connection hanging with no response | **Fixed** — `router.hpp` now guards with `!multipart.has_error_handler() && !res.ended() && !res.streaming()` and sends `500 Internal Server Error`; covered by a dedicated integration test |
 | 2 | `multipart_part::text()` / `discard()` silently no-op if a consumption mode was already chosen | **Fixed** — now reports `multipart part consumer already selected` through the `on_error` handler; covered by test |
-| 3 | `wrap_json_handler` only caught `uvp::json::exception`, not arbitrary exceptions thrown by a custom `from_json` | **Fixed, and better than originally documented** — it now catches any `std::exception` and maps it to `422 Unprocessable Content`. **Documentation was not updated**: `docs/proposals/typed-json-body-policy.md` still states only `uvp::json::exception` is caught |
+| 3 | `wrap_json_handler` only caught `uvp::json::exception`, not arbitrary exceptions thrown by a custom `from_json` | **Fixed, and better than originally documented** — it now catches any `std::exception` and maps it to `422 Unprocessable Content`. **Documentation was not updated**: `docs/archive/typed-json-body-policy.md` still states only `uvp::json::exception` is caught |
 | 4 | Part-header parsing duplicated between the sync (`multipart_form`) and streaming (`multipart_stream`) paths | **Fixed** — both paths now share a single `parse_part_header_block()` |
 
 New, smaller issues found while re-checking this area:
@@ -62,7 +62,7 @@ Overall: consistent fluent-builder style, correct `&`/`&&` overload pairs, namin
 
 ## 3. Server-Sent Events (`response.hpp` / `response.cpp`)
 
-The SSE API (`sse_stream`, `sse_options`, `sse_event`) closely follows `docs/proposals/sse-support.md`
+The SSE API (`sse_stream`, `sse_options`, `sse_event`) closely follows `docs/archive/sse-support.md`
 and composes cleanly on top of `streaming_response`.
 
 - **High** — `sse_stream::retry(std::chrono::milliseconds)` correctly rejects non-positive

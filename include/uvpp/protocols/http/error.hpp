@@ -14,6 +14,19 @@ enum class errc {
   multipart_malformed_part_header,
   multipart_unexpected_end,
   multipart_limit_exceeded,
+  client_invalid_url,
+  client_unsupported_scheme,
+  client_dns_failed,
+  client_connect_failed,
+  client_tls_failed,
+  client_malformed_response,
+  client_header_limit_exceeded,
+  client_body_limit_exceeded,
+  client_cancelled,
+  client_timeout,
+  client_request_body_failed,
+  client_redirect_failed,
+  client_proxy_failed,
 };
 
 std::error_code make_error_code(errc value) noexcept;

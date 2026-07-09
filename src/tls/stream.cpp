@@ -55,6 +55,9 @@ public:
   void close(uvp::io::close_callback on_close) override;
   uvp::io::endpoint local_endpoint() const override;
   uvp::io::endpoint remote_endpoint() const override;
+  void ref() noexcept override;
+  void unref() noexcept override;
+  bool has_ref() const noexcept override;
   uv::tcp* tcp() noexcept override;
   uv::pipe* pipe() noexcept override;
 
@@ -212,6 +215,18 @@ public:
 
   uvp::io::endpoint remote_endpoint() const {
     return lower_.remote_endpoint();
+  }
+
+  void ref() noexcept {
+    lower_.ref();
+  }
+
+  void unref() noexcept {
+    lower_.unref();
+  }
+
+  bool has_ref() const noexcept {
+    return lower_.has_ref();
   }
 
   uv::tcp* tcp() noexcept {
@@ -746,6 +761,18 @@ uvp::io::endpoint tls_stream_model::local_endpoint() const {
 
 uvp::io::endpoint tls_stream_model::remote_endpoint() const {
   return state_->remote_endpoint();
+}
+
+void tls_stream_model::ref() noexcept {
+  state_->ref();
+}
+
+void tls_stream_model::unref() noexcept {
+  state_->unref();
+}
+
+bool tls_stream_model::has_ref() const noexcept {
+  return state_->has_ref();
 }
 
 uv::tcp* tls_stream_model::tcp() noexcept {

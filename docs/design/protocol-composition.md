@@ -83,8 +83,8 @@ TLS should be presented as an explicit listener or acceptor layer. In that
 model, HTTP does not know OpenSSL or mbedTLS. It only receives accepted byte
 streams from the TLS listener.
 
-The proposed TLS API is tracked in [TLS support](../proposals/tls-support.md)
-and [HTTP TLS listener integration](../proposals/http-tls-listener-integration.md).
+The initial TLS API is recorded in [TLS support](../archive/tls-support.md)
+and [HTTP TLS listener integration](../archive/http-tls-listener-integration.md).
 
 ## Upgrade Stacks
 

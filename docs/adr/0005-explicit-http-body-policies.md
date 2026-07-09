@@ -55,5 +55,5 @@ explicitly.
 ## References
 
 - [HTTP server design](../design/http-server.md)
-- [Multipart handling proposal](../proposals/multipart-handling.md)
+- [Multipart handling proposal](../archive/multipart-handling.md)
 - [User HTTP server documentation](../user/http-server.md)

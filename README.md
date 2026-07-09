@@ -104,8 +104,18 @@ uvp::http::server srv(
 
 Available:
 
-- `uvp::http`: HTTP/1.1 server, multipart request bodies, and Server-Sent
-  Events response helpers are available; client primitives are planned.
+- `uvp::dns`: asynchronous host/service resolution over libuv `getaddrinfo`,
+  with typed address candidates and cancellable operations.
+- `uvp::http`: HTTP/1.1 server, multipart request bodies, Server-Sent Events
+  response helpers, and an initial HTTP/1.1 client for `http://` and
+  `https://` URLs with one-shot buffered requests, request/response streaming,
+  opt-in keep-alive pooling, conservative redirects, one-shot clear HTTP
+  forward proxy support, and phase timeouts are available.
+- `uvp::io`: byte-stream/listener transport abstractions and reusable outbound
+  TCP connection helpers with connect timeouts and byte-stream handle liveness
+  controls.
+- `uvp::url`: shared parsed URL values and helpers for client-side protocol
+  foundations, including default ports, origin keys, and HTTP request targets.
 - `uvp::tls`: TLS stream and listener adapters over uvpp byte streams, with
   client/server contexts, ALPN, client SNI, peer verification, backpressure,
   close-notify handling, listener handshake limits/timeouts, and HTTP listener
@@ -133,11 +143,14 @@ Each protocol layer should own its own state and compose with the layer below it
 through explicit transport APIs. Convenience helpers may exist, but they should
 not force unrelated dependencies between modules.
 
-The current transport layer exposes `uvp::io::stream_listener` and
-`uvp::io::byte_stream`, with TCP, Unix socket, and TLS listener adapters. The
-HTTP server owns listeners and accepted sessions through these abstractions, so
-HTTP over Unix sockets, HTTP over TLS, and future protocol composition do not
-require a TCP-only public model.
+The current transport layer exposes `uvp::io::stream_listener`,
+`uvp::io::byte_stream`, and `uvp::io::tcp_connector`, with TCP, Unix socket, and
+TLS listener adapters. `byte_stream` forwards uvpp/libuv `ref()`, `unref()`, and
+`has_ref()` so pooled or idle transports can manage loop liveness without
+exposing concrete handles. The HTTP server owns listeners and accepted sessions
+through these abstractions, while the HTTP client uses the connector side for
+outbound TCP. HTTP over Unix sockets, HTTP over TLS, and future protocol
+composition do not require a TCP-only public model.
 
 ## Dependency Policy
 
@@ -179,7 +192,11 @@ Documentation starts in [`docs/README.md`](docs/README.md).
 
 User documentation:
 
+- [DNS](docs/user/dns.md)
+- [HTTP client](docs/user/http-client.md)
 - [HTTP server](docs/user/http-server.md)
+- [IO](docs/user/io.md)
+- [URL](docs/user/url.md)
 - [TLS](docs/user/tls.md)
 - [WebSocket](docs/user/websocket.md)
 
@@ -209,8 +226,9 @@ The current implementation includes HTTP route ergonomics, chunked responses,
 request body policies, request body streaming, the generic HTTP upgrade hook,
 server-side WebSocket handshake/framing, WebSocket sessions, byte-stream
 adaptation, TLS stream and listener adapters, HTTP over TLS through listener
-composition, typed JSON request bodies, multipart request streaming, runnable
-examples, and focused tests. Remaining TLS hardening topics are tracked in the
+composition, HTTPS one-shot client requests, typed JSON request bodies,
+multipart request streaming, runnable examples, and focused tests. Remaining TLS
+hardening topics are tracked in the
 TLS policy/identity and graceful shutdown proposals.
 
 ## License

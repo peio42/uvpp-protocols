@@ -5,8 +5,15 @@
 
 Start here:
 
+- [DNS](dns.md): asynchronous host/service resolution and cancellable address
+  candidate operations.
+- [HTTP client](http-client.md): one-shot buffered and streaming HTTP/1.1
+  requests over `http://` and `https://` URLs.
 - [HTTP server](http-server.md): routing, request body policies, responses,
   streaming, and errors.
+- [IO](io.md): byte streams, listeners, and outbound TCP connection helpers.
+- [URL](url.md): owning parsed URLs, default ports, origins, and HTTP request
+  targets for client-side protocol code.
 - [TLS](tls.md): stream and listener adapters, client verification, ALPN, and
   HTTP composition.
 - [WebSocket](websocket.md): HTTP upgrade routes, WebSocket sessions, and

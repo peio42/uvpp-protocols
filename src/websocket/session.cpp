@@ -683,6 +683,22 @@ struct session::state : public std::enable_shared_from_this<state> {
     return stream ? stream.remote_endpoint() : uvp::io::endpoint{};
   }
 
+  void ref() noexcept {
+    if (stream) {
+      stream.ref();
+    }
+  }
+
+  void unref() noexcept {
+    if (stream) {
+      stream.unref();
+    }
+  }
+
+  bool has_ref() const noexcept {
+    return stream ? stream.has_ref() : false;
+  }
+
   accept_options options;
   session::text_callback on_text;
   session::binary_callback on_binary;
@@ -751,6 +767,22 @@ public:
 
   uvp::io::endpoint remote_endpoint() const override {
     return state_ ? state_->remote_endpoint() : uvp::io::endpoint{};
+  }
+
+  void ref() noexcept override {
+    if (state_) {
+      state_->ref();
+    }
+  }
+
+  void unref() noexcept override {
+    if (state_) {
+      state_->unref();
+    }
+  }
+
+  bool has_ref() const noexcept override {
+    return state_ ? state_->has_ref() : false;
   }
 
   uv::tcp* tcp() noexcept override {
