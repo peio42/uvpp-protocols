@@ -1,6 +1,6 @@
 # WebSocket Client Proposal
 
-Status: Draft
+Status: Proposed for Milestone 7 protocol expansion foundations
 
 ## Context
 
@@ -19,6 +19,9 @@ composition design leave room for WebSocket client sessions.
 - Reuse the existing WebSocket session and framing model where practical.
 - Add client connection and handshake APIs.
 - Preserve explicit transport ownership and URL-to-transport expansion.
+- Use the client implementation to validate shared cancellation, timeout,
+  framing, and backpressure primitives from
+  [Shared protocol foundation](shared-protocol-foundation.md).
 
 ## Out Of Scope
 
@@ -30,4 +33,5 @@ composition design leave room for WebSocket client sessions.
 
 - [WebSocket design](../design/websocket.md)
 - [Protocol composition](../design/protocol-composition.md)
+- [Shared protocol foundation](shared-protocol-foundation.md)
 - [User WebSocket documentation](../user/websocket.md)

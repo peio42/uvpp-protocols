@@ -177,4 +177,4 @@ SNI context selection:
 
 - [TLS support](../archive/tls-support.md)
 - [TLS listener adapter](../archive/tls-listener-adapter.md)
-- [HTTP client](http-client.md)
+- [HTTP client](../archive/http-client.md)

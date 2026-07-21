@@ -166,6 +166,6 @@ Add coverage for:
 
 ## Source Documents
 
-- [HTTP client](http-client.md)
-- [Shared URL module](shared-url-module.md)
+- [HTTP client](../archive/http-client.md)
+- [Shared URL module](../archive/shared-url-module.md)
 - [Dependency decisions](../design/dependency-decisions.md)

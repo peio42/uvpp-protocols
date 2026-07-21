@@ -266,7 +266,7 @@ Add coverage for:
 
 ## Source Documents
 
-- [HTTP client](http-client.md)
-- [DNS resolution](dns-resolution.md)
+- [HTTP client](../archive/http-client.md)
+- [DNS resolution](../archive/dns-resolution.md)
 - [Transport abstractions](../design/transport-abstractions.md)
 - [Protocol composition](../design/protocol-composition.md)

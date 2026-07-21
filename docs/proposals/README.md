@@ -11,10 +11,8 @@ the `Current focus` block.
 
 ## Milestone-Tracked Proposals
 
-- [Shared URL module](shared-url-module.md)
-- [DNS resolution](dns-resolution.md)
-- [Byte stream lifetime controls](byte-stream-lifetime-controls.md)
-- [HTTP client](http-client.md)
+- [Shared protocol foundation](shared-protocol-foundation.md)
+- [Protocol module portfolio](protocol-module-portfolio.md)
 - [HTTP client flow control and deadlines](http-client-flow-control-and-deadlines.md)
 - [Outbound connector and proxy routes](outbound-connector-and-proxy-routes.md)
 - [HTTP redirect policy extensions](http-redirect-policy-extensions.md)

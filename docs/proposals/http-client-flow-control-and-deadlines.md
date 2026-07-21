@@ -189,7 +189,7 @@ Add coverage for:
 
 ## Source Documents
 
-- [HTTP client](http-client.md)
+- [HTTP client](../archive/http-client.md)
 - [HTTP redirect policy extensions](http-redirect-policy-extensions.md)
 - [Outbound connector and proxy routes](outbound-connector-and-proxy-routes.md)
 - [HTTP/2 support](http2-support.md)

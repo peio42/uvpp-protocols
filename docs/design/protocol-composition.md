@@ -188,9 +188,9 @@ Client APIs should follow the same composition pattern when added. High-level
 URL helpers are acceptable, but they should expand into explicit transport
 choices internally.
 
-Client-side work is tracked in [shared URL module](../proposals/shared-url-module.md),
-[DNS resolution](../proposals/dns-resolution.md),
-[HTTP client](../proposals/http-client.md), and
+Client-side work is tracked in [shared URL module](../archive/shared-url-module.md),
+[DNS resolution](../archive/dns-resolution.md),
+[HTTP client](../archive/http-client.md), and
 [WebSocket client](../proposals/websocket-client.md).
 
 ## Ownership Across Layers

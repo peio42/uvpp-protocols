@@ -681,7 +681,7 @@ Future HTTP work is tracked outside stable design:
 - [Multipart handling](../archive/multipart-handling.md)
 - [Server-Sent Events support](../archive/sse-support.md)
 - [Static file helper](../archive/static-file-helper.md)
-- [HTTP client](../proposals/http-client.md)
+- [HTTP client](../archive/http-client.md)
 - [HTTP TLS listener integration](../archive/http-tls-listener-integration.md)
 - [Route body limit inheritance](../proposals/route-body-limit-inheritance.md)
 - [HTTP/2 support](../proposals/http2-support.md)
