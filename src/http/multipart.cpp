@@ -218,7 +218,7 @@ uvp::result<parsed_part_headers> parse_part_header_block(std::string_view block,
     }
     const auto name = trim_ows(line.substr(0, colon));
     const auto value = trim_ows(line.substr(colon + 1));
-    if (name.empty() || contains_ctl(name)) {
+    if (!http::headers::is_valid_name(name) || !http::headers::is_valid_value(value)) {
       return make_error(errc::multipart_malformed_part_header);
     }
     if (ascii_iequals(name, "content-disposition")) {

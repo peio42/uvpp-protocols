@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <uvpp/uv.hpp>
+#include <uvpp/protocols/http/headers.hpp>
 
 #include "detail/handshake.hpp"
 
@@ -831,6 +832,9 @@ accept_options&& accept_options::close_timeout(std::chrono::milliseconds value) 
 }
 
 accept_options& accept_options::subprotocol(std::string_view value) & {
+  if (!value.empty() && !uvp::http::headers::is_valid_name(value)) {
+    throw std::invalid_argument("WebSocket subprotocol must be an HTTP token");
+  }
   subprotocol_ = value;
   return *this;
 }

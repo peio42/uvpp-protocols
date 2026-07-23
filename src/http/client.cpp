@@ -348,7 +348,12 @@ struct parsed_response_head {
     if (colon == std::string_view::npos || colon == 0) {
       return make_client_error(errc::client_malformed_response, "response header line is invalid");
     }
-    response_headers.add(line.substr(0, colon), trim(line.substr(colon + 1)));
+    const auto name = line.substr(0, colon);
+    const auto value = trim(line.substr(colon + 1));
+    if (!http::headers::is_valid_name(name) || !http::headers::is_valid_value(value)) {
+      return make_client_error(errc::client_malformed_response, "response header field is invalid");
+    }
+    response_headers.add(name, value);
     if (line_end == std::string_view::npos) {
       break;
     }
@@ -629,6 +634,10 @@ private:
 
     if (options_.proxy.url.empty()) {
       return uvp::authority_endpoint(url_);
+    }
+
+    if (!http::headers::is_valid_value(options_.proxy.authorization)) {
+      return make_client_error(errc::client_proxy_failed, "proxy authorization contains invalid header characters");
     }
 
     if (target_scheme != uvp::url_scheme::http) {

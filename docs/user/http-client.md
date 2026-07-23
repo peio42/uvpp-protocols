@@ -81,6 +81,15 @@ body.write("stream");
 body.end();
 ```
 
+### Request header validation
+
+`header(name, value)` rejects invalid outbound HTTP fields with
+`std::invalid_argument`: names must be non-empty HTTP tokens, while values must
+not contain carriage return, line feed, or NUL. This prevents response/request
+splitting when values originate outside application control. The same value rule
+applies to `proxy.authorization`; `proxy.basic_auth(...)` produces a valid
+value directly.
+
 For unknown-size uploads, call `.chunked()` instead of `.content_length(n)`.
 If the queued upload bytes exceed
 `client_options::max_pending_request_body_bytes`, `write()` returns a

@@ -54,6 +54,17 @@ UVP_TEST_CASE("http response validates status and committed headers") {
   UVP_CHECK_EQ(response.headers().get("x-test"), "before");
 }
 
+UVP_TEST_CASE("http response rejects injected headers before serialization") {
+  uvp::http::response response;
+  UVP_CHECK_THROWS(response.header("bad name", "value"), std::invalid_argument);
+  UVP_CHECK_THROWS(response.header("x-test", "value\r\nX-Injected: yes"), std::invalid_argument);
+  response.header("x-test", "safe");
+
+  auto stream = response.stream();
+  UVP_CHECK_THROWS(stream.header("x-test", "value\nX-Injected: yes"), std::invalid_argument);
+  UVP_CHECK_EQ(response.headers().get("x-test"), "safe");
+}
+
 UVP_TEST_CASE("http deferred response completes the owner response") {
   uvp::http::response response;
   auto reply = response.defer();

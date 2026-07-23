@@ -53,6 +53,10 @@ session.
 The session owns WebSocket framing, message assembly, control frames, close
 state, and queued writes.
 
+When selected, `accept_options::subprotocol(...)` must be one non-empty HTTP
+token (for example `chat` or `myproto-v1`); it throws `std::invalid_argument`
+for spaces, commas, or header-control characters.
+
 ```cpp
 auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
   .max_message_bytes(1024 * 1024)

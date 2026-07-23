@@ -185,6 +185,13 @@ the request is dispatched. Header storage preserves insertion order and uses
 linear scans, which keeps the common small-header path simple while relying on
 those parser limits for adversarial inputs.
 
+Response header setters (`response::header`, deferred responses, and streaming
+responses) reject invalid fields with `std::invalid_argument` before anything
+is serialized. Header names must be non-empty HTTP tokens; values must not
+contain CR, LF, or NUL. Do not treat a header value as a place to format a
+complete header line. The same restriction applies to `static_files()`
+`.cache_control(...)` configuration.
+
 `server_options::header_timeout(...)` applies while waiting for complete request
 headers. `server_options::idle_timeout(...)` applies while a keep-alive
 connection is open without an active request. Those two settings are

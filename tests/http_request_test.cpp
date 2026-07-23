@@ -47,6 +47,51 @@ UVP_TEST_CASE("http headers are case insensitive") {
   UVP_CHECK(!uvp::http::headers::names_equal("Content-Length", "content-type"));
 }
 
+UVP_TEST_CASE("http headers reject invalid outbound syntax") {
+  uvp::http::headers headers;
+  headers.add("x-safe", "value");
+
+  UVP_CHECK_THROWS(headers.set("bad name", "value"), std::invalid_argument);
+  UVP_CHECK_THROWS(headers.add("x-injected", "value\r\nx-injected: yes"), std::invalid_argument);
+  UVP_CHECK_THROWS(headers.add("x-injected", "value\nnext"), std::invalid_argument);
+  const auto nul_value = std::string{"value\0next", 10};
+  UVP_CHECK_THROWS(headers.add("x-injected", nul_value), std::invalid_argument);
+
+  UVP_CHECK_EQ(headers.size(), 1U);
+  UVP_CHECK_EQ(headers.get("x-safe"), "value");
+  UVP_CHECK(uvp::http::headers::is_valid_name("x-token_123"));
+  UVP_CHECK(!uvp::http::headers::is_valid_name("x token"));
+  UVP_CHECK(uvp::http::headers::is_valid_value("safe value"));
+  UVP_CHECK(!uvp::http::headers::is_valid_value(nul_value));
+}
+
+UVP_TEST_CASE("http client rejects injected streaming headers and proxy authorization") {
+  uv::loop loop;
+  auto options = uvp::http::client_options{};
+  options.proxy.url = "http://127.0.0.1:8080";
+  options.proxy.authorization = "Basic safe\r\nX-Injected: yes";
+  uvp::http::client client(loop, std::move(options));
+
+  auto request = client.request(uvp::http::method::get, "http://example.test/");
+  UVP_CHECK_THROWS(request.header("x-test", "value\r\nX-Injected: yes"), std::invalid_argument);
+
+  auto completed = false;
+  auto operation = client.get("http://example.test/", [&](uvp::result<uvp::http::response> result) {
+    completed = true;
+    UVP_CHECK(!result);
+    UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_proxy_failed);
+  });
+  UVP_CHECK(operation.valid());
+  UVP_CHECK(completed);
+  loop.close();
+}
+
+UVP_TEST_CASE("http static file cache control rejects header injection") {
+  UVP_CHECK_THROWS(
+    uvp::http::static_file_options{}.cache_control("public\r\nX-Injected: yes"),
+    std::invalid_argument);
+}
+
 UVP_TEST_CASE("http connection info preserves endpoint variants") {
   auto connection = uvp::http::connection_info{
     uvp::io::tcp_endpoint{"127.0.0.1", 8080},

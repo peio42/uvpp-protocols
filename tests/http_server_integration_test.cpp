@@ -454,6 +454,23 @@ UVP_TEST_CASE("http server rejects requests exceeding header limits") {
   UVP_CHECK(too_large.find("HTTP/1.1 400 Bad Request\r\n") != std::string::npos);
 }
 
+UVP_TEST_CASE("http server rejects response header injection before serialization") {
+  const auto received = perform_http_request(
+    [](uvp::http::server& server) {
+      server.get("/", [](uvp::http::request&, uvp::http::response& res) {
+        res.header("x-safe", "ok\r\nX-Injected: yes").text("unreachable\n");
+      });
+    },
+    "GET / HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "HTTP/1.1 500 Internal Server Error\r\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 500 Internal Server Error\r\n") != std::string::npos);
+  UVP_CHECK(received.find("X-Injected: yes\r\n") == std::string::npos);
+}
+
 UVP_TEST_CASE("http server serves static files with metadata") {
   temporary_directory root;
   write_file(root.path() / "app.js", "console.log('ok');\n");

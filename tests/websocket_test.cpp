@@ -98,6 +98,12 @@ UVP_TEST_CASE("websocket accept options expose configured limits") {
   UVP_CHECK_THROWS(
     uvp::websocket::accept_options{}.close_timeout(std::chrono::milliseconds{0}),
     std::invalid_argument);
+  UVP_CHECK_THROWS(
+    uvp::websocket::accept_options{}.subprotocol("chat\r\nX-Injected: yes"),
+    std::invalid_argument);
+  UVP_CHECK_THROWS(
+    uvp::websocket::accept_options{}.subprotocol("chat, superchat"),
+    std::invalid_argument);
 }
 
 UVP_TEST_CASE("websocket session exposes callback setters") {

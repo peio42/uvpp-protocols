@@ -19,6 +19,8 @@ public:
   headers& set(std::string_view name, std::string_view value);
   headers& add(std::string_view name, std::string_view value);
 
+  [[nodiscard]] static bool is_valid_name(std::string_view name) noexcept;
+  [[nodiscard]] static bool is_valid_value(std::string_view value) noexcept;
   [[nodiscard]] static bool names_equal(std::string_view lhs, std::string_view rhs) noexcept;
 
   [[nodiscard]] std::string_view get(std::string_view name) const noexcept;

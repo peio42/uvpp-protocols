@@ -232,6 +232,11 @@ private:
         limit_error_ = "request has too many headers";
         return false;
       }
+      if (!http::headers::is_valid_name(pending_header_field_) ||
+          !http::headers::is_valid_value(pending_header_value_)) {
+        limit_error_ = "request header is invalid";
+        return false;
+      }
       current_.headers.add(pending_header_field_, pending_header_value_);
       ++header_count_;
       pending_header_field_.clear();

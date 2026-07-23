@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <uvpp/protocols/http/status.hpp>
+#include <uvpp/protocols/http/headers.hpp>
 
 namespace uvp::http {
 
@@ -537,6 +538,9 @@ static_file_options&& static_file_options::symlinks(symlink_policy value) && noe
 static_file_options& static_file_options::cache_control(std::string value) & {
   if (value.empty()) {
     throw std::invalid_argument("static file cache_control must not be empty");
+  }
+  if (!headers::is_valid_value(value)) {
+    throw std::invalid_argument("static file cache_control must not contain CR, LF, or NUL");
   }
   cache_control_ = std::move(value);
   return *this;
