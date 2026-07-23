@@ -52,14 +52,14 @@ public:
 
   void reset() {
     current_ = http1_message{};
-    completed_messages_.clear();
-    events_.clear();
     pending_header_field_.clear();
     pending_header_value_.clear();
     header_bytes_ = 0;
     header_count_ = 0;
     limit_error_.clear();
     last_header_part_ = header_part::none;
+    event_handler_ = nullptr;
+    paused_ = false;
 
     llhttp_reset(&parser_);
     parser_.data = this;
@@ -69,22 +69,21 @@ public:
     limits_ = value;
   }
 
-  http1_parse_result parse(std::string_view bytes) {
+  http1_parse_result parse(std::string_view bytes, const http1_event_handler& on_event) {
+    event_handler_ = &on_event;
     const auto err = llhttp_execute(&parser_, bytes.data(), bytes.size());
+    event_handler_ = nullptr;
     if (err == HPE_OK) {
       return {http1_parse_result::status::ok, {}, bytes.size()};
     }
 
+    if (err == HPE_PAUSED) {
+      paused_ = true;
+      return {http1_parse_result::status::paused, {}, parsed_bytes(bytes)};
+    }
+
     if (err == HPE_PAUSED_UPGRADE) {
-      if (!completed_messages_.empty()) {
-        completed_messages_.back().upgrade = true;
-      }
-      const char* error_pos = llhttp_get_error_pos(&parser_);
-      std::size_t parsed_bytes = bytes.size();
-      if (error_pos >= bytes.data() && error_pos <= bytes.data() + bytes.size()) {
-        parsed_bytes = static_cast<std::size_t>(error_pos - bytes.data());
-      }
-      return {http1_parse_result::status::upgrade, {}, parsed_bytes};
+      return {http1_parse_result::status::upgrade, {}, parsed_bytes(bytes)};
     }
 
     if (!limit_error_.empty()) {
@@ -93,12 +92,11 @@ public:
     return {http1_parse_result::status::error, error_message(err), 0};
   }
 
-  [[nodiscard]] const std::vector<http1_message>& completed_messages() const noexcept {
-    return completed_messages_;
-  }
-
-  [[nodiscard]] const std::vector<http1_event>& events() const noexcept {
-    return events_;
+  void resume() {
+    if (paused_) {
+      llhttp_resume(&parser_);
+      paused_ = false;
+    }
   }
 
 private:
@@ -163,19 +161,24 @@ private:
     self.current_.method = map_method(static_cast<llhttp_method_t>(llhttp_get_method(parser)));
     self.current_.http_major = static_cast<unsigned int>(llhttp_get_http_major(parser));
     self.current_.http_minor = static_cast<unsigned int>(llhttp_get_http_minor(parser));
-    self.events_.push_back(http1_event::headers(self.current_));
+    self.current_.keep_alive = llhttp_should_keep_alive(parser) != 0;
     if (!self.current_.headers.get("upgrade").empty() || self.current_.method == http::method::connect) {
+      self.current_.upgrade = true;
+      if (!self.emit(http1_event::headers(self.current_))) {
+        return HPE_PAUSED;
+      }
       // llhttp uses callback return value 2 to pause with HPE_PAUSED_UPGRADE.
       return 2;
+    }
+    if (!self.emit(http1_event::headers(self.current_))) {
+      return HPE_PAUSED;
     }
     return HPE_OK;
   }
 
   static int on_body(llhttp_t* parser, const char* at, std::size_t length) {
     auto& self = impl::self(parser);
-    self.current_.body.append(at, length);
-    self.events_.push_back(http1_event::body(std::string{at, length}));
-    return HPE_OK;
+    return self.emit(http1_event::body(std::string_view{at, length})) ? HPE_OK : HPE_PAUSED;
   }
 
   static int on_message_complete(llhttp_t* parser) {
@@ -184,10 +187,27 @@ private:
       return HPE_USER;
     }
     self.current_.keep_alive = llhttp_should_keep_alive(parser) != 0;
-    self.events_.push_back(http1_event::complete(self.current_));
-    self.completed_messages_.push_back(std::move(self.current_));
+    if (self.current_.upgrade) {
+      self.current_ = http1_message{};
+      return HPE_OK;
+    }
+    if (!self.emit(http1_event::complete(self.current_))) {
+      return HPE_PAUSED;
+    }
     self.current_ = http1_message{};
     return HPE_OK;
+  }
+
+  [[nodiscard]] bool emit(const http1_event& event) const {
+    return event_handler_ && (*event_handler_)(event);
+  }
+
+  [[nodiscard]] std::size_t parsed_bytes(std::string_view bytes) const noexcept {
+    const char* error_pos = llhttp_get_error_pos(&parser_);
+    if (error_pos >= bytes.data() && error_pos <= bytes.data() + bytes.size()) {
+      return static_cast<std::size_t>(error_pos - bytes.data());
+    }
+    return bytes.size();
   }
 
   static std::string error_message(llhttp_errno_t err) {
@@ -223,14 +243,14 @@ private:
 
   http1_limits limits_;
   http1_message current_;
-  std::vector<http1_message> completed_messages_;
-  std::vector<http1_event> events_;
+  const http1_event_handler* event_handler_ = nullptr;
   std::string pending_header_field_;
   std::string pending_header_value_;
   std::size_t header_bytes_ = 0;
   std::size_t header_count_ = 0;
   std::string limit_error_;
   header_part last_header_part_ = header_part::none;
+  bool paused_ = false;
 };
 
 http1_state_machine::http1_state_machine()
@@ -250,16 +270,12 @@ void http1_state_machine::limits(http1_limits value) {
   impl_->limits(value);
 }
 
-http1_parse_result http1_state_machine::parse(std::string_view bytes) {
-  return impl_->parse(bytes);
+http1_parse_result http1_state_machine::parse(std::string_view bytes, const http1_event_handler& on_event) {
+  return impl_->parse(bytes, on_event);
 }
 
-const std::vector<http1_message>& http1_state_machine::completed_messages() const noexcept {
-  return impl_->completed_messages();
-}
-
-const std::vector<http1_event>& http1_state_machine::events() const noexcept {
-  return impl_->events();
+void http1_state_machine::resume() {
+  impl_->resume();
 }
 
 } // namespace uvp::http::detail

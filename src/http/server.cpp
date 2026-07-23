@@ -282,10 +282,18 @@ struct server::impl {
       }
 
       const auto bytes = result.bytes();
-      auto parse_result = parser_.parse(std::string_view{
+      parse_input(std::string_view{
         reinterpret_cast<const char*>(bytes.data()),
         bytes.size(),
       });
+    }
+
+    void parse_input(std::string_view bytes) {
+      parsing_ = true;
+      const auto parse_result = parser_.parse(bytes, [this](const detail::http1_event& event) {
+        return handle_event(event);
+      });
+      parsing_ = false;
 
       if (parse_result.code == detail::http1_parse_result::status::error) {
         stop_timeout();
@@ -294,13 +302,23 @@ struct server::impl {
       }
 
       if (parse_result.code == detail::http1_parse_result::status::upgrade) {
-        process_parser_events(true);
         const auto parsed_bytes = std::min(parse_result.parsed_bytes, bytes.size());
-        handle_upgrade(bytes.subspan(parsed_bytes));
+        handle_upgrade(std::as_bytes(std::span{bytes.data() + parsed_bytes, bytes.size() - parsed_bytes}));
         return;
       }
 
-      process_parser_events();
+      if (parse_result.code == detail::http1_parse_result::status::paused) {
+        const auto parsed_bytes = std::min(parse_result.parsed_bytes, bytes.size());
+        pending_parse_bytes_.assign(bytes.substr(parsed_bytes));
+        return;
+      }
+
+      if (resume_requested_) {
+        resume_requested_ = false;
+        if (!body_processing_paused_) {
+          continue_request_body();
+        }
+      }
     }
 
     struct active_request_state {
@@ -310,6 +328,7 @@ struct server::impl {
       request req;
       request_body_stream body_stream;
       std::shared_ptr<response_slot> slot;
+      std::string buffered_body;
       std::size_t received_body_bytes = 0;
       bool rejected = false;
     };
@@ -357,17 +376,7 @@ struct server::impl {
         .text("method not allowed\n");
     }
 
-    void process_parser_events(bool stop_before_complete = false) {
-      const auto& events = parser_.events();
-      while (!closed_ && !body_processing_paused_ && handled_events_ < events.size()) {
-        if (stop_before_complete && events[handled_events_].event_type() == detail::http1_event::type::complete) {
-          return;
-        }
-        handle_event(events[handled_events_++]);
-      }
-    }
-
-    void handle_event(const detail::http1_event& event) {
+    bool handle_event(const detail::http1_event& event) {
       switch (event.event_type()) {
       case detail::http1_event::type::headers:
         handle_headers(event.message());
@@ -379,6 +388,7 @@ struct server::impl {
         handle_message_complete(event.message());
         break;
       }
+      return !closed_ && !body_processing_paused_;
     }
 
     void handle_headers(const detail::http1_message& message) {
@@ -487,7 +497,7 @@ struct server::impl {
       }
     }
 
-    void handle_body_chunk(const std::string& chunk) {
+    void handle_body_chunk(std::string_view chunk) {
       if (!active_request_ || active_request_->rejected) {
         return;
       }
@@ -513,6 +523,8 @@ struct server::impl {
         if (active.body_stream.paused()) {
           body_processing_paused_ = true;
         }
+      } else {
+        active.buffered_body.append(chunk);
       }
     }
 
@@ -533,8 +545,11 @@ struct server::impl {
         return;
       }
 
+      auto completed_message = message;
+      completed_message.body = std::move(active->buffered_body);
+
       handle_buffered_message(
-        message,
+        completed_message,
         std::move(active->route),
         active->parsed_path,
         std::move(active->slot));
@@ -640,6 +655,7 @@ struct server::impl {
     void pause_request_body() {
       stop_timeout();
       body_processing_paused_ = true;
+      reads_paused_for_body_ = true;
       try {
         stream_.read_stop();
       } catch (...) {
@@ -652,8 +668,22 @@ struct server::impl {
       }
       body_processing_paused_ = false;
       start_body_timeout_if_needed();
-      process_parser_events();
-      if (!closed_ && !body_processing_paused_) {
+      if (parsing_) {
+        resume_requested_ = true;
+        return;
+      }
+      continue_request_body();
+    }
+
+    void continue_request_body() {
+      parser_.resume();
+      if (!pending_parse_bytes_.empty()) {
+        auto pending = std::move(pending_parse_bytes_);
+        pending_parse_bytes_.clear();
+        parse_input(pending);
+      }
+      if (!closed_ && !body_processing_paused_ && reads_paused_for_body_) {
+        reads_paused_for_body_ = false;
         start_read();
       }
     }
@@ -1238,7 +1268,7 @@ struct server::impl {
       if (active_request_ || body_processing_paused_ || writing_ || !writes_.empty() || !responses_.empty()) {
         return;
       }
-      if (pending_response_writes_ != 0 || handled_events_ < parser_.events().size()) {
+      if (pending_response_writes_ != 0) {
         return;
       }
       start_timeout(timeout_phase::idle, owner_.owner.options_.idle_timeout());
@@ -1256,7 +1286,7 @@ struct server::impl {
     uvp::io::byte_stream stream_;
     uv::timer timeout_timer_;
     detail::http1_state_machine parser_;
-    std::size_t handled_events_ = 0;
+    std::string pending_parse_bytes_;
     std::size_t pending_response_writes_ = 0;
     std::size_t pending_write_bytes_ = 0;
     std::unique_ptr<active_request_state> active_request_;
@@ -1265,6 +1295,9 @@ struct server::impl {
     bool writing_ = false;
     bool dispatching_response_ = false;
     bool body_processing_paused_ = false;
+    bool reads_paused_for_body_ = false;
+    bool parsing_ = false;
+    bool resume_requested_ = false;
     bool closed_ = false;
     bool timeout_closing_ = false;
     bool timeout_timer_active_ = false;

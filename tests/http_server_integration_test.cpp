@@ -1421,6 +1421,48 @@ UVP_TEST_CASE("http server supports multipart pause resume in the middle of a pa
   UVP_CHECK(received.find("\r\n\r\n80\n") != std::string::npos);
 }
 
+UVP_TEST_CASE("http server resumes a paused stream before parsing pipelined input") {
+  const std::string request =
+    "POST /upload HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Content-Length: 4\r\n"
+    "\r\n"
+    "data"
+    "GET /next HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n";
+
+  const auto received = perform_http_request_chunks(
+    [](uvp::http::server& server, uv::loop& loop) {
+      auto resume_timer = std::make_shared<uv::timer>(loop);
+      server.post(
+        "/upload",
+        uvp::http::body::stream{},
+        [resume_timer](uvp::http::request&, uvp::http::response& res, uvp::http::request_body_stream& body) {
+          body
+            .on_data([resume_timer, &body](std::span<const std::byte>) {
+              body.pause();
+              resume_timer->start(std::chrono::milliseconds{1}, [&body](uv::timer& timer) {
+                body.resume();
+                timer.close();
+              });
+            })
+            .on_end([&res] {
+              res.text("upload\n");
+            });
+        });
+      server.get("/next", [](uvp::http::request&, uvp::http::response& res) {
+        res.text("next\n");
+      });
+    },
+    {request},
+    "next\n");
+
+  UVP_CHECK(received.find("\r\n\r\nupload\n") != std::string::npos);
+  UVP_CHECK(received.find("\r\n\r\nnext\n") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server rejects multipart stream routes with non multipart content types") {
   const std::string body = "not multipart";
   const auto received = perform_http_request(

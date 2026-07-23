@@ -2,11 +2,11 @@
 
 #include <memory>
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include <uvpp/protocols/http/headers.hpp>
 #include <uvpp/protocols/http/method.hpp>
@@ -41,7 +41,7 @@ struct http1_event {
   };
 
   struct body_payload {
-    std::string body;
+    std::string_view body;
   };
 
   struct complete_payload {
@@ -63,8 +63,8 @@ struct http1_event {
     return http1_event{headers_payload{std::move(message)}};
   }
 
-  [[nodiscard]] static http1_event body(std::string chunk) {
-    return http1_event{body_payload{std::move(chunk)}};
+  [[nodiscard]] static http1_event body(std::string_view chunk) {
+    return http1_event{body_payload{chunk}};
   }
 
   [[nodiscard]] static http1_event complete(http1_message message) {
@@ -89,18 +89,23 @@ struct http1_event {
     return std::get<complete_payload>(payload).message;
   }
 
-  [[nodiscard]] const std::string& body() const {
+  [[nodiscard]] std::string_view body() const {
     return std::get<body_payload>(payload).body;
   }
 
   payload_type payload;
 };
 
+// Events are valid only for the duration of the callback. Returning false
+// pauses the parser after the event currently being delivered.
+using http1_event_handler = std::function<bool(const http1_event&)>;
+
 struct http1_parse_result {
   enum class status {
     ok,
     error,
     upgrade,
+    paused,
   };
 
   status code = status::ok;
@@ -123,10 +128,8 @@ public:
 
   void reset();
   void limits(http1_limits value);
-  [[nodiscard]] http1_parse_result parse(std::string_view bytes);
-
-  [[nodiscard]] const std::vector<http1_message>& completed_messages() const noexcept;
-  [[nodiscard]] const std::vector<http1_event>& events() const noexcept;
+  [[nodiscard]] http1_parse_result parse(std::string_view bytes, const http1_event_handler& on_event);
+  void resume();
 
 private:
   class impl;
