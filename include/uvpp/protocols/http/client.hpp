@@ -50,6 +50,7 @@ struct client_options {
   proxy_options proxy;
   std::string tls_ca_file;
   std::string tls_ca_path;
+  std::size_t max_header_count = 128;
 };
 
 using client_callback = std::function<void(uvp::result<http::response>)>;

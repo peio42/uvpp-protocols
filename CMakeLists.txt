@@ -41,6 +41,7 @@ target_sources(
     src/url.cpp
     src/http/client.cpp
     src/http/detail/http1_state_machine.cpp
+    src/http/detail/http1_response_parser.cpp
     src/http/error.cpp
     src/http/headers.cpp
     src/http/method.cpp

@@ -587,11 +587,80 @@ UVP_TEST_CASE("http client rejects malformed response header line") {
   });
 }
 
+UVP_TEST_CASE("http client ignores informational responses before the final response") {
+  run_raw_client_response(
+    "HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n"
+    "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_REQUIRE(result);
+      UVP_CHECK_EQ(result.value().status_code(), 200U);
+      UVP_CHECK_EQ(result.value().body(), "hello");
+      UVP_CHECK_EQ(result.value().headers().get("link"), "");
+    });
+}
+
+UVP_TEST_CASE("http client rejects ambiguous response framing") {
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\nok",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_malformed_response);
+    });
+
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n0\r\n\r\n",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_malformed_response);
+    });
+}
+
+UVP_TEST_CASE("http client rejects response protocol upgrades without an upgrade API") {
+  run_raw_client_response(
+    "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_malformed_response);
+    });
+}
+
+UVP_TEST_CASE("http client rejects successful CONNECT responses without an upgrade API") {
+  run_raw_client_response(
+    "HTTP/1.1 200 Connection Established\r\n\r\n",
+    uvp::http::method::connect,
+    uvp::http::client_options{},
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_malformed_response);
+    });
+}
+
 UVP_TEST_CASE("http client enforces response header limit") {
   run_raw_client_response(
     "HTTP/1.1 200 OK\r\nX-Large: abcdefghijklmnopqrstuvwxyz\r\n\r\n",
     uvp::http::method::get,
     uvp::http::client_options{.max_header_bytes = 24},
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_header_limit_exceeded);
+    });
+}
+
+UVP_TEST_CASE("http client enforces response header count including trailers") {
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-Extra: yes\r\n\r\nok",
+    uvp::http::method::get,
+    uvp::http::client_options{.max_header_count = 1},
+    [](uvp::result<uvp::http::response> result) {
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_header_limit_exceeded);
+    });
+
+  run_raw_client_response(
+    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+    "2\r\nok\r\n0\r\nX-Trailer: yes\r\n\r\n",
+    uvp::http::method::get,
+    uvp::http::client_options{.max_header_count = 1},
     [](uvp::result<uvp::http::response> result) {
       UVP_CHECK(!result);
       UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_header_limit_exceeded);
@@ -861,6 +930,35 @@ UVP_TEST_CASE("http client streams content-length response bodies") {
   UVP_CHECK(headers_seen);
   UVP_CHECK(completed);
   UVP_CHECK_EQ(body, "hello stream");
+}
+
+UVP_TEST_CASE("http client streams only final response headers after informational responses") {
+  auto completed = false;
+  auto headers = std::vector<unsigned int>{};
+  auto body = std::string{};
+
+  run_raw_streaming_response(
+    "HTTP/1.1 100 Continue\r\n\r\n"
+    "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
+    [&](uvp::http::streaming_request& request, uvp::io::stream_listener& listener) {
+      request
+        .on_response_headers([&](const uvp::http::response_head& head) {
+          headers.push_back(head.status_code);
+        })
+        .on_data([&](std::span<const std::byte> chunk) {
+          body.append(reinterpret_cast<const char*>(chunk.data()), chunk.size());
+        })
+        .on_complete([&](uvp::result<void> done) {
+          completed = true;
+          UVP_REQUIRE(done);
+          listener.close();
+        });
+    });
+
+  UVP_CHECK(completed);
+  UVP_CHECK_EQ(headers.size(), 1U);
+  UVP_CHECK_EQ(headers.front(), 200U);
+  UVP_CHECK_EQ(body, "ok");
 }
 
 UVP_TEST_CASE("http client streams chunked response bodies") {

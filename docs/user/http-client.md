@@ -96,12 +96,16 @@ If the queued upload bytes exceed
 backpressure result. Wait for `body.on_drain(...)` before writing more. The
 returned body writer also exposes `cancel()`.
 
-The parser handles status lines, headers, content-length bodies, chunked bodies,
-EOF-delimited bodies, and bodyless HEAD/204/304 responses. Malformed responses
-fail with `uvp::http::errc::client_malformed_response`; header and body limits
-have dedicated client errors. For the one-shot API, response bodies are
-buffered and bounded by `client_options::max_body_bytes`. For the streaming API,
-body chunks are delivered incrementally and the same body limit acts as a
+The client uses the same strict `llhttp` framing engine for buffered and
+streaming responses. It consumes informational `1xx` responses internally and
+delivers only the final response; it rejects ambiguous framing such as
+conflicting `Content-Length` values or `Transfer-Encoding` combined with
+`Content-Length`. Protocol upgrades (`101 Switching Protocols`) remain
+unsupported by this client API and fail as malformed responses. Malformed
+responses fail with `uvp::http::errc::client_malformed_response`; header and
+body limits have dedicated client errors. For the one-shot API, response bodies
+are buffered and bounded by `client_options::max_body_bytes`. For the streaming
+API, body chunks are delivered incrementally and the same body limit acts as a
 transfer cap.
 
 Current limits:
@@ -152,6 +156,7 @@ uvp::http::client client(
   loop,
   uvp::http::client_options{
     .max_header_bytes = 64 * 1024,
+    .max_header_count = 128,
     .max_body_bytes = 4 * 1024 * 1024,
     .max_pending_request_body_bytes = 2 * 1024 * 1024,
     .max_idle_connections_per_origin = 2,
