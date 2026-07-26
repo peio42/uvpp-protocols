@@ -1,6 +1,6 @@
 # Shared Protocol Foundation Proposal
 
-Status: Proposed for Milestone 7 protocol expansion foundations
+Status: Partially implemented for Milestone 7 protocol expansion foundations
 
 ## Context
 
@@ -85,6 +85,13 @@ The foundation should provide reusable conventions or helpers for:
 
 The helper should remain optional. Protocols with unusual lifetimes should be
 able to use the conventions without inheriting from a heavy base class.
+
+Implemented first slice: `uvp::detail::operation_lifetime<Result>` provides
+the exactly-once completion gate, an owned diagnostic phase name, an optional
+abort action, and inline callback dispatch after cleanup. DNS is its first
+consumer. The helper is intentionally loop-affine and does not include timers,
+transport-pool policy, an error category, or a cancellation-token hierarchy.
+See [Operation lifetime](../design/operation-lifetime.md).
 
 ### Timeouts and Deadlines
 

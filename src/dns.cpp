@@ -1,4 +1,5 @@
 #include <uvpp/protocols/dns.hpp>
+#include <uvpp/protocols/detail/operation_lifetime.hpp>
 
 #include <uvpp/uv.hpp>
 
@@ -101,13 +102,19 @@ public:
 class resolve_state : public std::enable_shared_from_this<resolve_state> {
 public:
   resolve_state(uv::loop& loop, query request, resolve_callback callback)
-      : loop_(&loop), request_(std::move(request)), callback_(std::move(callback)) {}
+      : loop_(&loop), request_(std::move(request)), lifetime_(std::move(callback)) {
+    lifetime_.set_abort_action([this]() noexcept {
+      if (request_active_) {
+        (void)native_request_.try_cancel();
+      }
+    });
+  }
 
   resolve_state(const resolve_state&) = delete;
   resolve_state& operator=(const resolve_state&) = delete;
 
   [[nodiscard]] resolve_operation start() {
-    if (!callback_) {
+    if (!lifetime_.has_callback()) {
       complete(make_dns_error(errc::invalid_query, "missing DNS callback"));
       return resolve_operation{shared_from_this()};
     }
@@ -121,6 +128,7 @@ public:
     hints.ai_socktype = SOCK_STREAM;
 
     auto self = shared_from_this();
+    request_active_ = true;
     uv::getaddrinfo(
       *loop_,
       native_request_,
@@ -135,23 +143,13 @@ public:
   }
 
   void cancel() noexcept {
-    if (completed_) {
-      return;
-    }
-
-    cancelled_ = true;
-    (void)native_request_.try_cancel();
-    complete(make_dns_error(errc::cancelled));
+    (void)lifetime_.cancel(make_dns_error(errc::cancelled));
   }
 
 private:
   void on_resolved(uv::getaddrinfo_result result) {
-    if (completed_) {
-      return;
-    }
-
-    if (cancelled_) {
-      complete(make_dns_error(errc::cancelled));
+    request_active_ = false;
+    if (!lifetime_.active()) {
       return;
     }
 
@@ -170,23 +168,14 @@ private:
   }
 
   void complete(uvp::result<address_list> result) {
-    if (completed_) {
-      return;
-    }
-
-    completed_ = true;
-    auto callback = std::move(callback_);
-    if (callback) {
-      callback(std::move(result));
-    }
+    (void)lifetime_.complete(std::move(result));
   }
 
   uv::loop* loop_;
   dns::query request_;
-  resolve_callback callback_;
+  uvp::detail::operation_lifetime<uvp::result<address_list>> lifetime_;
   uv::getaddrinfo_request native_request_;
-  bool cancelled_ = false;
-  bool completed_ = false;
+  bool request_active_ = false;
 };
 
 [[nodiscard]] std::shared_ptr<resolve_state> resolve_state_from(const std::shared_ptr<void>& state) noexcept {

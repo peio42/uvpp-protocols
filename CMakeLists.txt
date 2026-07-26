@@ -115,6 +115,7 @@ if(UVPP_PROTOCOLS_BUILD_TESTS)
     tests/http_server_integration_test.cpp
     tests/io_test.cpp
     tests/multipart_test.cpp
+    tests/operation_lifetime_test.cpp
     tests/tls_stream_test.cpp
     tests/url_test.cpp
     tests/websocket_test.cpp)

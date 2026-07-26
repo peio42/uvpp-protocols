@@ -45,6 +45,8 @@ loop.run();
   be presented and connected.
 - [Transport abstractions](transport-abstractions.md): stream listeners and
   byte streams for TCP, Unix sockets, TLS, and future protocols.
+- [Operation lifetime](operation-lifetime.md): exactly-once completion,
+  cancellation cleanup, phases, and callback dispatch for protocol operations.
 - [HTTP server design](http-server.md): first implementation target.
 - [WebSocket design](websocket.md): HTTP upgrade integration, session
   ownership, and protocols over WebSocket.
