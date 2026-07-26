@@ -150,6 +150,14 @@ Recommandation : rendre les événements consommables ou les envoyer directement
 à la session, ne construire un body complet que pour les politiques buffered et
 supprimer `completed_messages_` du chemin serveur de production.
 
+Mise à jour : corrigé. Le parseur transmet désormais les événements à la session
+pendant l'appel à `parse()` ; les chunks de body sont des vues empruntées et ne
+sont pas conservés par la machine HTTP/1. Seules les routes dont la politique
+est buffered construisent un body complet. Les routes `body::stream` et
+multipart reçoivent les données au fil de l'eau et peuvent suspendre puis
+reprendre le parseur et les lectures du transport pour appliquer leur
+backpressure.
+
 ### 4.2 Critique — Les headers sortants permettent l'injection CRLF
 
 [`headers::set()` et `headers::add()`](../../src/http/headers.cpp) acceptent
@@ -171,6 +179,14 @@ Recommandation :
 - valider les valeurs générant des headers spécialisés, notamment subprotocol,
   cache-control et proxy authorization ;
 - ajouter des tests de response splitting et request smuggling sortant.
+
+Mise à jour : corrigé. `headers::set()` et `headers::add()` valident les noms
+comme des tokens HTTP et refusent CR, LF et NUL dans les valeurs. Ces contrôles
+s'appliquent aux sérialisations serveur et client ; les valeurs spécialisées
+construites par la bibliothèque, notamment l'autorisation de proxy,
+`cache-control` et le sous-protocole WebSocket, sont également validées. Les
+tests couvrent l'injection de headers dans les réponses, requêtes sortantes,
+SSE et fichiers statiques.
 
 ### 4.3 Élevé — Le client HTTP utilise un second parseur HTTP/1 artisanal
 
@@ -202,6 +218,13 @@ Recommandation : créer un adaptateur `llhttp` incrémental commun aux chemins
 buffered et streaming. La machine de framing doit être unique ; seul le sink du
 body doit varier.
 
+Mise à jour : corrigé. Le client utilise `http1_response_parser`, un adaptateur
+incrémental `llhttp` commun aux chemins buffered et streaming. Les réponses
+informationnelles sont consommées avant la réponse finale et les règles de
+framing, limites et erreurs sont ainsi partagées par les deux modes. Les tests
+couvrent notamment les `1xx`, les combinaisons ambiguës de framing, les limites
+de headers et les réponses chunked ou délimitées par EOF.
+
 ### 4.4 Élevé — Défaut de lifetime possible avec un contexte TLS serveur temporaire
 
 Le contexte OpenSSL installe un callback ALPN dont l'argument est un pointeur brut
@@ -232,6 +255,13 @@ Recommandation :
 - empêcher ou documenter toute mutation après la première utilisation ;
 - tester les contextes temporaires et les copies configurées différemment.
 
+Mise à jour : corrigé. Les contextes TLS sont désormais des handles partageant
+un état immuable (`shared_ptr<const impl>`), donc une copie ne peut plus être
+modifiée. `tls::accept()` et `tls::connect()` conservent explicitement cet état
+dans la session TLS jusqu'à sa destruction ; le callback ALPN ne peut donc plus
+référencer un contexte temporaire détruit. Les tests couvrent un contexte serveur
+temporaire pendant le handshake et l'échange de données.
+
 ### 4.5 Élevé — La limite d'écriture HTTP n'est pas appliquée aux réponses buffered
 
 Dans [`src/http/server.cpp`](../../src/http/server.cpp), `enqueue()` augmente
@@ -250,6 +280,13 @@ Recommandation :
 - inclure le framing dans la comptabilité ;
 - vérifier les dépassements avant addition pour éviter les overflows ;
 - tester plusieurs réponses pipelinées volumineuses.
+
+Mise à jour : corrigé. Les réponses buffered sont sérialisées par fragments,
+head compris, dans la capacité restante de `max_pending_write_bytes()`. La
+réponse et les suivantes restent différées tant que la file est pleine, puis
+reprennent après écriture et signal de drain ; la comptabilité est effectuée
+avant chaque ajout. Un test d'intégration couvre des réponses pipelinées
+buffered segmentées sous une limite d'écriture réduite.
 
 ### 4.6 Élevé pour la performance — Les fichiers statiques bloquent l'event loop
 
