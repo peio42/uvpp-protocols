@@ -785,6 +785,13 @@ changing status or headers is invalid. A `false` result means the chunk was
 accepted but the pending write queue reached backpressure; resume from
 `on_drain`.
 
+`server_options::max_pending_write_bytes()` also bounds serialized buffered
+responses. The server writes their headers and body in ordered fragments as
+capacity becomes available; a buffered response larger than the limit remains
+valid, but its wire representation is never fully queued at once. The limit
+does not replace an application-level limit for a body that user code has
+already built in memory.
+
 ## Server-Sent Events
 
 Use `sse()` for browser `EventSource` responses. It claims the response in the

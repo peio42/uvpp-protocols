@@ -121,11 +121,10 @@ std::string serialize_response_head(
   if (chunked && !suppress_body) {
     out << "transfer-encoding: chunked\r\n";
   } else if (!has_content_length) {
-    auto body = std::string(response.body());
-    if (status_code == static_cast<unsigned int>(status::no_content)) {
-      body.clear();
-    }
-    out << "content-length: " << body.size() << "\r\n";
+    const auto body_size = status_code == static_cast<unsigned int>(status::no_content)
+      ? std::size_t{0}
+      : response.body().size();
+    out << "content-length: " << body_size << "\r\n";
   }
   if (!has_connection) {
     out << "connection: " << (keep_alive ? "keep-alive" : "close") << "\r\n";
@@ -197,8 +196,12 @@ struct server::impl {
     bool stream_backpressured = false;
     bool stream_ended = false;
     bool response_hooks_ran = false;
+    bool buffered_close_started = false;
     std::size_t stream_body_bytes = 0;
     std::deque<pending_write> stream_writes;
+    std::string buffered_head;
+    std::size_t buffered_head_offset = 0;
+    std::size_t buffered_body_offset = 0;
   };
 
   class session : public std::enable_shared_from_this<session> {
@@ -964,18 +967,26 @@ struct server::impl {
           return;
         }
 
-        responses_.pop_front();
+        if (slot->close_after && !slot->buffered_close_started) {
+          slot->buffered_close_started = true;
+          cancel_pending_responses_after_front();
+        }
 
+        if (!queue_buffered_response(*slot)) {
+          flush_next();
+          return;
+        }
+
+        responses_.pop_front();
         ++pending_response_writes_;
-        enqueue(
-          serialize_response(slot->res, !slot->close_after, owner_.owner.options_, slot->suppress_body),
-          slot->close_after,
-          true);
         if (slot->close_after) {
           cancel_pending_responses();
+          flush_next();
           return;
         }
       }
+
+      flush_next();
     }
 
     void cancel_pending_responses() noexcept {
@@ -986,6 +997,22 @@ struct server::impl {
         }
       }
       responses_.clear();
+    }
+
+    void cancel_pending_responses_after_front() noexcept {
+      if (responses_.empty()) {
+        return;
+      }
+
+      auto first_pending = responses_.begin();
+      ++first_pending;
+      for (auto slot = first_pending; slot != responses_.end(); ++slot) {
+        if (!(*slot)->completed) {
+          (*slot)->res.cancel();
+          run_response_hooks(**slot, response_outcome::cancelled);
+        }
+      }
+      responses_.erase(first_pending, responses_.end());
     }
 
     void cancel_pending_responses(std::error_code) noexcept {
@@ -1002,6 +1029,68 @@ struct server::impl {
       pending_write_bytes_ += payload.size();
       writes_.push_back(pending_write{std::move(payload), close_after, counts_response, {}});
       flush_next();
+    }
+
+    [[nodiscard]] std::size_t available_write_capacity() const noexcept {
+      const auto limit = owner_.owner.options_.max_pending_write_bytes();
+      return pending_write_bytes_ >= limit ? 0 : limit - pending_write_bytes_;
+    }
+
+    [[nodiscard]] std::string_view buffered_response_body(const response_slot& slot) const noexcept {
+      if (slot.suppress_body || slot.res.status_code() == static_cast<unsigned int>(status::no_content)) {
+        return {};
+      }
+      return slot.res.body();
+    }
+
+    [[nodiscard]] bool queue_buffered_fragment(
+      std::string_view source,
+      std::size_t& offset,
+      bool final_fragment,
+      bool close_after) {
+      if (offset == source.size()) {
+        return true;
+      }
+
+      const auto available = available_write_capacity();
+      if (available == 0) {
+        return false;
+      }
+
+      const auto count = std::min(available, source.size() - offset);
+      const auto completes_source = count == source.size() - offset;
+      const auto completes_response = final_fragment && completes_source;
+      writes_.push_back(pending_write{
+        std::string(source.substr(offset, count)),
+        completes_response && close_after,
+        completes_response,
+        {},
+      });
+      pending_write_bytes_ += count;
+      offset += count;
+      return offset == source.size();
+    }
+
+    [[nodiscard]] bool queue_buffered_response(response_slot& slot) {
+      if (slot.buffered_head.empty()) {
+        slot.buffered_head = serialize_response_head(
+          slot.res,
+          !slot.close_after,
+          owner_.owner.options_,
+          false,
+          slot.suppress_body);
+      }
+
+      const auto body = buffered_response_body(slot);
+      if (!queue_buffered_fragment(
+            slot.buffered_head,
+            slot.buffered_head_offset,
+            body.empty(),
+            slot.close_after)) {
+        return false;
+      }
+
+      return queue_buffered_fragment(body, slot.buffered_body_offset, true, slot.close_after);
     }
 
     void queue_stream_write(response_slot& slot, std::string payload, bool close_after = false) {
@@ -1146,7 +1235,7 @@ struct server::impl {
         return;
       }
 
-      flush_next();
+      flush_response_slots();
       maybe_start_idle_timeout();
     }
 

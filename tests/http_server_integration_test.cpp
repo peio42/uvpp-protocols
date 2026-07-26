@@ -822,6 +822,43 @@ UVP_TEST_CASE("http server suppresses transfer encoding when streaming with cont
   UVP_CHECK(received.find("\r\n\r\nhello") != std::string::npos);
 }
 
+UVP_TEST_CASE("http server segments buffered pipelined responses within the write budget") {
+  const auto first_body = std::string(192, 'a') + "-first\n";
+  const auto second_body = std::string(192, 'b') + "-second\n";
+
+  const auto received = perform_http_request(
+    uvp::http::server_options{}.max_pending_write_bytes(64),
+    [&](uvp::http::server& server) {
+      server.get("/first", [&](uvp::http::request&, uvp::http::response& res) {
+        res.text(first_body);
+      });
+      server.get("/second", [&](uvp::http::request&, uvp::http::response& res) {
+        res.text(second_body);
+      });
+    },
+    "GET /first HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "\r\n"
+    "GET /second HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    second_body);
+
+  const auto first_status = received.find("HTTP/1.1 200 OK\r\n");
+  const auto first_body_offset = received.find(first_body);
+  const auto second_status = received.find("HTTP/1.1 200 OK\r\n", first_status + 1);
+  const auto second_body_offset = received.find(second_body);
+
+  UVP_CHECK(first_status != std::string::npos);
+  UVP_CHECK(first_body_offset != std::string::npos);
+  UVP_CHECK(second_status != std::string::npos);
+  UVP_CHECK(second_body_offset != std::string::npos);
+  UVP_CHECK(first_status < first_body_offset);
+  UVP_CHECK(first_body_offset < second_status);
+  UVP_CHECK(second_status < second_body_offset);
+}
+
 UVP_TEST_CASE("http server routes on decoded path segments") {
   std::vector<std::string> observed_segments;
 

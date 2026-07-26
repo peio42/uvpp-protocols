@@ -531,7 +531,11 @@ exceptions from cancellation callbacks must not escape into libuv callbacks.
 response slots that may be open, deferred, streaming, or completed but not yet
 fully written for a single connection. `max_pending_write_bytes()` remains the
 separate memory limit for serialized payload/chunk bytes already queued for
-writing.
+writing. Buffered responses are serialized as an ordered head plus body
+fragments and only enqueue fragments that fit in the remaining write budget.
+Their source body remains owned by the response slot until all fragments have
+been queued; this option bounds wire-queue copies, not an arbitrarily large
+body constructed by application code.
 
 Streaming responses build on the same slot model. A streaming response marks
 its slot streaming, emits chunks in order, and completes with `end()`. Later
