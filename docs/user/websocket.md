@@ -38,9 +38,10 @@ srv.upgrade("/events", [&sessions](uvp::http::upgrade_request& req) {
 ```
 
 If the path matches, the WebSocket module validates the RFC 6455 handshake,
-sends `101 Switching Protocols`, and takes ownership of the connection. Invalid
-handshakes are rejected with a normal HTTP response and the connection is
-closed.
+sends `101 Switching Protocols`, and takes ownership of the connection. In
+particular, `Sec-WebSocket-Key` must be a canonical Base64 nonce that decodes
+to exactly 16 bytes. Invalid handshakes are rejected with a `400 Bad Request`
+response and the connection is closed.
 
 ## Session API
 
@@ -55,7 +56,9 @@ state, and queued writes.
 
 When selected, `accept_options::subprotocol(...)` must be one non-empty HTTP
 token (for example `chat` or `myproto-v1`); it throws `std::invalid_argument`
-for spaces, commas, or header-control characters.
+for spaces, commas, or header-control characters. The selected token must also
+appear exactly in the client's `Sec-WebSocket-Protocol` offer; otherwise the
+upgrade is rejected. Subprotocol names are case-sensitive.
 
 ```cpp
 auto ws = uvp::websocket::accept(req, uvp::websocket::accept_options{}
@@ -84,10 +87,19 @@ ws.pong(payload);
 ws.close(uvp::websocket::close_code::normal, "bye");
 ```
 
+Text messages and close reasons must be valid UTF-8. `ping()` and `pong()`
+accept at most 125 payload bytes; a close reason accepts at most 123 bytes
+(the two remaining bytes hold the close code). `text()`, `ping()`, `pong()`,
+and `close()` throw `std::invalid_argument` when these outbound invariants are
+not met.
+
 After a close frame is sent, the session waits for the peer's close frame or
 transport close until `accept_options::close_timeout(...)` expires, then closes
 the transport. Invalid peer close codes are treated as protocol errors and do
-not call `on_close`.
+not call `on_close`. Invalid UTF-8 in an incoming text message or close reason
+does not call its application callback: the session reports
+`std::errc::illegal_byte_sequence` to `on_error` and sends a close frame with
+code `invalid_payload` (`1007`).
 
 `close_code` names the standard close codes the session may send or report:
 `normal`, `going_away`, `protocol_error`, `unsupported_data`,

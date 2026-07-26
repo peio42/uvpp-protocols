@@ -96,12 +96,103 @@ bool token_list_contains(std::string_view header, std::string_view expected) {
   return false;
 }
 
-bool valid_handshake(const uvp::http::upgrade_request& req) {
+int base64_value(char value) noexcept {
+  if (value >= 'A' && value <= 'Z') {
+    return value - 'A';
+  }
+  if (value >= 'a' && value <= 'z') {
+    return value - 'a' + 26;
+  }
+  if (value >= '0' && value <= '9') {
+    return value - '0' + 52;
+  }
+  if (value == '+') {
+    return 62;
+  }
+  if (value == '/') {
+    return 63;
+  }
+  return -1;
+}
+
+bool valid_websocket_key(std::string_view key) noexcept {
+  // A 16-byte nonce has a canonical 24-character Base64 representation ending
+  // in "==".  Check the unused bits as well so malformed but decodable input
+  // cannot be reflected into the Sec-WebSocket-Accept calculation.
+  if (key.size() != 24U || key.substr(22U) != "==") {
+    return false;
+  }
+
+  std::size_t decoded_size = 0U;
+  for (std::size_t index = 0U; index < key.size(); index += 4U) {
+    const int first = base64_value(key[index]);
+    const int second = base64_value(key[index + 1U]);
+    if (first < 0 || second < 0) {
+      return false;
+    }
+    decoded_size += 1U;
+
+    const char third_char = key[index + 2U];
+    const char fourth_char = key[index + 3U];
+    if (third_char == '=') {
+      if (fourth_char != '=' || index + 4U != key.size() || (second & 0x0f) != 0) {
+        return false;
+      }
+      continue;
+    }
+
+    const int third = base64_value(third_char);
+    if (third < 0) {
+      return false;
+    }
+    decoded_size += 1U;
+    if (fourth_char == '=') {
+      if (index + 4U != key.size() || (third & 0x03) != 0) {
+        return false;
+      }
+      continue;
+    }
+    if (base64_value(fourth_char) < 0) {
+      return false;
+    }
+    decoded_size += 1U;
+  }
+  return decoded_size == 16U;
+}
+
+bool valid_subprotocol_offer(std::string_view header, std::string_view selected) {
+  if (header.empty()) {
+    return selected.empty();
+  }
+
+  bool selected_offered = selected.empty();
+  while (!header.empty()) {
+    const auto comma = header.find(',');
+    const auto token = trim(header.substr(0U, comma));
+    if (token.empty() || !uvp::http::headers::is_valid_name(token)) {
+      return false;
+    }
+    if (token == selected) {
+      selected_offered = true;
+    }
+    if (comma == std::string_view::npos) {
+      break;
+    }
+    header.remove_prefix(comma + 1U);
+    if (header.empty()) {
+      return false;
+    }
+  }
+  return selected_offered;
+}
+
+bool valid_handshake(const uvp::http::upgrade_request& req, std::string_view selected_subprotocol) {
   return req.method() == uvp::http::method::get &&
          lowercase(req.header("upgrade")) == "websocket" &&
          token_list_contains(req.header("connection"), "upgrade") &&
          req.header("sec-websocket-version") == "13" &&
-         !trim(req.header("sec-websocket-key")).empty();
+         valid_websocket_key(trim(req.header("sec-websocket-key"))) &&
+         valid_subprotocol_offer(req.header("sec-websocket-protocol"), selected_subprotocol);
 }
 
 std::string bad_request_response() {
@@ -181,6 +272,82 @@ bool valid_close_code(unsigned short code) noexcept {
     return true;
   default:
     return false;
+  }
+}
+
+bool valid_utf8(std::string_view value) noexcept {
+  const auto byte_at = [&value](std::size_t index) {
+    return static_cast<unsigned char>(value[index]);
+  };
+  const auto continuation = [&byte_at](std::size_t index) {
+    return (byte_at(index) & 0xc0U) == 0x80U;
+  };
+
+  for (std::size_t index = 0U; index < value.size();) {
+    const auto first = byte_at(index);
+    if (first <= 0x7fU) {
+      ++index;
+    } else if (first >= 0xc2U && first <= 0xdfU && index + 1U < value.size() && continuation(index + 1U)) {
+      index += 2U;
+    } else if (first == 0xe0U && index + 2U < value.size() &&
+               byte_at(index + 1U) >= 0xa0U && byte_at(index + 1U) <= 0xbfU && continuation(index + 2U)) {
+      index += 3U;
+    } else if (first >= 0xe1U && first <= 0xecU && index + 2U < value.size() &&
+               continuation(index + 1U) && continuation(index + 2U)) {
+      index += 3U;
+    } else if (first == 0xedU && index + 2U < value.size() &&
+               byte_at(index + 1U) >= 0x80U && byte_at(index + 1U) <= 0x9fU && continuation(index + 2U)) {
+      index += 3U;
+    } else if (first >= 0xeeU && first <= 0xefU && index + 2U < value.size() &&
+               continuation(index + 1U) && continuation(index + 2U)) {
+      index += 3U;
+    } else if (first == 0xf0U && index + 3U < value.size() &&
+               byte_at(index + 1U) >= 0x90U && byte_at(index + 1U) <= 0xbfU &&
+               continuation(index + 2U) && continuation(index + 3U)) {
+      index += 4U;
+    } else if (first >= 0xf1U && first <= 0xf3U && index + 3U < value.size() &&
+               continuation(index + 1U) && continuation(index + 2U) && continuation(index + 3U)) {
+      index += 4U;
+    } else if (first == 0xf4U && index + 3U < value.size() &&
+               byte_at(index + 1U) >= 0x80U && byte_at(index + 1U) <= 0x8fU &&
+               continuation(index + 2U) && continuation(index + 3U)) {
+      index += 4U;
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool valid_utf8(std::span<const std::byte> value) noexcept {
+  if (value.empty()) {
+    return true;
+  }
+  return valid_utf8(std::string_view{reinterpret_cast<const char*>(value.data()), value.size()});
+}
+
+void validate_control_payload(std::span<const std::byte> payload, std::string_view operation) {
+  if (payload.size() > 125U) {
+    throw std::invalid_argument(
+      std::string{"WebSocket "} + std::string{operation} + " payload must not exceed 125 bytes");
+  }
+}
+
+void validate_text(std::string_view message) {
+  if (!valid_utf8(message)) {
+    throw std::invalid_argument("WebSocket text messages must be valid UTF-8");
+  }
+}
+
+void validate_close(close_code code, std::string_view reason) {
+  if (!valid_close_code(static_cast<unsigned short>(code))) {
+    throw std::invalid_argument("WebSocket close code is not valid for transmission");
+  }
+  if (!valid_utf8(reason)) {
+    throw std::invalid_argument("WebSocket close reasons must be valid UTF-8");
+  }
+  if (reason.size() > 123U) {
+    throw std::invalid_argument("WebSocket close reason must not exceed 123 bytes");
   }
 }
 
@@ -288,6 +455,10 @@ struct session::state : public std::enable_shared_from_this<state> {
         offset += 8U;
       }
 
+      if ((raw_opcode & 0x08U) != 0U && length > 125U) {
+        close_with_error(close_code::protocol_error, protocol_error());
+        return;
+      }
       if (length > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
           length > static_cast<std::uint64_t>(options.max_message_bytes())) {
         close_with_error(close_code::message_too_large, std::make_error_code(std::errc::message_size));
@@ -414,6 +585,10 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
 
     if (data_opcode == opcode::text) {
+      if (!valid_utf8(payload)) {
+        close_with_error(close_code::invalid_payload, std::make_error_code(std::errc::illegal_byte_sequence));
+        return;
+      }
       if (on_text) {
         on_text(handle, std::string_view{reinterpret_cast<const char*>(payload.data()), payload.size()});
       }
@@ -463,6 +638,10 @@ struct session::state : public std::enable_shared_from_this<state> {
       }
       code = static_cast<close_code>(raw_code);
       reason = std::string_view{reinterpret_cast<const char*>(payload.data() + 2U), payload.size() - 2U};
+      if (!valid_utf8(reason)) {
+        close_with_error(close_code::invalid_payload, std::make_error_code(std::errc::illegal_byte_sequence));
+        return;
+      }
     }
 
     auto handle = session{shared_from_this()};
@@ -494,6 +673,12 @@ struct session::state : public std::enable_shared_from_this<state> {
     if (closed || !stream) {
       if (on_write) {
         on_write(uvp::io::stream_error{not_connected_error()});
+      }
+      return false;
+    }
+    if ((static_cast<unsigned char>(code) & 0x08U) != 0U && payload.size() > 125U) {
+      if (on_write) {
+        on_write(uvp::io::stream_error{std::make_error_code(std::errc::invalid_argument)});
       }
       return false;
     }
@@ -886,6 +1071,7 @@ void session::release_owned() noexcept {
 }
 
 void session::text(std::string_view message) {
+  validate_text(message);
   if (state_) {
     state_->send_text(message);
   }
@@ -898,18 +1084,21 @@ void session::binary(std::span<const std::byte> message) {
 }
 
 void session::ping(std::span<const std::byte> payload) {
+  validate_control_payload(payload, "ping");
   if (state_) {
     state_->send_frame(opcode::ping, payload);
   }
 }
 
 void session::pong(std::span<const std::byte> payload) {
+  validate_control_payload(payload, "pong");
   if (state_) {
     state_->send_frame(opcode::pong, payload);
   }
 }
 
 void session::close(close_code code, std::string_view reason) {
+  validate_close(code, reason);
   if (state_) {
     state_->close(code, reason);
   }
@@ -1009,7 +1198,7 @@ session::operator bool() const noexcept {
 }
 
 session accept(uvp::http::upgrade_request& req, accept_options options) {
-  if (!valid_handshake(req)) {
+  if (!valid_handshake(req, options.subprotocol())) {
     req.reject(bad_request_response());
     return {};
   }
@@ -1025,7 +1214,7 @@ session accept(uvp::http::upgrade_request& req, accept_options options) {
 }
 
 session accept_detached(uvp::http::upgrade_request& req, accept_options options) {
-  if (!valid_handshake(req)) {
+  if (!valid_handshake(req, options.subprotocol())) {
     req.reject(bad_request_response());
     return {};
   }

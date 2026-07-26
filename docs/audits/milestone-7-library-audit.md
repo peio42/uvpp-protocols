@@ -283,23 +283,25 @@ lecture suivante attend l'acceptation de l'écriture HTTP ou le signal de drain.
 
 ### 4.7 Élevé — Conformité WebSocket encore incomplète
 
-[`src/websocket/session.cpp`](../../src/websocket/session.cpp) vérifie bien le
-masking client, les RSV bits, la fragmentation des control frames et certains
-close codes. Il reste cependant plusieurs écarts :
+[`src/websocket/session.cpp`](../../src/websocket/session.cpp) vérifie le
+masking client, les RSV bits, la fragmentation des control frames et les close
+codes. Les invariants ci-dessous ont été corrigés avant le partage de cette
+machine de framing avec le futur client WebSocket :
 
-- `ping()` et `pong()` permettent un payload supérieur à 125 octets ;
-- `close()` permet une raison produisant une control frame supérieure à 125
-  octets ;
-- les messages texte entrants ne sont pas validés comme UTF-8 ;
-- les raisons de fermeture entrantes et sortantes ne sont pas validées comme
-  UTF-8 ;
-- le subprotocol configuré n'est ni validé comme token, ni vérifié contre la
-  liste proposée par le client ;
-- la clé de handshake est seulement vérifiée comme non vide, pas comme un nonce
-  base64 de 16 octets.
+- `ping()` et `pong()` refusent désormais, par `std::invalid_argument`, tout
+  payload dépassant 125 octets ;
+- `close()` valide le code, l'UTF-8 de la raison et sa limite de 123 octets ;
+- `text()` valide l'UTF-8 sortant ; les textes entrants et raisons de fermeture
+  entrantes invalides ferment la session avec `1007 invalid_payload`, notifient
+  `std::errc::illegal_byte_sequence` et n'appellent pas le callback concerné ;
+- le subprotocol configuré reste un token HTTP et doit apparaître exactement,
+  avec casse significative, dans l'offre du client ;
+- `Sec-WebSocket-Key` doit être une représentation Base64 canonique d'un nonce
+  de 16 octets.
 
-Recommandation : corriger ces invariants avant de partager la machine de framing
-avec le futur client WebSocket.
+Les tests couvrent la négociation positive de sous-protocole, le rejet d'un
+nonce invalide, les limites sortantes et les fermetures `1007` pour texte ou
+raison de fermeture UTF-8 invalides.
 
 ## 5. Architecture et extensibilité
 

@@ -1,5 +1,6 @@
 #include <uvpp/protocols/http/upgrade.hpp>
 
+#include <memory>
 #include <utility>
 
 namespace uvp::http {
@@ -38,7 +39,10 @@ void upgrade_request::accept(std::string response, accept_callback on_accept) {
 
 void upgrade_request::reject(std::string response) {
   accept(std::move(response), [](uvp::io::byte_stream stream) mutable {
-    stream.close();
+    // The upgraded transport is asynchronous to close.  Keep the byte_stream
+    // model alive until libuv has completed that close operation.
+    auto pending_close = std::make_shared<uvp::io::byte_stream>(std::move(stream));
+    pending_close->close([pending_close] {});
   });
 }
 
