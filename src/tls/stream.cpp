@@ -75,12 +75,14 @@ public:
   tls_state(
     uvp::io::byte_stream lower,
     SSL* ssl,
+    std::shared_ptr<const void> context_owner,
     mode direction,
     std::size_t max_pending_write_bytes,
     std::size_t max_pending_read_bytes,
     handshake_callback callback)
       : lower_(std::move(lower)),
         ssl_(ssl),
+        context_owner_(std::move(context_owner)),
         direction_(direction),
         max_pending_write_bytes_(max_pending_write_bytes),
         max_pending_read_bytes_(max_pending_read_bytes),
@@ -703,6 +705,7 @@ private:
 
   uvp::io::byte_stream lower_;
   SSL* ssl_ = nullptr;
+  std::shared_ptr<const void> context_owner_;
   mode direction_;
   std::size_t max_pending_write_bytes_ = 0;
   std::size_t max_pending_read_bytes_ = 0;
@@ -874,10 +877,12 @@ const uvp::error& handshake_result::error() const& {
 }
 
 handshake_operation accept(uvp::io::byte_stream lower, server_context context, handshake_callback callback) {
+  auto context_owner = context_access::owner(context);
   auto* ssl = make_ssl(context_access::native(context));
   auto state = std::make_shared<tls_state>(
     std::move(lower),
     ssl,
+    std::move(context_owner),
     tls_state::mode::server,
     context_access::max_pending_write_bytes(context),
     context_access::max_pending_read_bytes(context),
@@ -887,12 +892,14 @@ handshake_operation accept(uvp::io::byte_stream lower, server_context context, h
 }
 
 handshake_operation connect(uvp::io::byte_stream lower, client_context context, handshake_callback callback) {
+  auto context_owner = context_access::owner(context);
   auto* ssl = make_ssl(context_access::native(context));
   configure_client_ssl(ssl, context);
 
   auto state = std::make_shared<tls_state>(
     std::move(lower),
     ssl,
+    std::move(context_owner),
     tls_state::mode::client,
     context_access::max_pending_write_bytes(context),
     context_access::max_pending_read_bytes(context),

@@ -11,7 +11,7 @@
 namespace uvp::tls {
 
 struct server_context::impl {
-  impl();
+  explicit impl(const server_context_options& options);
   ~impl();
 
   SSL_CTX* ctx = nullptr;
@@ -22,7 +22,7 @@ struct server_context::impl {
 };
 
 struct client_context::impl {
-  impl();
+  explicit impl(const client_context_options& options);
   ~impl();
 
   SSL_CTX* ctx = nullptr;
@@ -68,6 +68,14 @@ struct context_access {
 
   static std::size_t max_pending_read_bytes(const client_context& context) noexcept {
     return context.impl_->max_pending_read_bytes;
+  }
+
+  static std::shared_ptr<const server_context::impl> owner(const server_context& context) noexcept {
+    return context.impl_;
+  }
+
+  static std::shared_ptr<const client_context::impl> owner(const client_context& context) noexcept {
+    return context.impl_;
   }
 };
 

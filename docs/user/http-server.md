@@ -71,10 +71,11 @@ HTTP over TLS uses the same generic listener path:
 auto tcp = uvp::io::tcp_listener{loop}
   .bind("0.0.0.0", 8443);
 
-auto context = uvp::tls::server_context{}
-  .certificate_chain_file("server.crt")
-  .private_key_file("server.key")
-  .alpn({"http/1.1"});
+auto context = uvp::tls::server_context{
+  uvp::tls::server_context_options{}
+    .certificate_chain_file("server.crt")
+    .private_key_file("server.key")
+    .alpn({"http/1.1"})};
 
 srv.listen(uvp::tls::listener{
   uvp::io::stream_listener{std::move(tcp)},

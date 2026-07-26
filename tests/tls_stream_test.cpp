@@ -366,22 +366,12 @@ std::filesystem::path write_test_file(std::string_view name, std::string_view co
 
 } // namespace
 
-UVP_TEST_CASE("tls stream handshakes over byte streams and exchanges data") {
+UVP_TEST_CASE("tls stream retains temporary contexts through handshake and data exchange") {
   uv::loop loop;
   auto [server_lower, client_lower] = memory_pair(loop);
 
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
-
-  auto server_context = uvp::tls::server_context{}
-    .certificate_chain_file(cert_path.string())
-    .private_key_file(key_path.string())
-    .alpn({"http/1.1"});
-
-  auto client_context = uvp::tls::client_context{}
-    .insecure_no_verify_peer()
-    .alpn({"http/1.1"})
-    .max_pending_write_bytes(4);
 
   auto server_done = false;
   auto client_done = false;
@@ -390,19 +380,33 @@ UVP_TEST_CASE("tls stream handshakes over byte streams and exchanges data") {
   auto server_stream = uvp::io::byte_stream{};
   auto client_stream = uvp::io::byte_stream{};
 
-  uvp::tls::accept(std::move(server_lower), server_context, [&](uvp::tls::handshake_result result) {
-    UVP_REQUIRE(result);
-    server_alpn = std::string(result.selected_alpn());
-    server_stream = std::move(result).stream();
-    server_done = true;
-  });
+  uvp::tls::accept(
+    std::move(server_lower),
+    uvp::tls::server_context{
+      uvp::tls::server_context_options{}
+        .certificate_chain_file(cert_path.string())
+        .private_key_file(key_path.string())
+        .alpn({"http/1.1"})},
+    [&](uvp::tls::handshake_result result) {
+      UVP_REQUIRE(result);
+      server_alpn = std::string(result.selected_alpn());
+      server_stream = std::move(result).stream();
+      server_done = true;
+    });
 
-  uvp::tls::connect(std::move(client_lower), client_context, [&](uvp::tls::handshake_result result) {
-    UVP_REQUIRE(result);
-    client_alpn = std::string(result.selected_alpn());
-    client_stream = std::move(result).stream();
-    client_done = true;
-  });
+  uvp::tls::connect(
+    std::move(client_lower),
+    uvp::tls::client_context{
+      uvp::tls::client_context_options{}
+        .insecure_no_verify_peer()
+        .alpn({"http/1.1"})
+        .max_pending_write_bytes(4)},
+    [&](uvp::tls::handshake_result result) {
+      UVP_REQUIRE(result);
+      client_alpn = std::string(result.selected_alpn());
+      client_stream = std::move(result).stream();
+      client_done = true;
+    });
 
   UVP_REQUIRE(server_done);
   UVP_REQUIRE(client_done);
@@ -451,12 +455,14 @@ UVP_TEST_CASE("tls handshake cancel is no-op after success") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto server_context = uvp::tls::server_context{}
+  auto server_context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto server_context = uvp::tls::server_context{std::move(server_context_options)};
 
-  auto client_context = uvp::tls::client_context{}
+  auto client_context_options = uvp::tls::client_context_options{}
     .insecure_no_verify_peer();
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
   auto server_stream = uvp::io::byte_stream{};
   auto client_stream = uvp::io::byte_stream{};
@@ -506,11 +512,13 @@ UVP_TEST_CASE("tls client verifies peers by default") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto server_context = uvp::tls::server_context{}
+  auto server_context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto server_context = uvp::tls::server_context{std::move(server_context_options)};
 
-  auto client_context = uvp::tls::client_context{};
+  auto client_context_options = uvp::tls::client_context_options{};
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
   auto server_called = false;
   auto client_called = false;
@@ -539,13 +547,15 @@ UVP_TEST_CASE("tls client verifies configured ca and server name") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto server_context = uvp::tls::server_context{}
+  auto server_context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto server_context = uvp::tls::server_context{std::move(server_context_options)};
 
-  auto client_context = uvp::tls::client_context{}
+  auto client_context_options = uvp::tls::client_context_options{}
     .ca_file(cert_path.string())
     .server_name("localhost");
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
   auto server_stream = uvp::io::byte_stream{};
   auto client_stream = uvp::io::byte_stream{};
@@ -571,15 +581,17 @@ UVP_TEST_CASE("tls require_alpn fails when no protocol matches") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto server_context = uvp::tls::server_context{}
+  auto server_context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string())
     .alpn({"http/1.1"})
     .require_alpn();
+  auto server_context = uvp::tls::server_context{std::move(server_context_options)};
 
-  auto client_context = uvp::tls::client_context{}
+  auto client_context_options = uvp::tls::client_context_options{}
     .insecure_no_verify_peer()
     .alpn({"h2"});
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
   auto server_called = false;
   auto client_called = false;
@@ -608,14 +620,16 @@ UVP_TEST_CASE("tls stream pauses clear reads when upper read is stopped") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto server_context = uvp::tls::server_context{}
+  auto server_context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string())
     .alpn({"http/1.1"});
+  auto server_context = uvp::tls::server_context{std::move(server_context_options)};
 
-  auto client_context = uvp::tls::client_context{}
+  auto client_context_options = uvp::tls::client_context_options{}
     .insecure_no_verify_peer()
     .alpn({"http/1.1"});
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
   auto server_stream = uvp::io::byte_stream{};
   auto client_stream = uvp::io::byte_stream{};
@@ -669,12 +683,14 @@ UVP_TEST_CASE("tls stream treats close_notify as exactly-once eof") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto server_context = uvp::tls::server_context{}
+  auto server_context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto server_context = uvp::tls::server_context{std::move(server_context_options)};
 
-  auto client_context = uvp::tls::client_context{}
+  auto client_context_options = uvp::tls::client_context_options{}
     .insecure_no_verify_peer();
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
   auto server_stream = uvp::io::byte_stream{};
   auto client_stream = uvp::io::byte_stream{};
@@ -746,12 +762,14 @@ UVP_TEST_CASE("tls stream treats read-time close_notify as exactly-once eof") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto server_context = uvp::tls::server_context{}
+  auto server_context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto server_context = uvp::tls::server_context{std::move(server_context_options)};
 
-  auto client_context = uvp::tls::client_context{}
+  auto client_context_options = uvp::tls::client_context_options{}
     .insecure_no_verify_peer();
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
   auto server_stream = uvp::io::byte_stream{};
   auto client_stream = uvp::io::byte_stream{};
@@ -817,12 +835,14 @@ UVP_TEST_CASE("tls stream treats transport eof without close_notify as error onc
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto server_context = uvp::tls::server_context{}
+  auto server_context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto server_context = uvp::tls::server_context{std::move(server_context_options)};
 
-  auto client_context = uvp::tls::client_context{}
+  auto client_context_options = uvp::tls::client_context_options{}
     .insecure_no_verify_peer();
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
   auto server_stream = uvp::io::byte_stream{};
   auto client_stream = uvp::io::byte_stream{};
@@ -878,10 +898,11 @@ UVP_TEST_CASE("tls listener adapts generic stream listener") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto context = uvp::tls::server_context{}
+  auto context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string())
     .alpn({"http/1.1"});
+  auto context = uvp::tls::server_context{std::move(context_options)};
 
   auto tcp = uvp::io::tcp_listener{loop};
   tcp.bind("127.0.0.1", 0);
@@ -908,9 +929,10 @@ UVP_TEST_CASE("tls listener reports handshake timeout") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto context = uvp::tls::server_context{}
+  auto context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto context = uvp::tls::server_context{std::move(context_options)};
 
   auto tcp = uvp::io::tcp_listener{loop};
   tcp.bind("127.0.0.1", 0);
@@ -975,9 +997,10 @@ UVP_TEST_CASE("tls listener enforces pending handshake limit") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto context = uvp::tls::server_context{}
+  auto context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto context = uvp::tls::server_context{std::move(context_options)};
 
   auto tcp = uvp::io::tcp_listener{loop};
   tcp.bind("127.0.0.1", 0);
@@ -1057,9 +1080,10 @@ UVP_TEST_CASE("tls listener close cancels pending handshakes without accept call
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto context = uvp::tls::server_context{}
+  auto context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string());
+  auto context = uvp::tls::server_context{std::move(context_options)};
 
   auto tcp = uvp::io::tcp_listener{loop};
   tcp.bind("127.0.0.1", 0);
@@ -1138,10 +1162,11 @@ UVP_TEST_CASE("http server serves requests over tls listener composition") {
   const auto cert_path = write_test_file("uvpp-protocols-test-cert.pem", test_certificate);
   const auto key_path = write_test_file("uvpp-protocols-test-key.pem", test_private_key);
 
-  auto context = uvp::tls::server_context{}
+  auto context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string())
     .alpn({"http/1.1"});
+  auto context = uvp::tls::server_context{std::move(context_options)};
 
   auto tcp = uvp::io::tcp_listener{loop};
   tcp.bind("127.0.0.1", 0);
@@ -1185,9 +1210,10 @@ UVP_TEST_CASE("http server serves requests over tls listener composition") {
       UVP_REQUIRE(status);
 
       auto lower = uvp::io::byte_stream{std::make_unique<tcp_client_stream>(loop, client)};
-      auto client_context = uvp::tls::client_context{}
+      auto client_context_options = uvp::tls::client_context_options{}
         .insecure_no_verify_peer()
         .alpn({"http/1.1"});
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
 
       uvp::tls::connect(std::move(lower), client_context, [&](uvp::tls::handshake_result handshake) {
         UVP_REQUIRE(handshake);

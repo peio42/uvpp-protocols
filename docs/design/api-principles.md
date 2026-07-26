@@ -185,6 +185,26 @@ uvp::http::server srv(loop, options);
 Option defaults should be safe for small services. Expensive or memory-heavy
 features should be opt-in.
 
+When options configure a resource with ownership, callbacks, or native state,
+the resource is constructed explicitly from the options and is immutable
+afterwards. This keeps the fluent no-`.build()` convention while making the
+lifetime boundary visible in the type system:
+
+```cpp
+auto context = uvp::tls::server_context{
+  uvp::tls::server_context_options{}
+    .certificate_chain_file("server.crt")
+    .private_key_file("server.key")
+    .alpn({"h2", "http/1.1"})};
+```
+
+`*_options` types are independent value objects and may be copied, adjusted,
+and consumed to create separate resources. Final resource types may be copied
+only to share the same immutable resource; they must not expose the fluent
+configuration setters. Use this pattern for contexts, pools, and similar
+objects whose configuration must remain stable while asynchronous work uses
+them.
+
 Fluent setters should validate values that are immediately invalid, such as a
 zero header or body limit when the protocol cannot operate with one. Cross-field
 validation should happen when the options are consumed by a protocol owner:

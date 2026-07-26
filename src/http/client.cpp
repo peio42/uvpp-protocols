@@ -563,18 +563,17 @@ private:
 
   void start_tls(uvp::io::byte_stream lower) {
     try {
-      auto context = uvp::tls::client_context{}
+      auto context_options = uvp::tls::client_context_options{}
         .server_name(url_.hostname())
-        .alpn({"http/1.1"});
-      if (options_.tls_default_verify_paths) {
-        context.default_verify_paths();
-      }
+        .alpn({"http/1.1"})
+        .default_verify_paths(options_.tls_default_verify_paths);
       if (!options_.tls_ca_file.empty()) {
-        context.ca_file(options_.tls_ca_file);
+        context_options.ca_file(options_.tls_ca_file);
       }
       if (!options_.tls_ca_path.empty()) {
-        context.ca_path(options_.tls_ca_path);
+        context_options.ca_path(options_.tls_ca_path);
       }
+      auto context = uvp::tls::client_context{std::move(context_options)};
 
       start_phase_timeout(timeout_phase::tls_handshake, options_.tls_handshake_timeout);
       auto self = shared_from_this();
@@ -1261,18 +1260,17 @@ private:
 
   void start_tls(uvp::io::byte_stream lower) {
     try {
-      auto context = uvp::tls::client_context{}
+      auto context_options = uvp::tls::client_context_options{}
         .server_name(url_.hostname())
-        .alpn({"http/1.1"});
-      if (options_.tls_default_verify_paths) {
-        context.default_verify_paths();
-      }
+        .alpn({"http/1.1"})
+        .default_verify_paths(options_.tls_default_verify_paths);
       if (!options_.tls_ca_file.empty()) {
-        context.ca_file(options_.tls_ca_file);
+        context_options.ca_file(options_.tls_ca_file);
       }
       if (!options_.tls_ca_path.empty()) {
-        context.ca_path(options_.tls_ca_path);
+        context_options.ca_path(options_.tls_ca_path);
       }
+      auto context = uvp::tls::client_context{std::move(context_options)};
 
       start_phase_timeout(timeout_phase::tls_handshake, options_.tls_handshake_timeout);
       auto self = shared_from_this();

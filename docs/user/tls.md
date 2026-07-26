@@ -21,18 +21,17 @@ Include the TLS module with:
 Servers need a certificate chain and private key:
 
 ```cpp
-auto context = uvp::tls::server_context{}
-  .certificate_chain_file("server.crt")
-  .private_key_file("server.key")
-  .alpn({"http/1.1"});
+auto context = uvp::tls::server_context{
+  uvp::tls::server_context_options{}
+    .certificate_chain_file("server.crt")
+    .private_key_file("server.key")
+    .alpn({"http/1.1"})
+    .require_alpn()};
 ```
 
-Use `require_alpn()` when a connection must negotiate one of the configured
-protocols:
-
-```cpp
-context.require_alpn();
-```
+Use `require_alpn()` in the options when a connection must negotiate one of
+the configured protocols. Contexts are immutable once constructed and can be
+copied cheaply to share the same TLS configuration.
 
 Without `require_alpn()`, a handshake can complete with no selected ALPN.
 
@@ -86,10 +85,11 @@ uvp::tls::accept(
 Clients use `connect()`:
 
 ```cpp
-auto client_context = uvp::tls::client_context{}
-  .server_name("api.example.com")
-  .default_verify_paths()
-  .alpn({"http/1.1"});
+auto client_context = uvp::tls::client_context{
+  uvp::tls::client_context_options{}
+    .server_name("api.example.com")
+    .default_verify_paths()
+    .alpn({"http/1.1"})};
 
 uvp::tls::connect(
   std::move(lower),
@@ -113,9 +113,10 @@ Client contexts verify peers by default. Configure trust with system defaults
 or explicit CA locations:
 
 ```cpp
-auto client_context = uvp::tls::client_context{}
-  .server_name("localhost")
-  .ca_file("server-ca.pem");
+auto client_context = uvp::tls::client_context{
+  uvp::tls::client_context_options{}
+    .server_name("localhost")
+    .ca_file("server-ca.pem")};
 ```
 
 `server_name(...)` enables SNI and hostname verification. Use
@@ -125,8 +126,9 @@ For local tests or intentionally insecure development connections, verification
 can be disabled explicitly:
 
 ```cpp
-auto client_context = uvp::tls::client_context{}
-  .insecure_no_verify_peer();
+auto client_context = uvp::tls::client_context{
+  uvp::tls::client_context_options{}
+    .insecure_no_verify_peer()};
 ```
 
 The method name is deliberately noisy. Do not use it for production
@@ -137,15 +139,16 @@ connections.
 TLS has bounded cleartext buffering on both sides of the adapter:
 
 ```cpp
-auto server_context = uvp::tls::server_context{}
-  .certificate_chain_file("server.crt")
-  .private_key_file("server.key")
-  .max_pending_write_bytes(1024 * 1024)
-  .max_pending_read_bytes(1024 * 1024);
+auto server_context = uvp::tls::server_context{
+  uvp::tls::server_context_options{}
+    .certificate_chain_file("server.crt")
+    .private_key_file("server.key")
+    .max_pending_write_bytes(1024 * 1024)
+    .max_pending_read_bytes(1024 * 1024)};
 ```
 
-The same limits are available on `client_context`. Exceeding them reports TLS
-errors instead of growing memory without bound.
+The same limits are available through `client_context_options`. Exceeding them
+reports TLS errors instead of growing memory without bound.
 
 ## Close And EOF
 

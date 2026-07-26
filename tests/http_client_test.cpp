@@ -364,10 +364,11 @@ UVP_TEST_CASE("http client performs an https get request") {
   const auto cert_path = write_test_file("https-client-cert.pem", test_certificate);
   const auto key_path = write_test_file("https-client-key.pem", test_private_key);
 
-  auto context = uvp::tls::server_context{}
+  auto context_options = uvp::tls::server_context_options{}
     .certificate_chain_file(cert_path.string())
     .private_key_file(key_path.string())
     .alpn({"http/1.1"});
+  auto context = uvp::tls::server_context{std::move(context_options)};
 
   auto tcp = uvp::io::tcp_listener{loop};
   tcp.bind("127.0.0.1", 0);
