@@ -5,13 +5,13 @@ function(uvpp_protocols_require_uvpp)
     return()
   endif()
 
-  find_package(uvpp CONFIG QUIET)
+  find_package(uvpp 2.5.2 CONFIG QUIET)
   if(TARGET uvpp::uvpp)
     return()
   endif()
 
   if(NOT UVPP_PROTOCOLS_FETCH_UVPP)
-    message(FATAL_ERROR "uvpp::uvpp was not found. Enable UVPP_PROTOCOLS_FETCH_UVPP or install uvpp.")
+    message(FATAL_ERROR "uvpp::uvpp >= 2.5.2 was not found. Enable UVPP_PROTOCOLS_FETCH_UVPP or install uvpp.")
   endif()
 
   if(NOT UVPP_PROTOCOLS_UPDATE_FETCHED_UVPP)
@@ -21,7 +21,7 @@ function(uvpp_protocols_require_uvpp)
   FetchContent_Declare(
     uvpp
     GIT_REPOSITORY https://github.com/peio42/uvpp.git
-    GIT_TAG v2.5.1)
+    GIT_TAG v2.5.2)
 
   FetchContent_GetProperties(uvpp)
   if(NOT uvpp_POPULATED)

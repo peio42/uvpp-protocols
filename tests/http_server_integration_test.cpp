@@ -529,6 +529,23 @@ UVP_TEST_CASE("http server serves static index files and head metadata") {
   UVP_CHECK(head_received.find("<h1>Home</h1>") == std::string::npos);
 }
 
+UVP_TEST_CASE("http server reports an unavailable static root asynchronously") {
+  temporary_directory parent;
+  const auto missing_root = parent.path() / "missing";
+
+  auto received = perform_http_request(
+    [&](uvp::http::server& server) {
+      server.get("/assets/*path", uvp::http::static_files(missing_root));
+    },
+    "GET /assets/app.js HTTP/1.1\r\n"
+    "Host: example.test\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    "\r\n\r\nInternal Server Error\n");
+
+  UVP_CHECK(received.find("HTTP/1.1 500 Internal Server Error\r\n") != std::string::npos);
+}
+
 UVP_TEST_CASE("http server rejects unsafe static paths") {
   temporary_directory root;
   write_file(root.path() / "public.txt", "public\n");

@@ -2,6 +2,7 @@
 
 #include "detail/url_encoding.hpp"
 
+#include <cassert>
 #include <utility>
 
 namespace uvp::http {
@@ -232,7 +233,8 @@ request::request(
   std::vector<std::byte> body,
   route_params params,
   http::connection_info connection,
-  std::vector<std::string> decoded_path_segments)
+  std::vector<std::string> decoded_path_segments,
+  uv::loop* loop)
     : method_(method),
       target_(std::move(target)),
       path_(std::move(path)),
@@ -242,7 +244,13 @@ request::request(
       body_(std::move(body)),
       params_(std::move(params)),
       decoded_path_segments_(std::move(decoded_path_segments)),
-      connection_(std::move(connection)) {}
+      connection_(std::move(connection)),
+      loop_(loop) {}
+
+uv::loop& request::loop() const {
+  assert(loop_ != nullptr);
+  return *loop_;
+}
 
 std::string_view request::header(std::string_view name) const noexcept {
   return headers_.get(name);

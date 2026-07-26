@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
-#include <fstream>
+#include <fcntl.h>
 #include <iomanip>
 #include <limits>
 #include <memory>
@@ -22,6 +22,7 @@
 #include <utility>
 #include <vector>
 
+#include <uvpp/uv.hpp>
 #include <uvpp/protocols/http/status.hpp>
 #include <uvpp/protocols/http/headers.hpp>
 
@@ -190,40 +191,6 @@ std::optional<std::vector<std::string>> request_tail_components(
   return components;
 }
 
-std::optional<std::filesystem::path> resolve_existing_target(
-  const std::filesystem::path& root,
-  std::span<const std::string> components,
-  symlink_policy symlinks,
-  std::error_code& ec) {
-  const auto canonical_root = std::filesystem::canonical(root, ec);
-  if (ec) {
-    return std::nullopt;
-  }
-
-  auto candidate = canonical_root;
-  for (const auto& component : components) {
-    candidate /= component;
-    if (symlinks == symlink_policy::reject) {
-      const auto link_status = std::filesystem::symlink_status(candidate, ec);
-      if (ec) {
-        return std::nullopt;
-      }
-      if (std::filesystem::is_symlink(link_status)) {
-        return std::nullopt;
-      }
-    }
-  }
-
-  const auto canonical_candidate = std::filesystem::canonical(candidate, ec);
-  if (ec) {
-    return std::nullopt;
-  }
-  if (!is_relative_to(canonical_candidate, canonical_root)) {
-    return std::nullopt;
-  }
-  return canonical_candidate;
-}
-
 std::string format_http_date(std::time_t value) {
   std::tm tm{};
 #ifdef _WIN32
@@ -238,9 +205,8 @@ std::string format_http_date(std::time_t value) {
   return out.str();
 }
 
-std::time_t file_time_to_time_t(std::filesystem::file_time_type value) {
-  const auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-    value - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+std::time_t file_time_to_time_t(uv::fs::file_time value) {
+  const auto system_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(value);
   return std::chrono::system_clock::to_time_t(system_time);
 }
 
@@ -369,8 +335,11 @@ std::optional<std::time_t> parse_http_date(std::string_view value) {
 #endif
 }
 
-bool is_not_modified(const request& req, std::string_view etag, std::optional<std::time_t> modified) {
-  const auto if_none_match = req.header("if-none-match");
+bool is_not_modified(
+  std::string_view if_none_match,
+  std::string_view if_modified_since,
+  std::string_view etag,
+  std::optional<std::time_t> modified) {
   if (!if_none_match.empty() && !etag.empty()) {
     return if_none_match_matches(if_none_match, etag);
   }
@@ -379,7 +348,6 @@ bool is_not_modified(const request& req, std::string_view etag, std::optional<st
     return false;
   }
 
-  const auto if_modified_since = req.header("if-modified-since");
   if (if_modified_since.empty()) {
     return false;
   }
@@ -388,90 +356,401 @@ bool is_not_modified(const request& req, std::string_view etag, std::optional<st
   return since && *since >= *modified;
 }
 
-void not_found(response& res) {
-  res.status(status::not_found).type("text/plain; charset=utf-8").text(not_found_body);
+bool permission_denied(std::error_code error) noexcept {
+  return error == std::errc::permission_denied || error == std::errc::operation_not_permitted ||
+    error == uv::make_error_code(UV_EACCES) || error == uv::make_error_code(UV_EPERM);
 }
 
-void internal_error(response& res) {
-  res.status(status::internal_server_error).type("text/plain; charset=utf-8").text(internal_error_body);
-}
-
-void set_header_unless_present(response& res, std::string_view name, std::string_view value) {
-  if (!res.headers().contains(name)) {
-    res.header(name, value);
+std::filesystem::path path_from_argument(std::string_view value) {
+  std::u8string utf8;
+  utf8.reserve(value.size());
+  for (const auto byte : value) {
+    utf8.push_back(static_cast<char8_t>(byte));
   }
+  return std::filesystem::path{utf8};
 }
 
-class file_sender : public std::enable_shared_from_this<file_sender> {
+class static_file_operation : public std::enable_shared_from_this<static_file_operation> {
 public:
-  file_sender(std::ifstream file, streaming_response stream, std::size_t chunk_size)
-      : file_(std::move(file)),
+  static_file_operation(
+    uv::loop& loop,
+    std::string root_argument,
+    static_file_options options,
+    std::vector<std::string> components,
+    std::string if_none_match,
+    std::string if_modified_since,
+    streaming_response stream,
+    bool content_type_set,
+    bool cache_control_set,
+    bool nosniff_set,
+    bool suppress_body)
+      : loop_(loop),
+        root_argument_(std::move(root_argument)),
+        options_(std::move(options)),
+        components_(std::move(components)),
+        if_none_match_(std::move(if_none_match)),
+        if_modified_since_(std::move(if_modified_since)),
         stream_(std::move(stream)),
-        buffer_(chunk_size) {}
+        content_type_set_(content_type_set),
+        cache_control_set_(cache_control_set),
+        nosniff_set_(nosniff_set),
+        suppress_body_(suppress_body) {}
 
   void start() {
     auto self = shared_from_this();
     stream_
       .on_drain([self] {
-        self->send_more();
+        self->read_next();
       })
       .on_cancel([self] {
-        self->close();
+        self->cancel();
       })
       .on_error([self](std::error_code) {
-        self->close();
+        self->cancel();
       });
 
-    send_more();
+    resolve_root();
   }
 
 private:
-  void send_more() {
-    if (!file_.is_open() || !stream_.active()) {
-      close();
+  void resolve_root() {
+    auto self = shared_from_this();
+    uv::fs::realpath(loop_, root_argument_, [self](uv::fs::path_result result) {
+      if (self->cancelled_ || self->completed_) {
+        return;
+      }
+      if (!result) {
+        self->respond_internal_error();
+        return;
+      }
+      self->canonical_root_ = path_from_argument(result.path());
+      self->stat_root();
+    });
+  }
+
+  void stat_root() {
+    auto self = shared_from_this();
+    uv::fs::stat(loop_, uv::fs::path_argument(canonical_root_), [self](uv::fs::stat_result result) {
+      if (self->cancelled_ || self->completed_) {
+        return;
+      }
+      if (!result || !result.file_status().is_directory()) {
+        self->respond_internal_error();
+        return;
+      }
+      self->resolve_components();
+    });
+  }
+
+  void resolve_components() {
+    if (cancelled_ || completed_) {
       return;
     }
 
-    while (file_) {
-      file_.read(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
-      const auto count = file_.gcount();
-      if (count < 0) {
-        close();
+    candidate_ = canonical_root_;
+    for (const auto& component : components_) {
+      candidate_ /= component;
+    }
+    checked_component_count_ = 0;
+    if (options_.symlinks() == symlink_policy::reject) {
+      reject_symlinks();
+    } else {
+      resolve_candidate();
+    }
+  }
+
+  void reject_symlinks() {
+    if (cancelled_ || completed_) {
+      return;
+    }
+    if (checked_component_count_ == components_.size()) {
+      resolve_candidate();
+      return;
+    }
+
+    auto component = canonical_root_;
+    for (std::size_t index = 0; index <= checked_component_count_; ++index) {
+      component /= components_[index];
+    }
+    auto self = shared_from_this();
+    uv::fs::lstat(loop_, uv::fs::path_argument(component), [self](uv::fs::stat_result result) {
+      if (self->cancelled_ || self->completed_) {
         return;
       }
-      if (count == 0) {
-        if (file_.eof()) {
-          close();
-          stream_.end();
+      if (!result) {
+        self->resolve_failure(result.error_code());
+        return;
+      }
+      if (result.file_status().is_symlink()) {
+        self->respond_not_found();
+        return;
+      }
+      ++self->checked_component_count_;
+      self->reject_symlinks();
+    });
+  }
+
+  void resolve_candidate() {
+    auto self = shared_from_this();
+    uv::fs::realpath(loop_, uv::fs::path_argument(candidate_), [self](uv::fs::path_result result) {
+      if (self->cancelled_ || self->completed_) {
+        return;
+      }
+      if (!result) {
+        self->resolve_failure(result.error_code());
+        return;
+      }
+      self->target_ = path_from_argument(result.path());
+      if (!is_relative_to(self->target_, self->canonical_root_)) {
+        self->respond_not_found();
+        return;
+      }
+      self->stat_target();
+    });
+  }
+
+  void stat_target() {
+    auto self = shared_from_this();
+    uv::fs::stat(loop_, uv::fs::path_argument(target_), [self](uv::fs::stat_result result) {
+      if (self->cancelled_ || self->completed_) {
+        return;
+      }
+      if (!result) {
+        self->resolve_failure(result.error_code());
+        return;
+      }
+      if (result.file_status().is_directory()) {
+        self->resolve_index();
+        return;
+      }
+      if (!result.file_status().is_regular()) {
+        self->respond_not_found();
+        return;
+      }
+      self->open_file();
+    });
+  }
+
+  void resolve_index() {
+    const auto index = options_.index_file();
+    if (!index) {
+      respond_not_found();
+      return;
+    }
+
+    auto indexed_components = components_;
+    indexed_components.emplace_back(*index);
+    if (!hidden_allowed(indexed_components, options_.hidden_files())) {
+      respond_not_found();
+      return;
+    }
+    components_ = std::move(indexed_components);
+    resolve_components();
+  }
+
+  void open_file() {
+    auto self = shared_from_this();
+    uv::fs::open(loop_, uv::fs::path_argument(target_), O_RDONLY, 0, [self](uv::fs::open_result result) {
+      if (!result) {
+        if (!self->cancelled_ && !self->completed_) {
+          self->resolve_failure(result.error_code());
         }
         return;
       }
-
-      auto result = stream_.write(std::string_view{buffer_.data(), static_cast<std::size_t>(count)});
-      if (!result.accepted()) {
-        close();
+      self->file_ = result.file();
+      if (self->cancelled_ || self->completed_) {
+        self->close_file();
         return;
       }
-      if (!result.should_continue()) {
+      self->stat_open_file();
+    });
+  }
+
+  void stat_open_file() {
+    file_operation_in_flight_ = true;
+    auto self = shared_from_this();
+    uv::fs::fstat(loop_, file_, [self](uv::fs::stat_result result) {
+      self->file_operation_in_flight_ = false;
+      if (self->cancelled_ || self->completed_) {
+        self->close_file();
         return;
       }
-    }
+      if (!result) {
+        self->respond_internal_error();
+        self->close_file();
+        return;
+      }
+      if (!result.file_status().is_regular()) {
+        self->respond_not_found();
+        self->close_file();
+        return;
+      }
+      self->prepare_response(result.file_status());
+    });
+  }
 
-    if (file_.eof()) {
-      close();
+  void prepare_response(const uv::fs::file_status& metadata) {
+    const auto modified = file_time_to_time_t(metadata.modification_time());
+    const auto size = metadata.size();
+    const auto etag = options_.etag() ? make_etag(size, modified) : std::string{};
+
+    if ((!etag.empty() || options_.last_modified()) &&
+        is_not_modified(if_none_match_, if_modified_since_, etag, modified)) {
+      stream_.status(status::not_modified);
+      set_cache_headers(etag, modified);
+      completed_ = true;
       stream_.end();
+      close_file();
+      return;
+    }
+
+    const auto extension = to_lower(target_.extension().string());
+    if (!content_type_set_) {
+      stream_.type(content_type_for_extension(extension));
+    }
+    stream_.header("content-length", std::to_string(size));
+    set_cache_headers(etag, modified);
+    if (suppress_body_) {
+      completed_ = true;
+      stream_.end();
+      close_file();
+      return;
+    }
+    read_next();
+  }
+
+  void set_cache_headers(std::string_view etag, std::time_t modified) {
+    if (options_.cache_control() && !cache_control_set_) {
+      stream_.header("cache-control", *options_.cache_control());
+    }
+    if (!etag.empty()) {
+      stream_.header("etag", etag);
+    }
+    if (options_.last_modified()) {
+      stream_.header("last-modified", format_http_date(modified));
+    }
+    if (options_.nosniff() && !nosniff_set_) {
+      stream_.header("x-content-type-options", "nosniff");
     }
   }
 
-  void close() {
-    if (file_.is_open()) {
-      file_.close();
+  void read_next() {
+    if (cancelled_ || completed_ || file_operation_in_flight_) {
+      return;
+    }
+    if (!stream_.active()) {
+      cancel();
+      return;
+    }
+
+    file_operation_in_flight_ = true;
+    auto self = shared_from_this();
+    uv::fs::read(loop_, file_, options_.chunk_size(), offset_, [self](uv::fs::read_result result) {
+      self->file_operation_in_flight_ = false;
+      if (self->cancelled_ || self->completed_) {
+        self->close_file();
+        return;
+      }
+      if (!result) {
+        self->finish_stream_after_error();
+        return;
+      }
+      if (result.count() == 0) {
+        self->completed_ = true;
+        self->stream_.end();
+        self->close_file();
+        return;
+      }
+
+      self->offset_ += static_cast<std::int64_t>(result.count());
+      const auto write_result = self->stream_.write(result.bytes());
+      if (!write_result.accepted()) {
+        self->cancel();
+        return;
+      }
+      if (write_result.should_continue()) {
+        self->read_next();
+      }
+    });
+  }
+
+  void resolve_failure(std::error_code error) {
+    if (permission_denied(error)) {
+      respond_internal_error();
+    } else {
+      respond_not_found();
     }
   }
 
-  std::ifstream file_;
+  void respond_not_found() {
+    respond_with_text(status::not_found, not_found_body);
+  }
+
+  void respond_internal_error() {
+    respond_with_text(status::internal_server_error, internal_error_body);
+  }
+
+  void respond_with_text(status code, std::string_view body) {
+    if (cancelled_ || completed_) {
+      return;
+    }
+    completed_ = true;
+    stream_.status(code)
+      .type("text/plain; charset=utf-8")
+      .header("content-length", std::to_string(body.size()));
+    (void)stream_.write(body);
+    stream_.end();
+    close_file();
+  }
+
+  void finish_stream_after_error() {
+    if (cancelled_ || completed_) {
+      return;
+    }
+    completed_ = true;
+    stream_.end();
+    close_file();
+  }
+
+  void cancel() {
+    cancelled_ = true;
+    close_file();
+  }
+
+  void close_file() {
+    if (!file_ || file_operation_in_flight_ || close_in_flight_) {
+      return;
+    }
+    close_in_flight_ = true;
+    const auto file = file_;
+    file_ = {};
+    auto self = shared_from_this();
+    uv::fs::close(loop_, file, [self](uv::fs::status_result) {
+      self->close_in_flight_ = false;
+    });
+  }
+
+  uv::loop& loop_;
+  std::string root_argument_;
+  static_file_options options_;
+  std::vector<std::string> components_;
+  std::string if_none_match_;
+  std::string if_modified_since_;
   streaming_response stream_;
-  std::vector<char> buffer_;
+  std::filesystem::path canonical_root_;
+  std::filesystem::path candidate_;
+  std::filesystem::path target_;
+  uv::file_descriptor file_;
+  std::size_t checked_component_count_ = 0;
+  std::int64_t offset_ = 0;
+  bool content_type_set_ = false;
+  bool cache_control_set_ = false;
+  bool nosniff_set_ = false;
+  bool suppress_body_ = false;
+  bool file_operation_in_flight_ = false;
+  bool close_in_flight_ = false;
+  bool cancelled_ = false;
+  bool completed_ = false;
 };
 
 } // namespace
@@ -599,7 +878,7 @@ static_file_options&& static_file_options::nosniff(bool value) && noexcept {
 }
 
 static_file_options& static_file_options::chunk_size(std::size_t value) & {
-  if (value == 0 || value > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max())) {
+  if (value == 0 || value > static_cast<std::size_t>(std::numeric_limits<std::int64_t>::max())) {
     throw std::invalid_argument("static file chunk_size must be greater than zero");
   }
   chunk_size_ = value;
@@ -618,10 +897,7 @@ static_file_handler::static_file_handler(std::filesystem::path root, static_file
     throw std::invalid_argument("static file root must not be empty");
   }
 
-  std::error_code ec;
-  if (!std::filesystem::is_directory(root_, ec) || ec) {
-    throw std::invalid_argument("static file root must be an existing directory");
-  }
+  root_argument_ = uv::fs::path_argument(root_);
 }
 
 static_file_handler& static_file_handler::options(static_file_options value) & {
@@ -746,123 +1022,29 @@ static_file_handler&& static_file_handler::chunk_size(std::size_t value) && {
 
 void static_file_handler::operator()(request& req, response& res) const {
   const auto components = request_tail_components(req, options_);
-  if (!components) {
-    not_found(res);
-    return;
-  }
-
-  std::error_code ec;
-  auto target = resolve_existing_target(root_, *components, options_.symlinks(), ec);
-  if (!target) {
-    if (ec == std::errc::permission_denied) {
-      internal_error(res);
-    } else {
-      not_found(res);
-    }
-    return;
-  }
-
-  auto status_value = std::filesystem::status(*target, ec);
-  if (ec) {
-    internal_error(res);
-    return;
-  }
-
-  if (std::filesystem::is_directory(status_value)) {
-    const auto index = options_.index_file();
-    if (!index) {
-      not_found(res);
-      return;
-    }
-
-    std::vector<std::string> indexed_components = *components;
-    indexed_components.emplace_back(*index);
-    if (!hidden_allowed(indexed_components, options_.hidden_files())) {
-      not_found(res);
-      return;
-    }
-
-    target = resolve_existing_target(root_, indexed_components, options_.symlinks(), ec);
-    if (!target) {
-      if (ec == std::errc::permission_denied) {
-        internal_error(res);
-      } else {
-        not_found(res);
-      }
-      return;
-    }
-    status_value = std::filesystem::status(*target, ec);
-    if (ec) {
-      internal_error(res);
-      return;
-    }
-  }
-
-  if (!std::filesystem::is_regular_file(status_value)) {
-    not_found(res);
-    return;
-  }
-
-  const auto size = std::filesystem::file_size(*target, ec);
-  if (ec) {
-    internal_error(res);
-    return;
-  }
-
-  const auto modified_time = std::filesystem::last_write_time(*target, ec);
-  std::optional<std::time_t> modified;
-  if (!ec) {
-    modified = file_time_to_time_t(modified_time);
-  }
-
-  std::string etag;
-  if (options_.etag() && modified) {
-    etag = make_etag(size, *modified);
-  }
-
-  if ((!etag.empty() || modified) && is_not_modified(req, etag, modified)) {
-    res.status(status::not_modified);
-    if (options_.cache_control()) {
-      set_header_unless_present(res, "cache-control", *options_.cache_control());
-    }
-    if (!etag.empty()) {
-      res.header("etag", etag);
-    }
-    if (options_.last_modified() && modified) {
-      res.header("last-modified", format_http_date(*modified));
-    }
-    if (options_.nosniff()) {
-      set_header_unless_present(res, "x-content-type-options", "nosniff");
-    }
-    res.end();
-    return;
-  }
-
-  std::ifstream file(*target, std::ios::binary);
-  if (!file) {
-    internal_error(res);
-    return;
-  }
-
-  const auto extension = to_lower(target->extension().string());
-  set_header_unless_present(res, "content-type", content_type_for_extension(extension));
-  res.header("content-length", std::to_string(size));
-  if (options_.cache_control()) {
-    set_header_unless_present(res, "cache-control", *options_.cache_control());
-  }
-  if (!etag.empty()) {
-    res.header("etag", etag);
-  }
-  if (options_.last_modified() && modified) {
-    res.header("last-modified", format_http_date(*modified));
-  }
-  if (options_.nosniff()) {
-    set_header_unless_present(res, "x-content-type-options", "nosniff");
-  }
-
   auto stream = res.stream();
-  auto sender = std::make_shared<file_sender>(std::move(file), std::move(stream), options_.chunk_size());
-  sender->start();
+  if (!components) {
+    stream.status(status::not_found)
+      .type("text/plain; charset=utf-8")
+      .header("content-length", std::to_string(std::string_view{not_found_body}.size()));
+    (void)stream.write(std::string_view{not_found_body});
+    stream.end();
+    return;
+  }
+
+  auto operation = std::make_shared<static_file_operation>(
+    req.loop(),
+    root_argument_,
+    options_,
+    *components,
+    std::string(req.header("if-none-match")),
+    std::string(req.header("if-modified-since")),
+    std::move(stream),
+    res.headers().contains("content-type"),
+    res.headers().contains("cache-control"),
+    res.headers().contains("x-content-type-options"),
+    req.method() == method::head);
+  operation->start();
 }
 
 static_file_handler static_files(std::filesystem::path root, static_file_options options) {

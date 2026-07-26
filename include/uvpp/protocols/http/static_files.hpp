@@ -113,6 +113,7 @@ public:
 
 private:
   std::filesystem::path root_;
+  std::string root_argument_;
   static_file_options options_;
 };
 

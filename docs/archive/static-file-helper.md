@@ -20,9 +20,12 @@ existing router, hooks, response ownership model, and HEAD fallback behavior.
   buffered responses, streaming responses, HEAD requests falling back to GET
   routes, route hooks, response hooks, `static_files()`, filesystem path
   confinement, extension content-type mapping, cache validators, and
-  static-file integration tests.
+  static-file integration tests. The filesystem backend uses `uv::fs` for
+  asynchronous resolution, metadata, open, read, and close operations; it
+  reads one bounded chunk at a time and only submits another read when the
+  HTTP stream accepts it.
 - Deferred: range requests, precompressed variants, a public MIME registry,
-  a public virtual filesystem interface, and a non-blocking filesystem backend.
+  and a public virtual filesystem interface.
 
 ## Scope
 
@@ -43,9 +46,9 @@ The first implementation should cover:
 - integration tests for success, rejection, headers, and route interaction.
 
 The helper should not add a new public filesystem abstraction in this milestone.
-Any file reader used by the implementation should remain private so it can move
-from standard-library or libuv-backed reads to a richer uvpp filesystem wrapper
-without changing the HTTP API.
+The filesystem reader remains private. `std::filesystem::path` stays in the
+route helper API as the normal C++ path value type; conversion to the libuv path
+argument is handled by `uv::fs::path_argument()` internally.
 
 ## Public API Shape
 
@@ -199,10 +202,12 @@ srv.get(
     .no_index_file());
 ```
 
-Construction should reject an empty root path and invalid option values such as
-an empty `path_param`, an `index_file` containing a path separator, or a
-`chunk_size` of zero. A missing or non-directory root is a setup failure and may
-throw `std::filesystem_error` or `std::invalid_argument`.
+Construction rejects an empty root path and invalid option values such as an
+empty `path_param`, an `index_file` containing a path separator, or a
+`chunk_size` of zero. It validates the root path representation but does not
+probe the filesystem synchronously. A missing, non-directory, or inaccessible
+root is reported as a `500 Internal Server Error` for the request that reaches
+the helper.
 
 ## Route Integration
 
@@ -397,11 +402,11 @@ backpressure. On backpressure, it waits for `on_drain()` before reading and
 writing the next chunk. On normal EOF, it ends the stream. On cancellation, it
 closes the file and drops pending work.
 
-If the implementation initially uses blocking file reads, those reads must be
-bounded to one chunk at a time and the documentation should say that this helper
-is suitable for application assets, not high-throughput file distribution. If a
-private libuv-backed file reader is available, prefer it. In either case, the
-public API should not expose the backend choice.
+The implementation uses `uv::fs::realpath`, `lstat`, `stat`, `open`, `fstat`,
+`read`, and `close`. A response owns the asynchronous operation state and
+submits one file read at a time. It submits the next read only after the current
+HTTP write is accepted, or after `on_drain` following backpressure. The public
+API does not expose this backend choice.
 
 ## Error And Exception Model
 

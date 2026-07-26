@@ -850,6 +850,20 @@ path components, rejects traversal attempts and encoded path separators, rejects
 hidden files by default, and serves `index.html` for directory requests by
 default. Rejected paths return `404 Not Found`.
 
+All filesystem work — canonical resolution, metadata lookup, open, read, and
+close — is submitted through `uv::fs` on the request's event loop. It therefore
+does not block that loop on disk I/O. Each response keeps at most one file-read
+chunk in flight and starts the next read only after the previous HTTP write is
+accepted; when that write reports backpressure, it waits for `on_drain` before
+submitting another read. The operations use libuv's shared filesystem thread
+pool, so applications should still choose a bounded `chunk_size` appropriate to
+their expected concurrency.
+
+Construction validates the root path's syntax but does not synchronously probe
+the filesystem. A missing or inaccessible configured root is reported as
+`500 Internal Server Error` when it is first requested, rather than blocking
+route registration.
+
 Symlinks are followed only when their canonical target remains under the static
 root, and `.symlinks(uvp::http::symlink_policy::reject)` rejects symlinks in
 the selected path. This is path confinement for ordinary application-owned

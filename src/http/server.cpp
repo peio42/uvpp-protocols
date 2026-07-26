@@ -415,6 +415,7 @@ struct server::impl {
         route_params{},
         connection(),
         parsed_path.decoded_segments,
+        &owner_.owner.loop(),
       };
       auto route_match = match_request_route(req.method(), parsed_path);
       if (route_match) {
@@ -591,6 +592,7 @@ struct server::impl {
         route_params{},
         connection(),
         parsed_path.decoded_segments,
+        &owner_.owner.loop(),
       };
 
       response& res = slot->res;

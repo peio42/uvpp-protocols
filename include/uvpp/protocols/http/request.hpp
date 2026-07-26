@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <uvpp/core/loop.hpp>
 #include <uvpp/protocols/http/connection.hpp>
 #include <uvpp/protocols/http/headers.hpp>
 #include <uvpp/protocols/http/method.hpp>
@@ -224,7 +225,8 @@ public:
     std::vector<std::byte> body,
     route_params params,
     http::connection_info connection,
-    std::vector<std::string> decoded_path_segments = {});
+    std::vector<std::string> decoded_path_segments = {},
+    uv::loop* loop = nullptr);
 
   [[nodiscard]] http::method method() const noexcept { return method_; }
   // Returned views borrow storage owned by this request object.
@@ -253,6 +255,8 @@ public:
   [[nodiscard]] const route_params& params() const noexcept { return params_; }
   [[nodiscard]] std::span<const std::string> decoded_path_segments() const noexcept { return decoded_path_segments_; }
   [[nodiscard]] const http::connection_info& connection() const noexcept { return connection_; }
+  // The request and all route callbacks are affine to this event loop.
+  [[nodiscard]] uv::loop& loop() const;
 
 private:
   friend class router;
@@ -269,6 +273,7 @@ private:
   route_params params_;
   std::vector<std::string> decoded_path_segments_;
   http::connection_info connection_;
+  uv::loop* loop_ = nullptr;
 };
 
 } // namespace uvp::http

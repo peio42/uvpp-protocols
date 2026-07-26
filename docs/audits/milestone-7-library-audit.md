@@ -275,6 +275,12 @@ dans la documentation utilisateur tant qu'elle existe.
 Recommandation : utiliser le filesystem asynchrone de uvpp/libuv ou déléguer les
 lectures à un backend injectable privé, sans changer l'API publique du handler.
 
+Mise à jour : corrigé. Le helper conserve son API publique basée sur
+`std::filesystem::path`, convertie avec `uv::fs::path_argument()`, et utilise
+`uv::fs` pour la résolution, les métadonnées, l'ouverture, les lectures et la
+fermeture. Une seule lecture de taille `chunk_size` est soumise à la fois ; la
+lecture suivante attend l'acceptation de l'écriture HTTP ou le signal de drain.
+
 ### 4.7 Élevé — Conformité WebSocket encore incomplète
 
 [`src/websocket/session.cpp`](../../src/websocket/session.cpp) vérifie bien le
