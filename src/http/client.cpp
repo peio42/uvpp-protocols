@@ -1,5 +1,6 @@
 #include <uvpp/protocols/http/client.hpp>
 
+#include <uvpp/protocols/detail/operation_lifetime.hpp>
 #include <uvpp/protocols/dns.hpp>
 #include <uvpp/protocols/http/error.hpp>
 #include <uvpp/protocols/http/headers.hpp>
@@ -315,9 +316,19 @@ public:
         pool_(std::move(pool)),
         method_(method),
         url_input_(url),
-        callback_(std::move(callback)),
+        lifetime_(std::move(callback)),
         resolver_(loop),
-        connector_(loop) {}
+        connector_(loop) {
+    lifetime_.set_finish_action([this]() noexcept {
+      stop_phase_timeout();
+    });
+    lifetime_.set_abort_action([this]() noexcept {
+      dns_operation_.cancel();
+      connect_operation_.cancel();
+      tls_operation_.cancel();
+      close_stream();
+    });
+  }
 
   request_operation start() {
     auto parsed = uvp::parse_url(url_input_);
@@ -371,16 +382,7 @@ public:
   }
 
   void cancel() noexcept override {
-    if (completed_) {
-      return;
-    }
-
-    cancelled_ = true;
-    dns_operation_.cancel();
-    connect_operation_.cancel();
-    tls_operation_.cancel();
-    close_stream();
-    complete(make_client_error(errc::client_cancelled));
+    (void)lifetime_.cancel(make_client_error(errc::client_cancelled));
   }
 
 private:
@@ -395,6 +397,7 @@ private:
 
   void start_phase_timeout(timeout_phase phase, std::chrono::milliseconds duration) {
     stop_phase_timeout();
+    lifetime_.enter_phase(timeout_phase_label(phase));
     if (duration <= std::chrono::milliseconds{0}) {
       return;
     }
@@ -426,17 +429,29 @@ private:
   }
 
   void on_timeout(timeout_phase phase) {
-    if (completed_ || phase != timeout_phase_) {
+    if (!lifetime_.active() || phase != timeout_phase_) {
       return;
     }
 
-    cancelled_ = true;
-    timed_out_ = true;
-    dns_operation_.cancel();
-    connect_operation_.cancel();
-    tls_operation_.cancel();
-    close_stream();
-    complete(make_client_error(errc::client_timeout, timeout_phase_name(phase)));
+    (void)lifetime_.abort(make_client_error(errc::client_timeout, timeout_phase_name(phase)));
+  }
+
+  [[nodiscard]] static std::string_view timeout_phase_label(timeout_phase phase) noexcept {
+    switch (phase) {
+    case timeout_phase::dns:
+      return "dns";
+    case timeout_phase::tls_handshake:
+      return "tls-handshake";
+    case timeout_phase::request_body:
+      return "request-body";
+    case timeout_phase::response_header:
+      return "response-header";
+    case timeout_phase::response_body:
+      return "response-body";
+    case timeout_phase::none:
+      break;
+    }
+    return "";
   }
 
   [[nodiscard]] static std::string timeout_phase_name(timeout_phase phase) {
@@ -506,14 +521,7 @@ private:
   }
 
   void on_resolved(uvp::result<uvp::dns::address_list> result) {
-    if (completed_) {
-      return;
-    }
-    if (cancelled_) {
-      if (timed_out_) {
-        return;
-      }
-      complete(make_client_error(errc::client_cancelled));
+    if (!lifetime_.active()) {
       return;
     }
     if (!result) {
@@ -522,6 +530,7 @@ private:
     }
 
     stop_phase_timeout();
+    lifetime_.enter_phase("connect");
     auto self = shared_from_this();
     connect_operation_ = connector_.connect(
       result.value(),
@@ -532,14 +541,7 @@ private:
   }
 
   void on_connected(uvp::result<uvp::io::byte_stream> result) {
-    if (completed_) {
-      return;
-    }
-    if (cancelled_) {
-      if (timed_out_) {
-        return;
-      }
-      complete(make_client_error(errc::client_cancelled));
+    if (!lifetime_.active()) {
       return;
     }
     if (!result) {
@@ -589,14 +591,7 @@ private:
   }
 
   void on_tls_connected(uvp::tls::handshake_result result) {
-    if (completed_) {
-      return;
-    }
-    if (cancelled_) {
-      if (timed_out_) {
-        return;
-      }
-      complete(make_client_error(errc::client_cancelled));
+    if (!lifetime_.active()) {
       return;
     }
     if (!result) {
@@ -654,7 +649,7 @@ private:
   }
 
   void on_written(uvp::io::stream_error result) {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
     if (result) {
@@ -671,7 +666,7 @@ private:
   }
 
   void on_read(uvp::io::read_result result) {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
 
@@ -707,7 +702,7 @@ private:
       response_keep_alive_ = event.message().keep_alive;
       break;
     }
-    return !completed_;
+    return lifetime_.active();
   }
 
   void process_buffered_response(std::string_view bytes) {
@@ -727,7 +722,7 @@ private:
   void handle_buffered_parse_result(
     const detail::http1_response_parse_result& parsed,
     std::size_t input_size) {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
     if (parsed.code == detail::http1_response_parse_result::status::error) {
@@ -862,16 +857,7 @@ private:
   }
 
   void complete(uvp::result<http::response> result) {
-    if (completed_) {
-      return;
-    }
-
-    completed_ = true;
-    stop_phase_timeout();
-    auto callback = std::move(callback_);
-    if (callback) {
-      callback(std::move(result));
-    }
+    (void)lifetime_.complete(std::move(result));
   }
 
   uv::loop* loop_;
@@ -879,7 +865,7 @@ private:
   std::shared_ptr<detail::connection_pool> pool_;
   http::method method_;
   std::string url_input_;
-  client_callback callback_;
+  uvp::detail::operation_lifetime<uvp::result<http::response>> lifetime_;
   std::string origin_key_;
   std::string proxy_key_;
   uvp::url url_;
@@ -900,9 +886,6 @@ private:
   bool response_headers_complete_ = false;
   bool response_keep_alive_ = false;
   bool using_forward_proxy_ = false;
-  bool cancelled_ = false;
-  bool timed_out_ = false;
-  bool completed_ = false;
 };
 
 } // namespace
@@ -924,8 +907,19 @@ public:
         pool_(std::move(pool)),
         method_(method),
         url_input_(url),
+        lifetime_({}),
         resolver_(loop),
-        connector_(loop) {}
+        connector_(loop) {
+    lifetime_.set_finish_action([this]() noexcept {
+      stop_phase_timeout();
+    });
+    lifetime_.set_abort_action([this]() noexcept {
+      dns_operation_.cancel();
+      connect_operation_.cancel();
+      tls_operation_.cancel();
+      close_stream();
+    });
+  }
 
   void header(std::string_view name, std::string_view value) {
     if (!started_) {
@@ -958,7 +952,7 @@ public:
   }
 
   void on_complete(response_complete_callback callback) {
-    on_complete_ = std::move(callback);
+    lifetime_.set_callback(std::move(callback));
   }
 
   void on_drain(request_body_drain_callback callback) {
@@ -969,7 +963,7 @@ public:
     if (payload.empty()) {
       return stream_write_result::ready();
     }
-    if (completed_ || upload_ended_) {
+    if (!lifetime_.active() || upload_ended_) {
       return stream_write_result::rejected(std::make_error_code(std::errc::not_connected));
     }
     if (upload_backpressured_) {
@@ -1021,7 +1015,7 @@ public:
   }
 
   void end() {
-    if (completed_ || upload_ended_) {
+    if (!lifetime_.active() || upload_ended_) {
       return;
     }
 
@@ -1100,16 +1094,7 @@ public:
   }
 
   void cancel() noexcept override {
-    if (completed_) {
-      return;
-    }
-
-    cancelled_ = true;
-    dns_operation_.cancel();
-    connect_operation_.cancel();
-    tls_operation_.cancel();
-    close_stream();
-    complete(make_client_error(errc::client_cancelled));
+    (void)lifetime_.cancel(make_client_error(errc::client_cancelled));
   }
 
 private:
@@ -1140,6 +1125,7 @@ private:
 
   void start_phase_timeout(timeout_phase phase, std::chrono::milliseconds duration) {
     stop_phase_timeout();
+    lifetime_.enter_phase(timeout_phase_label(phase));
     if (duration <= std::chrono::milliseconds{0}) {
       return;
     }
@@ -1171,17 +1157,29 @@ private:
   }
 
   void on_timeout(timeout_phase phase) {
-    if (completed_ || phase != timeout_phase_) {
+    if (!lifetime_.active() || phase != timeout_phase_) {
       return;
     }
 
-    cancelled_ = true;
-    timed_out_ = true;
-    dns_operation_.cancel();
-    connect_operation_.cancel();
-    tls_operation_.cancel();
-    close_stream();
-    complete(make_client_error(errc::client_timeout, timeout_phase_name(phase)));
+    (void)lifetime_.abort(make_client_error(errc::client_timeout, timeout_phase_name(phase)));
+  }
+
+  [[nodiscard]] static std::string_view timeout_phase_label(timeout_phase phase) noexcept {
+    switch (phase) {
+    case timeout_phase::dns:
+      return "dns";
+    case timeout_phase::tls_handshake:
+      return "tls-handshake";
+    case timeout_phase::request_body:
+      return "request-body";
+    case timeout_phase::response_header:
+      return "response-header";
+    case timeout_phase::response_body:
+      return "response-body";
+    case timeout_phase::none:
+      break;
+    }
+    return "";
   }
 
   [[nodiscard]] static std::string timeout_phase_name(timeout_phase phase) {
@@ -1203,14 +1201,7 @@ private:
   }
 
   void on_resolved(uvp::result<uvp::dns::address_list> result) {
-    if (completed_) {
-      return;
-    }
-    if (cancelled_) {
-      if (timed_out_) {
-        return;
-      }
-      complete(make_client_error(errc::client_cancelled));
+    if (!lifetime_.active()) {
       return;
     }
     if (!result) {
@@ -1219,6 +1210,7 @@ private:
     }
 
     stop_phase_timeout();
+    lifetime_.enter_phase("connect");
     auto self = shared_from_this();
     connect_operation_ = connector_.connect(
       result.value(),
@@ -1229,14 +1221,7 @@ private:
   }
 
   void on_connected(uvp::result<uvp::io::byte_stream> result) {
-    if (completed_) {
-      return;
-    }
-    if (cancelled_) {
-      if (timed_out_) {
-        return;
-      }
-      complete(make_client_error(errc::client_cancelled));
+    if (!lifetime_.active()) {
       return;
     }
     if (!result) {
@@ -1286,14 +1271,7 @@ private:
   }
 
   void on_tls_connected(uvp::tls::handshake_result result) {
-    if (completed_) {
-      return;
-    }
-    if (cancelled_) {
-      if (timed_out_) {
-        return;
-      }
-      complete(make_client_error(errc::client_cancelled));
+    if (!lifetime_.active()) {
       return;
     }
     if (!result) {
@@ -1360,7 +1338,7 @@ private:
   }
 
   void on_request_headers_written(uvp::io::stream_error result) {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
     if (result) {
@@ -1379,7 +1357,7 @@ private:
   }
 
   void flush_upload_writes() {
-    if (completed_ || !headers_written_ || upload_writing_ || upload_writes_.empty()) {
+    if (!lifetime_.active() || !headers_written_ || upload_writing_ || upload_writes_.empty()) {
       return;
     }
 
@@ -1391,7 +1369,7 @@ private:
   }
 
   void on_upload_written(uvp::io::stream_error result) {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
     upload_writing_ = false;
@@ -1431,7 +1409,7 @@ private:
   }
 
   void begin_response_read() {
-    if (completed_ || reading_response_) {
+    if (!lifetime_.active() || reading_response_) {
       return;
     }
 
@@ -1454,7 +1432,7 @@ private:
   }
 
   void on_read(uvp::io::read_result result) {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
 
@@ -1480,7 +1458,7 @@ private:
       if (on_headers_) {
         on_headers_(response_head_);
       }
-      if (!completed_) {
+      if (lifetime_.active()) {
         start_phase_timeout(timeout_phase::response_body, options_.response_body_timeout);
       }
       break;
@@ -1495,7 +1473,7 @@ private:
       response_keep_alive_ = event.message().keep_alive;
       break;
     }
-    return !completed_;
+    return lifetime_.active();
   }
 
   void process_response(std::string_view bytes) {
@@ -1515,7 +1493,7 @@ private:
   void handle_response_parse_result(
     const detail::http1_response_parse_result& parsed,
     std::size_t input_size) {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
     if (parsed.code == detail::http1_response_parse_result::status::error) {
@@ -1567,16 +1545,7 @@ private:
   }
 
   void complete(uvp::result<void> result) {
-    if (completed_) {
-      return;
-    }
-
-    completed_ = true;
-    stop_phase_timeout();
-    auto callback = std::move(on_complete_);
-    if (callback) {
-      callback(std::move(result));
-    }
+    (void)lifetime_.complete(std::move(result));
   }
 
   uv::loop* loop_;
@@ -1584,6 +1553,7 @@ private:
   std::shared_ptr<detail::connection_pool> pool_;
   http::method method_;
   std::string url_input_;
+  uvp::detail::operation_lifetime<uvp::result<void>> lifetime_;
   std::string origin_key_;
   uvp::url url_;
   uvp::dns::resolver resolver_;
@@ -1595,7 +1565,6 @@ private:
   std::shared_ptr<uv::timer> timeout_timer_;
   response_headers_callback on_headers_;
   response_data_callback on_data_;
-  response_complete_callback on_complete_;
   request_body_drain_callback on_drain_;
   http::headers request_headers_;
   http::response_head response_head_;
@@ -1615,9 +1584,6 @@ private:
   bool upload_backpressured_ = false;
   bool reading_response_ = false;
   bool response_keep_alive_ = false;
-  bool cancelled_ = false;
-  bool timed_out_ = false;
-  bool completed_ = false;
 };
 
 } // namespace detail

@@ -1,4 +1,5 @@
 #include <uvpp/protocols/io.hpp>
+#include <uvpp/protocols/detail/operation_lifetime.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -274,31 +275,33 @@ dns::address_family infer_family(const tcp_endpoint& endpoint) noexcept {
 class tcp_connect_state : public std::enable_shared_from_this<tcp_connect_state> {
 public:
   tcp_connect_state(uv::loop& loop, std::vector<connect_candidate> candidates, connect_options options, connect_callback callback)
-      : loop_(&loop), candidates_(std::move(candidates)), options_(options), callback_(std::move(callback)) {}
+      : loop_(&loop), candidates_(std::move(candidates)), options_(options), lifetime_(std::move(callback)) {
+    lifetime_.set_finish_action([this]() noexcept {
+      close_timeout_timer();
+    });
+    lifetime_.set_abort_action([this]() noexcept {
+      close_current();
+    });
+  }
 
   connect_operation start() {
-    if (!callback_) {
-      complete(make_connect_error(connect_errc::connect_failed, "missing TCP connect callback"));
+    if (!lifetime_.has_callback()) {
+      (void)lifetime_.complete(make_connect_error(connect_errc::connect_failed, "missing TCP connect callback"));
       return connect_operation{shared_from_this()};
     }
     if (candidates_.empty()) {
-      complete(make_connect_error(connect_errc::no_addresses));
+      (void)lifetime_.complete(make_connect_error(connect_errc::no_addresses));
       return connect_operation{shared_from_this()};
     }
 
+    lifetime_.enter_phase("connect");
     start_timeout();
     connect_next();
     return connect_operation{shared_from_this()};
   }
 
   void cancel() noexcept {
-    if (completed_) {
-      return;
-    }
-
-    cancelled_ = true;
-    close_current();
-    complete(make_connect_error(connect_errc::cancelled));
+    (void)lifetime_.cancel(make_connect_error(connect_errc::cancelled));
   }
 
 private:
@@ -332,22 +335,20 @@ private:
   }
 
   void on_timeout() {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
 
-    cancelled_ = true;
-    close_current();
-    complete(make_connect_error(connect_errc::timeout));
+    (void)lifetime_.abort(make_connect_error(connect_errc::timeout));
   }
 
   void connect_next() {
-    if (completed_) {
+    if (!lifetime_.active()) {
       return;
     }
 
     if (next_ >= candidates_.size()) {
-      complete(make_connect_error(connect_errc::connect_failed, last_error_.message()));
+      (void)lifetime_.complete(make_connect_error(connect_errc::connect_failed, last_error_.message()));
       return;
     }
 
@@ -378,12 +379,7 @@ private:
   }
 
   void on_connected(uv::result result) {
-    if (completed_) {
-      return;
-    }
-    if (cancelled_) {
-      close_current();
-      complete(make_connect_error(connect_errc::cancelled));
+    if (!lifetime_.active()) {
       return;
     }
     if (!result) {
@@ -393,7 +389,7 @@ private:
     }
 
     auto stream = byte_stream{std::make_unique<stream_model<uv::tcp>>(*loop_, std::move(tcp_))};
-    complete(std::move(stream));
+    (void)lifetime_.complete(std::move(stream));
   }
 
   void close_current() noexcept {
@@ -433,31 +429,16 @@ private:
     }
   }
 
-  void complete(uvp::result<byte_stream> result) {
-    if (completed_) {
-      return;
-    }
-
-    completed_ = true;
-    close_timeout_timer();
-    auto callback = std::move(callback_);
-    if (callback) {
-      callback(std::move(result));
-    }
-  }
-
   uv::loop* loop_;
   std::vector<connect_candidate> candidates_;
   connect_options options_;
-  connect_callback callback_;
+  uvp::detail::operation_lifetime<uvp::result<byte_stream>> lifetime_;
   uv::connect_request connect_request_;
   std::unique_ptr<uv::tcp> tcp_;
   std::list<std::unique_ptr<uv::tcp>> closing_;
   std::shared_ptr<uv::timer> timeout_timer_;
   std::size_t next_ = 0;
   std::error_code last_error_;
-  bool cancelled_ = false;
-  bool completed_ = false;
 };
 
 std::shared_ptr<tcp_connect_state> tcp_connect_state_from(const std::shared_ptr<void>& state) noexcept {

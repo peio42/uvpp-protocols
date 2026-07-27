@@ -1,4 +1,5 @@
 #include <uvpp/protocols/tls/stream.hpp>
+#include <uvpp/protocols/detail/operation_lifetime.hpp>
 
 #include "context_internal.hpp"
 
@@ -86,13 +87,18 @@ public:
         direction_(direction),
         max_pending_write_bytes_(max_pending_write_bytes),
         max_pending_read_bytes_(max_pending_read_bytes),
-        handshake_callback_(std::move(callback)) {}
+        handshake_lifetime_(std::move(callback)) {
+    handshake_lifetime_.set_abort_action([this]() noexcept {
+      close_lower();
+    });
+  }
 
   ~tls_state() {
     SSL_free(ssl_);
   }
 
   void start() {
+    handshake_lifetime_.enter_phase("tls-handshake");
     if (direction_ == mode::server) {
       SSL_set_accept_state(ssl_);
     } else {
@@ -200,7 +206,7 @@ public:
   }
 
   void cancel(uvp::error error) override {
-    if (!active()) {
+    if (!handshake_lifetime_.active()) {
       return;
     }
 
@@ -208,7 +214,7 @@ public:
   }
 
   bool active() const noexcept override {
-    return !open_ && !closed_ && !failed_;
+    return handshake_lifetime_.active();
   }
 
   uvp::io::endpoint local_endpoint() const {
@@ -353,13 +359,7 @@ private:
   }
 
   void complete_handshake() {
-    auto callback = std::move(handshake_callback_);
-    handshake_callback_ = {};
-    if (!callback) {
-      return;
-    }
-
-    callback(handshake_result{
+    (void)handshake_lifetime_.complete(handshake_result{
       uvp::io::byte_stream{std::make_unique<tls_stream_model>(shared_from_this())},
       selected_alpn()});
   }
@@ -663,15 +663,12 @@ private:
     failed_ = true;
     terminal_error_code_ = error.code;
     fail_pending_clear_writes(error.code);
-    auto handshake = std::move(handshake_callback_);
-    handshake_callback_ = {};
-    if (handshake) {
-      handshake(handshake_result{std::move(error)});
+    if (handshake_lifetime_.active()) {
+      (void)handshake_lifetime_.abort(handshake_result{std::move(error)});
     } else {
       set_terminal_read_error(error.code);
+      close_lower();
     }
-
-    close_lower();
   }
 
   void close_lower() {
@@ -709,7 +706,7 @@ private:
   mode direction_;
   std::size_t max_pending_write_bytes_ = 0;
   std::size_t max_pending_read_bytes_ = 0;
-  handshake_callback handshake_callback_;
+  uvp::detail::operation_lifetime<handshake_result> handshake_lifetime_;
   uvp::io::read_callback on_read_;
   std::vector<uvp::io::close_callback> on_close_;
   std::deque<std::vector<std::byte>> pending_clear_;

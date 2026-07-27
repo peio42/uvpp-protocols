@@ -24,19 +24,59 @@ UVP_TEST_CASE("operation lifetime reports only its first terminal result") {
   UVP_CHECK_EQ(results[0], 200);
 }
 
-UVP_TEST_CASE("operation lifetime aborts before reporting failure") {
+UVP_TEST_CASE("operation lifetime finishes and aborts before reporting failure") {
   auto events = std::vector<std::string>{};
   uvp::detail::operation_lifetime<int> lifetime([&](int result) {
     events.push_back("callback:" + std::to_string(result));
+  });
+  lifetime.set_finish_action([&] {
+    events.push_back("finish");
   });
   lifetime.set_abort_action([&] {
     events.push_back("abort");
   });
 
   UVP_CHECK(lifetime.abort(500));
+  UVP_CHECK_EQ(events.size(), 3U);
+  UVP_CHECK_EQ(events[0], "finish");
+  UVP_CHECK_EQ(events[1], "abort");
+  UVP_CHECK_EQ(events[2], "callback:500");
+}
+
+UVP_TEST_CASE("operation lifetime finishes successful operations without aborting") {
+  auto events = std::vector<std::string>{};
+  uvp::detail::operation_lifetime<int> lifetime([&](int result) {
+    events.push_back("callback:" + std::to_string(result));
+  });
+  lifetime.set_finish_action([&] {
+    events.push_back("finish");
+  });
+  lifetime.set_abort_action([&] {
+    events.push_back("abort");
+  });
+
+  UVP_CHECK(lifetime.complete(200));
   UVP_CHECK_EQ(events.size(), 2U);
-  UVP_CHECK_EQ(events[0], "abort");
-  UVP_CHECK_EQ(events[1], "callback:500");
+  UVP_CHECK_EQ(events[0], "finish");
+  UVP_CHECK_EQ(events[1], "callback:200");
+}
+
+UVP_TEST_CASE("operation lifetime accepts a callback attached before completion") {
+  auto result = 0;
+  uvp::detail::operation_lifetime<int> lifetime({});
+
+  lifetime.set_callback([&](int value) {
+    result = value;
+  });
+
+  UVP_CHECK(lifetime.complete(200));
+  UVP_CHECK_EQ(result, 200);
+
+  lifetime.set_callback([&](int value) {
+    result = value + 1;
+  });
+  UVP_CHECK(!lifetime.has_callback());
+  UVP_CHECK_EQ(result, 200);
 }
 
 UVP_TEST_CASE("operation lifetime makes cancellation win over a reentrant child completion") {

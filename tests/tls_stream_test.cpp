@@ -505,6 +505,34 @@ UVP_TEST_CASE("tls handshake cancel is no-op after success") {
   UVP_CHECK_EQ(received, "still-open");
 }
 
+UVP_TEST_CASE("tls handshake cancellation completes once and closes the lower stream") {
+  uv::loop loop;
+  auto pair = memory_pair_with_state(loop);
+  auto server_lower = std::move(pair.first);
+  auto client_lower = std::move(pair.second);
+  auto client_lower_state = pair.second_state;
+
+  auto client_context_options = uvp::tls::client_context_options{};
+  auto client_context = uvp::tls::client_context{std::move(client_context_options)};
+
+  auto completions = 0;
+  auto cancelled = false;
+  auto handshake = uvp::tls::connect(std::move(client_lower), client_context, [&](uvp::tls::handshake_result result) {
+    ++completions;
+    UVP_CHECK(!result);
+    cancelled = result.error().code == uvp::tls::make_error_code(uvp::tls::errc::cancelled);
+  });
+
+  UVP_CHECK(handshake.active());
+  handshake.cancel();
+  handshake.cancel();
+
+  UVP_CHECK(!handshake.active());
+  UVP_CHECK(cancelled);
+  UVP_CHECK_EQ(completions, 1);
+  UVP_CHECK(client_lower_state->closed);
+}
+
 UVP_TEST_CASE("tls client verifies peers by default") {
   uv::loop loop;
   auto [server_lower, client_lower] = memory_pair(loop);

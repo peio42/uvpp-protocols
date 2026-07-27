@@ -26,17 +26,29 @@ without making cross-thread cancellation safe.
 once. Later attempts return `false` and do nothing. This includes completions
 that arrive synchronously while an abort action cancels a child operation.
 
-`complete` reports an already-final result without cleanup. Use it for, for
-example, a DNS lookup that has returned either addresses or its own DNS error.
+`complete` reports an already-final result without abort cleanup. Use it for,
+for example, a DNS lookup that has returned either addresses or its own DNS
+error.
 `abort` and `cancel` run the configured abort action before dispatching their
 result. They are for a failed composite operation or explicit cancellation,
 when active children and a partially used transport must be stopped.
+
+`set_finish_action` installs cleanup that runs for every terminal result. Use
+it for work that must stop on both success and failure, such as a phase timer
+or a registration with another owner. `set_abort_action` is reserved for work
+that only applies to an aborted operation, such as closing a partially used
+transport. Both actions must not throw.
 
 The completion callback is invoked inline, on the owning loop thread, after
 the helper has become terminal. It may therefore safely re-enter the owning
 state, but it must not assume that the operation remains active. Validation
 failures may consequently invoke a callback while a public `start` function is
 still executing; this matches the existing callback convention.
+
+`set_callback` replaces the completion callback while the lifetime remains
+active. It supports configurable operations, such as a streaming HTTP request,
+whose caller supplies its completion callback after constructing the operation
+state. Setting it after completion has no effect.
 
 ## Using it in an operation state
 
@@ -54,6 +66,9 @@ class request_state {
 
   request_state(uvp::http::client_callback done)
       : lifetime_(std::move(done)) {
+    lifetime_.set_finish_action([this]() noexcept {
+      stop_phase_timer();
+    });
     lifetime_.set_abort_action([this]() noexcept {
       dns_operation_.cancel();
       connect_operation_.cancel();
@@ -80,8 +95,9 @@ class request_state {
 };
 ```
 
-The abort action must not throw. `abort` and `cancel` first make the lifetime
-terminal, then run that action, then dispatch the user callback. Thus a child
+The finish and abort actions must not throw. Every terminal method first makes
+the lifetime terminal, then runs the finish action, the abort action for
+`abort` and `cancel`, and finally dispatches the user callback. Thus a child
 operation which invokes its callback immediately from `cancel()` cannot
 replace the cancellation or failure result.
 

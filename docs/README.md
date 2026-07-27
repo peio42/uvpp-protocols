@@ -7,6 +7,8 @@ Use this map to load only the documentation needed for the task.
 - [`design/`](design/): stable project design. Agents may treat these documents
   as the source of truth for how the project currently works or is intended to
   work.
+- [`contributor/`](contributor/): implementation guides for developers adding
+  or evolving protocol modules and shared foundations.
 - [`roadmap.md`](roadmap.md): concise decision summary for current and future
   priorities. Its `Current focus` section uses checklist lines to show which
   proposals in the active milestone are implemented.

@@ -87,11 +87,12 @@ The helper should remain optional. Protocols with unusual lifetimes should be
 able to use the conventions without inheriting from a heavy base class.
 
 Implemented first slice: `uvp::detail::operation_lifetime<Result>` provides
-the exactly-once completion gate, an owned diagnostic phase name, an optional
-abort action, and inline callback dispatch after cleanup. DNS is its first
-consumer. The helper is intentionally loop-affine and does not include timers,
-transport-pool policy, an error category, or a cancellation-token hierarchy.
-See [Operation lifetime](../design/operation-lifetime.md).
+the exactly-once completion gate, an owned diagnostic phase name, optional
+finish and abort actions, and inline callback dispatch after cleanup. DNS, the
+TCP connector, TLS handshakes, and buffered and streaming HTTP client
+operations are its first consumers. The helper is intentionally loop-affine
+and does not include timers, transport-pool policy, an error category, or a
+cancellation-token hierarchy. See [Operation lifetime](../design/operation-lifetime.md).
 
 ### Timeouts and Deadlines
 
