@@ -2,6 +2,7 @@
 
 #include <uvpp/protocols/detail/operation_deadline.hpp>
 #include <uvpp/protocols/detail/operation_lifetime.hpp>
+#include <uvpp/protocols/detail/outbound_write_budget.hpp>
 #include <uvpp/uv.hpp>
 
 #include <chrono>
@@ -172,6 +173,31 @@ UVP_TEST_CASE("operation deadline makes an overall deadline independent from its
 
   UVP_CHECK_EQ(expired, "overall-deadline");
   UVP_CHECK_EQ(result, 408);
+}
+
+UVP_TEST_CASE("outbound write budget enforces its high and low watermarks") {
+  auto budget = uvp::detail::outbound_write_budget{10};
+
+  const auto first = budget.try_acquire(10);
+  UVP_CHECK(first.accepted);
+  UVP_CHECK(!first.should_continue);
+  UVP_CHECK(budget.backpressured());
+  UVP_CHECK_EQ(budget.pending_bytes(), 10U);
+
+  UVP_CHECK(!budget.try_acquire(1).accepted);
+  UVP_CHECK(!budget.release(4));
+  UVP_CHECK(budget.backpressured());
+  UVP_CHECK(budget.release(1));
+  UVP_CHECK(!budget.backpressured());
+  UVP_CHECK_EQ(budget.pending_bytes(), 5U);
+}
+
+UVP_TEST_CASE("outbound write budget rejects an oversized item without retaining it") {
+  auto budget = uvp::detail::outbound_write_budget{10};
+
+  UVP_CHECK(!budget.try_acquire(11).accepted);
+  UVP_CHECK_EQ(budget.pending_bytes(), 0U);
+  UVP_CHECK(!budget.backpressured());
 }
 
 } // namespace

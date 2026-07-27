@@ -91,10 +91,12 @@ applies to `proxy.authorization`; `proxy.basic_auth(...)` produces a valid
 value directly.
 
 For unknown-size uploads, call `.chunked()` instead of `.content_length(n)`.
-If the queued upload bytes exceed
-`client_options::max_pending_request_body_bytes`, `write()` returns a
-backpressure result. Wait for `body.on_drain(...)` before writing more. The
-returned body writer also exposes `cancel()`.
+`client_options::max_pending_request_body_bytes` is a strict limit over queued
+and in-flight encoded upload bytes. A write that reaches the limit is accepted
+but returns a backpressure result; wait for `body.on_drain(...)` before writing
+more. A write that would exceed the limit is rejected with
+`operation_would_block` and retains no bytes, so the application must split it
+into smaller chunks. The returned body writer also exposes `cancel()`.
 
 The client uses the same strict `llhttp` framing engine for buffered and
 streaming responses. It consumes informational `1xx` responses internally and

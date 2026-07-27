@@ -235,6 +235,22 @@ timer. Arm it before starting the phase's child operation. An idle timeout is
 separate: explicitly re-arm it after each I/O event that the protocol defines
 as progress.
 
+## Bound outbound writes before retaining them
+
+For a streaming operation, use `uvp::detail::outbound_write_budget` before
+adding an encoded item to its queue. It owns only byte accounting: the protocol
+still owns the queue, framing, write callback, and conversion to its public
+`ready` / `backpressure` / `rejected` result. Reserve encoded bytes — not just
+application payload — before retaining them, and call `release` once the write
+completes. A rejected reservation must retain no bytes. The budget reports a
+single transition below its low watermark; that is the point to invoke the
+user's drain callback.
+
+The bound is strict. If an item is too large, reject it and require the caller
+to fragment it when the protocol permits. Never enqueue one over-limit item and
+only then report backpressure. On cancellation or failure, clear the protocol
+queue and the budget without invoking drain.
+
 All calls must occur on the owning `uv::loop` thread. The helper is not
 thread-safe and is deliberately free of locks and atomics. It invokes the user
 callback inline, after it has become terminal and after an abort action has
@@ -263,5 +279,7 @@ Before exposing a new operation, check that:
 - phase names are `constexpr operation_phase` values, never dynamic strings;
 - deadline `stop()` is installed as the lifetime finish action, and a global
   deadline is not restarted on phase transitions;
+- queued and in-flight outbound bytes are reserved before being retained, and
+  a rejected write never exceeds the configured bound;
 - operation and protocol tests cover success, cancellation, timeout, and a
   late child callback after cancellation.

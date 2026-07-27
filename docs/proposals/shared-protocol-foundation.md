@@ -131,8 +131,12 @@ Reusable backpressure should cover:
 - pause/resume for inbound stream delivery;
 - clear rules for cancellation while paused or backpressured.
 
-HTTP upload streaming already has a first version of this shape. Milestone 7
-should decide what can be promoted without freezing HTTP-specific names.
+Implemented first slice: `uvp::detail::outbound_write_budget` enforces a
+strict high watermark over queued and in-flight encoded bytes, uses a half-high
+low watermark for drain, and never accepts an over-limit item. Streaming HTTP
+uploads use it and retain the existing public `ready` / `backpressure` /
+`rejected` result convention. Inbound pause/resume remains protocol-specific.
+See [Outbound backpressure](../design/outbound-backpressure.md).
 
 ### Framing
 

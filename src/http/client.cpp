@@ -2,6 +2,7 @@
 
 #include <uvpp/protocols/detail/operation_deadline.hpp>
 #include <uvpp/protocols/detail/operation_lifetime.hpp>
+#include <uvpp/protocols/detail/outbound_write_budget.hpp>
 #include <uvpp/protocols/dns.hpp>
 #include <uvpp/protocols/http/error.hpp>
 #include <uvpp/protocols/http/headers.hpp>
@@ -19,6 +20,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -268,6 +270,18 @@ void append_ascii(std::vector<std::byte>& out, std::string_view value) {
   }
   append_ascii(out, "\r\n");
   return out;
+}
+
+[[nodiscard]] std::optional<std::size_t> serialized_chunk_size(std::size_t payload_size) noexcept {
+  auto hex_digits = std::size_t{1};
+  for (auto value = payload_size; value >= 16; value /= 16) {
+    ++hex_digits;
+  }
+  constexpr auto framing_bytes = std::size_t{4}; // "\r\n" before and after the payload.
+  if (payload_size > std::numeric_limits<std::size_t>::max() - hex_digits - framing_bytes) {
+    return std::nullopt;
+  }
+  return payload_size + hex_digits + framing_bytes;
 }
 
 [[nodiscard]] detail::http1_response_limits response_limits(const client_options& options) {
@@ -871,10 +885,13 @@ public:
         deadlines_(loop, [this](uvp::detail::operation_phase phase) {
           on_timeout(phase);
         }),
+        write_budget_(options_.max_pending_request_body_bytes),
         resolver_(loop),
         connector_(loop) {
     lifetime_.set_finish_action([this]() noexcept {
       deadlines_.stop();
+      upload_writes_.clear();
+      write_budget_.clear();
     });
     lifetime_.set_abort_action([this]() noexcept {
       dns_operation_.cancel();
@@ -929,9 +946,6 @@ public:
     if (!lifetime_.active() || upload_ended_) {
       return stream_write_result::rejected(std::make_error_code(std::errc::not_connected));
     }
-    if (upload_backpressured_) {
-      return stream_write_result::rejected(std::make_error_code(std::errc::operation_would_block));
-    }
     if (headers_written_ && upload_mode_ == upload_mode::none) {
       return stream_write_result::rejected(std::make_error_code(std::errc::invalid_argument));
     }
@@ -942,30 +956,53 @@ public:
       enable_chunked_upload();
     }
 
-    auto wire = std::vector<std::byte>{};
+    auto wire_size = std::size_t{};
+    auto reserve_end_marker = false;
     if (upload_mode_ == upload_mode::content_length) {
-      if (!content_length_ || accepted_upload_body_bytes_ + payload.size() > *content_length_) {
+      if (!content_length_ || accepted_upload_body_bytes_ > *content_length_ ||
+          payload.size() > *content_length_ - accepted_upload_body_bytes_) {
         return stream_write_result::rejected(std::make_error_code(std::errc::invalid_argument));
       }
-      accepted_upload_body_bytes_ += payload.size();
-      wire = to_bytes(payload);
+      wire_size = payload.size();
     } else if (upload_mode_ == upload_mode::chunked) {
-      accepted_upload_body_bytes_ += payload.size();
-      wire = serialize_chunk(std::as_bytes(std::span{payload.data(), payload.size()}));
+      const auto encoded_size = serialized_chunk_size(payload.size());
+      if (!encoded_size) {
+        return stream_write_result::rejected(std::make_error_code(std::errc::value_too_large));
+      }
+      wire_size = *encoded_size;
+      reserve_end_marker = !chunked_end_marker_reserved_;
     } else {
       return stream_write_result::rejected(std::make_error_code(std::errc::invalid_argument));
     }
 
-    pending_upload_wire_bytes_ += wire.size();
+    auto reserved_size = wire_size;
+    if (reserve_end_marker) {
+      constexpr auto chunked_end_marker_size = std::size_t{5};
+      if (reserved_size > std::numeric_limits<std::size_t>::max() - chunked_end_marker_size) {
+        return stream_write_result::rejected(std::make_error_code(std::errc::value_too_large));
+      }
+      reserved_size += chunked_end_marker_size;
+    }
+
+    const auto admission = write_budget_.try_acquire(reserved_size);
+    if (!admission.accepted) {
+      return stream_write_result::rejected(std::make_error_code(std::errc::operation_would_block));
+    }
+
+    auto wire = std::vector<std::byte>{};
+    if (upload_mode_ == upload_mode::content_length) {
+      accepted_upload_body_bytes_ += payload.size();
+      wire = to_bytes(payload);
+    } else {
+      accepted_upload_body_bytes_ += payload.size();
+      wire = serialize_chunk(std::as_bytes(std::span{payload.data(), payload.size()}));
+      chunked_end_marker_reserved_ = chunked_end_marker_reserved_ || reserve_end_marker;
+    }
+
     upload_writes_.push_back(pending_upload_write{std::move(wire)});
     flush_upload_writes();
 
-    if (options_.max_pending_request_body_bytes > 0 &&
-        pending_upload_wire_bytes_ >= options_.max_pending_request_body_bytes) {
-      upload_backpressured_ = true;
-      return stream_write_result::backpressure();
-    }
-    return stream_write_result::ready();
+    return admission.should_continue ? stream_write_result::ready() : stream_write_result::backpressure();
   }
 
   stream_write_result write(std::span<const std::byte> payload) {
@@ -996,7 +1033,11 @@ public:
         return;
       }
     } else if (upload_mode_ == upload_mode::chunked) {
-      pending_upload_wire_bytes_ += 5;
+      if (!chunked_end_marker_reserved_ && !write_budget_.try_acquire(5).accepted) {
+        fail_request_body("request body terminator exceeds pending write limit");
+        return;
+      }
+      chunked_end_marker_reserved_ = false;
       upload_writes_.push_back(pending_upload_write{to_bytes("0\r\n\r\n")});
     }
 
@@ -1293,10 +1334,12 @@ private:
     }
 
     if (!upload_writes_.empty()) {
-      pending_upload_wire_bytes_ -= std::min(pending_upload_wire_bytes_, upload_writes_.front().payload.size());
+      const auto completed_bytes = upload_writes_.front().payload.size();
       upload_writes_.pop_front();
+      if (write_budget_.release(completed_bytes) && on_drain_) {
+        on_drain_();
+      }
     }
-    notify_upload_drain_if_needed();
 
     if (!upload_writes_.empty()) {
       flush_upload_writes();
@@ -1304,21 +1347,6 @@ private:
     }
     if (upload_ended_) {
       begin_response_read();
-    }
-  }
-
-  void notify_upload_drain_if_needed() {
-    if (!upload_backpressured_) {
-      return;
-    }
-    const auto low_watermark = options_.max_pending_request_body_bytes / 2;
-    if (pending_upload_wire_bytes_ > low_watermark) {
-      return;
-    }
-
-    upload_backpressured_ = false;
-    if (on_drain_) {
-      on_drain_();
     }
   }
 
@@ -1469,6 +1497,7 @@ private:
   std::string url_input_;
   uvp::detail::operation_lifetime<uvp::result<void>> lifetime_;
   uvp::detail::operation_deadline deadlines_;
+  uvp::detail::outbound_write_budget write_budget_;
   std::string origin_key_;
   uvp::url url_;
   uvp::dns::resolver resolver_;
@@ -1487,14 +1516,13 @@ private:
   std::deque<pending_upload_write> upload_writes_;
   std::optional<std::size_t> content_length_;
   std::size_t accepted_upload_body_bytes_ = 0;
-  std::size_t pending_upload_wire_bytes_ = 0;
   upload_mode upload_mode_ = upload_mode::none;
   bool started_ = false;
   bool headers_started_ = false;
   bool headers_written_ = false;
   bool upload_writing_ = false;
   bool upload_ended_ = false;
-  bool upload_backpressured_ = false;
+  bool chunked_end_marker_reserved_ = false;
   bool reading_response_ = false;
   bool response_keep_alive_ = false;
 };

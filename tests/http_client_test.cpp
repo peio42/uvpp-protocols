@@ -1187,7 +1187,7 @@ UVP_TEST_CASE("http client applies request body backpressure") {
   uvp::http::client client(
     loop,
     uvp::http::client_options{
-      .max_pending_request_body_bytes = 8,
+      .max_pending_request_body_bytes = 16,
     });
   auto completed = false;
   auto request = client.request(uvp::http::method::post, "http://127.0.0.1:" + std::to_string(port) + "/upload");
@@ -1201,6 +1201,8 @@ UVP_TEST_CASE("http client applies request body backpressure") {
     });
 
   auto upload = request.start();
+  auto oversized = upload.write("abcdefg");
+  UVP_CHECK(!oversized.accepted());
   auto first = upload.write("abcdef");
   UVP_CHECK(first.accepted());
   UVP_CHECK(!first.should_continue());

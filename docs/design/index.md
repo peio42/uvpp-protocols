@@ -49,6 +49,8 @@ loop.run();
   cancellation cleanup, phases, and callback dispatch for protocol operations.
 - [Operation deadlines](operation-deadline.md): reusable phase timeouts and
   overall deadlines for finite protocol operations.
+- [Outbound backpressure](outbound-backpressure.md): strict write budgets,
+  high/low watermarks, and drain transitions for protocol queues.
 - [HTTP server design](http-server.md): first implementation target.
 - [WebSocket design](websocket.md): HTTP upgrade integration, session
   ownership, and protocols over WebSocket.
