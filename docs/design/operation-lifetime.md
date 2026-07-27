@@ -8,6 +8,12 @@ protocol modules through:
 #include <uvpp/protocols/detail/operation_lifetime.hpp>
 ```
 
+Its phase type is available through:
+
+```cpp
+#include <uvpp/protocols/detail/operation_phase.hpp>
+```
+
 It is an implementation-detail foundation, rather than a general asynchronous
 or Promise API. It does not schedule work, own a `uv::loop`, add threads,
 convert callbacks into continuations, or define protocol errors. A protocol
@@ -62,6 +68,7 @@ using result_type = uvp::result<uvp::http::response>;
 
 class request_state {
   // ...
+  static constexpr uvp::detail::operation_phase connect_phase{"connect"};
   uvp::detail::operation_lifetime<result_type> lifetime_;
 
   request_state(uvp::http::client_callback done)
@@ -78,7 +85,7 @@ class request_state {
   }
 
   void start_connect() {
-    lifetime_.enter_phase("connect");
+    lifetime_.enter_phase(connect_phase);
     // Start the protocol-specific connect operation.
   }
 
@@ -103,9 +110,11 @@ replace the cancellation or failure result.
 
 Use `enter_phase` whenever the state moves through a diagnostic phase such as
 `"resolve"`, `"connect"`, `"tls-handshake"`, `"protocol-handshake"`,
-`"write"`, or `"read"`. The string is copied, so callers may pass either a
-literal or a transient `std::string`. A future timeout/deadline owner can read
-this phase when it constructs its protocol-specific timeout error.
+`"write"`, or `"read"`. Define each one as an `inline constexpr
+operation_phase` in the protocol module. An `operation_phase` accepts only a
+string literal, retains a `std::string_view` to static storage, and is copied
+without allocating. A timeout/deadline owner can read `phase()` when it
+constructs its protocol-specific timeout error.
 
 ## Boundaries
 

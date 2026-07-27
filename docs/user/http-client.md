@@ -148,8 +148,8 @@ For this slice, proxy authentication is explicit: set
 `Proxy-Authorization: Basic ...` value. HTTPS through an HTTP proxy requires
 `CONNECT` and is not enabled yet.
 
-Timeouts are phase-scoped and disabled by default. Configure the phases needed
-by the application:
+Timeouts are disabled by default. Configure phase limits and, when useful, an
+overall budget for the complete request (including redirects):
 
 ```cpp
 uvp::http::client client(
@@ -162,6 +162,7 @@ uvp::http::client client(
     .max_idle_connections_per_origin = 2,
     .max_redirects = 5,
     .idle_connection_timeout = std::chrono::seconds{15},
+    .overall_timeout = std::chrono::seconds{45},
     .dns_timeout = std::chrono::seconds{2},
     .connect_timeout = std::chrono::seconds{3},
     .tls_handshake_timeout = std::chrono::seconds{3},
@@ -177,8 +178,9 @@ uvp::http::client client(
   });
 ```
 
-If a phase expires, the request completes with
-`uvp::http::errc::client_timeout`. The error detail names the timed-out phase.
+If a phase or the overall budget expires, the request completes with
+`uvp::http::errc::client_timeout`. The error detail names the timed-out phase
+or reports that the overall request deadline was exceeded.
 `request_body_timeout` covers the request write/upload phase, including a
 streaming upload left open before response reading begins.
 

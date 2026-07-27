@@ -23,6 +23,7 @@ namespace uvp::tls {
 namespace {
 
 constexpr std::size_t tls_io_buffer_size = 16 * 1024;
+inline constexpr uvp::detail::operation_phase tls_handshake_phase{"tls-handshake"};
 
 std::string drain_openssl_errors(std::string_view fallback) {
   std::string detail(fallback);
@@ -98,7 +99,7 @@ public:
   }
 
   void start() {
-    handshake_lifetime_.enter_phase("tls-handshake");
+    handshake_lifetime_.enter_phase(tls_handshake_phase);
     if (direction_ == mode::server) {
       SSL_set_accept_state(ssl_);
     } else {

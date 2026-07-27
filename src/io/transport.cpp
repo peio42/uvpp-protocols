@@ -1,4 +1,5 @@
 #include <uvpp/protocols/io.hpp>
+#include <uvpp/protocols/detail/operation_deadline.hpp>
 #include <uvpp/protocols/detail/operation_lifetime.hpp>
 
 #include <algorithm>
@@ -11,13 +12,13 @@
 #include <vector>
 
 #include <uvpp/uv.hpp>
-#include <uvpp/handles/timer.hpp>
 
 namespace uvp::io {
 
 namespace {
 
 constexpr int default_backlog = 64;
+inline constexpr uvp::detail::operation_phase connect_phase{"connect"};
 
 stream_error from_result(uv::result result) {
   return stream_error{result.error_code()};
@@ -275,9 +276,15 @@ dns::address_family infer_family(const tcp_endpoint& endpoint) noexcept {
 class tcp_connect_state : public std::enable_shared_from_this<tcp_connect_state> {
 public:
   tcp_connect_state(uv::loop& loop, std::vector<connect_candidate> candidates, connect_options options, connect_callback callback)
-      : loop_(&loop), candidates_(std::move(candidates)), options_(options), lifetime_(std::move(callback)) {
+      : loop_(&loop),
+        candidates_(std::move(candidates)),
+        options_(options),
+        lifetime_(std::move(callback)),
+        deadlines_(loop, [this](uvp::detail::operation_phase) {
+          on_timeout();
+        }) {
     lifetime_.set_finish_action([this]() noexcept {
-      close_timeout_timer();
+      deadlines_.stop();
     });
     lifetime_.set_abort_action([this]() noexcept {
       close_current();
@@ -294,8 +301,8 @@ public:
       return connect_operation{shared_from_this()};
     }
 
-    lifetime_.enter_phase("connect");
-    start_timeout();
+    lifetime_.enter_phase(connect_phase);
+    deadlines_.arm_phase(connect_phase, options_.timeout);
     connect_next();
     return connect_operation{shared_from_this()};
   }
@@ -305,35 +312,6 @@ public:
   }
 
 private:
-  void start_timeout() {
-    if (options_.timeout <= std::chrono::milliseconds{0}) {
-      return;
-    }
-
-    timeout_timer_ = std::make_shared<uv::timer>(*loop_);
-    auto self = shared_from_this();
-    timeout_timer_->start(options_.timeout, [self](uv::timer&) {
-      self->on_timeout();
-    });
-  }
-
-  void close_timeout_timer() noexcept {
-    if (!timeout_timer_) {
-      return;
-    }
-
-    auto timer = std::move(timeout_timer_);
-    if (timer->closing()) {
-      return;
-    }
-
-    try {
-      timer->stop();
-    } catch (...) {
-    }
-    timer->close([timer](uv::timer&) {});
-  }
-
   void on_timeout() {
     if (!lifetime_.active()) {
       return;
@@ -433,10 +411,10 @@ private:
   std::vector<connect_candidate> candidates_;
   connect_options options_;
   uvp::detail::operation_lifetime<uvp::result<byte_stream>> lifetime_;
+  uvp::detail::operation_deadline deadlines_;
   uv::connect_request connect_request_;
   std::unique_ptr<uv::tcp> tcp_;
   std::list<std::unique_ptr<uv::tcp>> closing_;
-  std::shared_ptr<uv::timer> timeout_timer_;
   std::size_t next_ = 0;
   std::error_code last_error_;
 };

@@ -47,6 +47,8 @@ loop.run();
   byte streams for TCP, Unix sockets, TLS, and future protocols.
 - [Operation lifetime](operation-lifetime.md): exactly-once completion,
   cancellation cleanup, phases, and callback dispatch for protocol operations.
+- [Operation deadlines](operation-deadline.md): reusable phase timeouts and
+  overall deadlines for finite protocol operations.
 - [HTTP server design](http-server.md): first implementation target.
 - [WebSocket design](websocket.md): HTTP upgrade integration, session
   ownership, and protocols over WebSocket.

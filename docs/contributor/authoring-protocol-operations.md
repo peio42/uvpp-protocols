@@ -36,6 +36,7 @@ Use `uvp::detail::operation_lifetime<Result>` for this shape:
 
 ```cpp
 #include <uvpp/protocols/detail/operation_lifetime.hpp>
+#include <uvpp/protocols/detail/operation_deadline.hpp>
 ```
 
 It is an installed integration helper, but it lives in `uvp::detail`: it is
@@ -85,10 +86,20 @@ using completion_callback = std::function<void(operation_result)>;
 
 class request_state : public std::enable_shared_from_this<request_state> {
 public:
-  explicit request_state(completion_callback done)
-      : lifetime_(std::move(done)) {
+  static constexpr uvp::detail::operation_phase resolve_phase{"resolve"};
+  static constexpr uvp::detail::operation_phase connect_phase{"connect"};
+  static constexpr uvp::detail::operation_phase protocol_handshake_phase{
+    "protocol-handshake"};
+
+  request_state(uv::loop& loop, completion_callback done)
+      : lifetime_(std::move(done)),
+        deadlines_(loop, [this](uvp::detail::operation_phase phase) {
+          if (lifetime_.active()) {
+            (void)lifetime_.abort(make_client_error(errc::timeout, phase.name()));
+          }
+        }) {
     lifetime_.set_finish_action([this]() noexcept {
-      stop_phase_timer();
+      deadlines_.stop();
     });
     lifetime_.set_abort_action([this]() noexcept {
       // Cancelling an inactive child must be harmless.
@@ -104,7 +115,9 @@ public:
   }
 
   void start() {
-    lifetime_.enter_phase("resolve");
+    deadlines_.arm_deadline(options_.overall_timeout);
+    lifetime_.enter_phase(resolve_phase);
+    deadlines_.arm_phase(resolve_phase, options_.resolve_timeout);
     auto self = shared_from_this();
     resolve_ = resolver_.resolve(query_, [self](auto addresses) {
       self->on_resolved(std::move(addresses));
@@ -125,7 +138,8 @@ private:
       return;
     }
 
-    lifetime_.enter_phase("connect");
+    deadlines_.disarm_phase();
+    lifetime_.enter_phase(connect_phase);
     auto self = shared_from_this();
     connect_ = connector_.connect(addresses.value(), [self](auto connected) {
       self->on_connected(std::move(connected));
@@ -142,7 +156,7 @@ private:
     }
 
     stream_ = std::move(connected.value());
-    lifetime_.enter_phase("protocol-handshake");
+    lifetime_.enter_phase(protocol_handshake_phase);
     // Continue with the module-specific handshake, write, and read steps.
   }
 
@@ -167,6 +181,7 @@ private:
   }
 
   uvp::detail::operation_lifetime<operation_result> lifetime_;
+  uvp::detail::operation_deadline deadlines_;
   uvp::dns::resolve_operation resolve_;
   uvp::io::connect_operation connect_;
   uvp::tls::handshake_operation tls_;
@@ -204,11 +219,21 @@ callback observes `!lifetime_.active()` and cannot replace the chosen result.
 
 ## Phase names, timers, and callback policy
 
-Call `enter_phase` immediately before starting each externally visible step:
-`"resolve"`, `"connect"`, `"tls-handshake"`, `"protocol-handshake"`,
-`"write"`, and `"read"` are useful conventional names. A timeout owner uses
-`phase()` to construct the module's own error detail; the lifetime helper does
-not create timers or impose an error category.
+Call `enter_phase` immediately before starting each externally visible step.
+Define the names as `inline constexpr operation_phase` values in the protocol
+module: `resolve`, `connect`, `tls-handshake`, `protocol-handshake`, `write`,
+and `read` are useful conventions. An `operation_phase` accepts only a string
+literal, so it is safe to retain and adds neither a string allocation nor a
+copy. Do not use request data or peer-provided text as a phase.
+
+Use one `operation_deadline` when the operation has phase timeouts or a total
+budget. Its `arm_phase` replaces the prior phase timeout; `arm_deadline` is
+independent and is not reset by phase transitions. Install `stop()` as the
+lifetime's finish action, and make the deadline callback call `abort` with the
+module-specific timeout error. `disarm_phase()` stops only the current phase
+timer. Arm it before starting the phase's child operation. An idle timeout is
+separate: explicitly re-arm it after each I/O event that the protocol defines
+as progress.
 
 All calls must occur on the owning `uv::loop` thread. The helper is not
 thread-safe and is deliberately free of locks and atomics. It invokes the user
@@ -235,6 +260,8 @@ Before exposing a new operation, check that:
 - every terminal path uses `complete`, `abort`, or `cancel` exactly once;
 - abort cleanup cancels all active children and closes unsafe transports;
 - success transfers, closes, or pools the transport before `complete`;
-- timeout errors identify `lifetime_.phase()`;
+- phase names are `constexpr operation_phase` values, never dynamic strings;
+- deadline `stop()` is installed as the lifetime finish action, and a global
+  deadline is not restarted on phase transitions;
 - operation and protocol tests cover success, cancellation, timeout, and a
   late child callback after cancellation.

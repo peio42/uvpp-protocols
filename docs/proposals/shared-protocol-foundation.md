@@ -107,7 +107,14 @@ shape:
 - response/read idle timeout;
 - overall request or session deadline.
 
-The foundation should provide a small timer owner that supports:
+Implemented first slice: `uvp::detail::operation_deadline` owns loop-affine
+phase and global deadline timers, safely replaces phase timeouts, and reports
+the static phase that expired. It is used by the TCP connector and HTTP client;
+HTTP also exposes `client_options::overall_timeout` as a total request budget.
+The helper remains separate from operation lifetime and transport policy. See
+[Operation deadlines](../design/operation-deadline.md).
+
+The foundation provides a small timer owner that supports:
 
 - replacing the active phase timeout;
 - stopping timers safely during completion;

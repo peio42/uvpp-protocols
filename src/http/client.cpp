@@ -1,5 +1,6 @@
 #include <uvpp/protocols/http/client.hpp>
 
+#include <uvpp/protocols/detail/operation_deadline.hpp>
 #include <uvpp/protocols/detail/operation_lifetime.hpp>
 #include <uvpp/protocols/dns.hpp>
 #include <uvpp/protocols/http/error.hpp>
@@ -8,7 +9,6 @@
 #include <uvpp/protocols/tls.hpp>
 #include <uvpp/protocols/url.hpp>
 #include <uvpp/uv.hpp>
-#include <uvpp/handles/timer.hpp>
 
 #include <algorithm>
 #include <array>
@@ -302,6 +302,13 @@ void append_ascii(std::vector<std::byte>& out, std::string_view value) {
   return response;
 }
 
+inline constexpr uvp::detail::operation_phase dns_phase{"dns"};
+inline constexpr uvp::detail::operation_phase connect_phase{"connect"};
+inline constexpr uvp::detail::operation_phase tls_handshake_phase{"tls-handshake"};
+inline constexpr uvp::detail::operation_phase request_body_phase{"request-body"};
+inline constexpr uvp::detail::operation_phase response_header_phase{"response-header"};
+inline constexpr uvp::detail::operation_phase response_body_phase{"response-body"};
+
 class request_state : public detail::request_operation_state, public std::enable_shared_from_this<request_state> {
 public:
   request_state(
@@ -317,10 +324,13 @@ public:
         method_(method),
         url_input_(url),
         lifetime_(std::move(callback)),
+        deadlines_(loop, [this](uvp::detail::operation_phase phase) {
+          on_timeout(phase);
+        }),
         resolver_(loop),
         connector_(loop) {
     lifetime_.set_finish_action([this]() noexcept {
-      stop_phase_timeout();
+      deadlines_.stop();
     });
     lifetime_.set_abort_action([this]() noexcept {
       dns_operation_.cancel();
@@ -331,6 +341,7 @@ public:
   }
 
   request_operation start() {
+    deadlines_.arm_deadline(options_.overall_timeout);
     auto parsed = uvp::parse_url(url_input_);
     return start(std::move(parsed));
   }
@@ -367,6 +378,7 @@ public:
       return request_operation{shared_from_this()};
     }
 
+    start_phase_timeout(dns_phase, options_.dns_timeout);
     auto self = shared_from_this();
     dns_operation_ = resolver_.resolve(
       uvp::dns::query{}
@@ -376,8 +388,6 @@ public:
       [self](uvp::result<uvp::dns::address_list> result) mutable {
         self->on_resolved(std::move(result));
       });
-    start_phase_timeout(timeout_phase::dns, options_.dns_timeout);
-
     return request_operation{std::move(self)};
   }
 
@@ -386,88 +396,39 @@ public:
   }
 
 private:
-  enum class timeout_phase {
-    none,
-    dns,
-    tls_handshake,
-    request_body,
-    response_header,
-    response_body,
-  };
-
-  void start_phase_timeout(timeout_phase phase, std::chrono::milliseconds duration) {
-    stop_phase_timeout();
-    lifetime_.enter_phase(timeout_phase_label(phase));
-    if (duration <= std::chrono::milliseconds{0}) {
-      return;
-    }
-
-    timeout_phase_ = phase;
-    timeout_timer_ = std::make_shared<uv::timer>(*loop_);
-    auto self = shared_from_this();
-    timeout_timer_->start(duration, [self, phase](uv::timer&) {
-      self->on_timeout(phase);
-    });
+  void start_phase_timeout(
+    uvp::detail::operation_phase phase,
+    std::chrono::milliseconds duration) {
+    lifetime_.enter_phase(phase);
+    deadlines_.arm_phase(phase, duration);
   }
 
-  void stop_phase_timeout() noexcept {
-    timeout_phase_ = timeout_phase::none;
-    if (!timeout_timer_) {
-      return;
-    }
-
-    auto timer = std::move(timeout_timer_);
-    if (timer->closing()) {
-      return;
-    }
-
-    try {
-      timer->stop();
-    } catch (...) {
-    }
-    timer->close([timer](uv::timer&) {});
-  }
-
-  void on_timeout(timeout_phase phase) {
-    if (!lifetime_.active() || phase != timeout_phase_) {
+  void on_timeout(uvp::detail::operation_phase phase) {
+    if (!lifetime_.active()) {
       return;
     }
 
     (void)lifetime_.abort(make_client_error(errc::client_timeout, timeout_phase_name(phase)));
   }
 
-  [[nodiscard]] static std::string_view timeout_phase_label(timeout_phase phase) noexcept {
-    switch (phase) {
-    case timeout_phase::dns:
-      return "dns";
-    case timeout_phase::tls_handshake:
-      return "tls-handshake";
-    case timeout_phase::request_body:
-      return "request-body";
-    case timeout_phase::response_header:
-      return "response-header";
-    case timeout_phase::response_body:
-      return "response-body";
-    case timeout_phase::none:
-      break;
-    }
-    return "";
-  }
-
-  [[nodiscard]] static std::string timeout_phase_name(timeout_phase phase) {
-    switch (phase) {
-    case timeout_phase::dns:
+  [[nodiscard]] static std::string timeout_phase_name(uvp::detail::operation_phase phase) {
+    if (phase == dns_phase) {
       return "DNS resolution timed out";
-    case timeout_phase::tls_handshake:
+    }
+    if (phase == tls_handshake_phase) {
       return "TLS handshake timed out";
-    case timeout_phase::request_body:
+    }
+    if (phase == request_body_phase) {
       return "request body timed out";
-    case timeout_phase::response_header:
+    }
+    if (phase == response_header_phase) {
       return "response headers timed out";
-    case timeout_phase::response_body:
+    }
+    if (phase == response_body_phase) {
       return "response body timed out";
-    case timeout_phase::none:
-      break;
+    }
+    if (phase == uvp::detail::overall_deadline_phase) {
+      return "overall request deadline exceeded";
     }
     return "request timed out";
   }
@@ -529,8 +490,8 @@ private:
       return;
     }
 
-    stop_phase_timeout();
-    lifetime_.enter_phase("connect");
+    deadlines_.disarm_phase();
+    lifetime_.enter_phase(connect_phase);
     auto self = shared_from_this();
     connect_operation_ = connector_.connect(
       result.value(),
@@ -577,7 +538,7 @@ private:
       }
       auto context = uvp::tls::client_context{std::move(context_options)};
 
-      start_phase_timeout(timeout_phase::tls_handshake, options_.tls_handshake_timeout);
+      start_phase_timeout(tls_handshake_phase, options_.tls_handshake_timeout);
       auto self = shared_from_this();
       tls_operation_ = uvp::tls::connect(
         std::move(lower),
@@ -642,7 +603,7 @@ private:
     write_payload_.resize(request.size());
     std::memcpy(write_payload_.data(), request.data(), request.size());
     auto self = shared_from_this();
-    start_phase_timeout(timeout_phase::request_body, options_.request_body_timeout);
+    start_phase_timeout(request_body_phase, options_.request_body_timeout);
     stream_.write(write_payload_, [self](uvp::io::stream_error result) {
       self->on_written(result);
     });
@@ -657,12 +618,12 @@ private:
       return;
     }
 
+    start_phase_timeout(response_header_phase, options_.response_header_timeout);
     auto self = shared_from_this();
     stream_.read_start(
       [self](uvp::io::read_result result) {
         self->on_read(result);
       });
-    start_phase_timeout(timeout_phase::response_header, options_.response_header_timeout);
   }
 
   void on_read(uvp::io::read_result result) {
@@ -691,7 +652,7 @@ private:
       response_head_ = event.head();
       if (!response_headers_complete_) {
         response_headers_complete_ = true;
-        start_phase_timeout(timeout_phase::response_body, options_.response_body_timeout);
+        start_phase_timeout(response_body_phase, options_.response_body_timeout);
       }
       break;
     case detail::http1_response_event::type::body:
@@ -821,7 +782,7 @@ private:
   }
 
   void close_or_release_current(bool reusable, std::function<void()> after) {
-    stop_phase_timeout();
+    deadlines_.disarm_phase();
     if (reusable && stream_) {
       try {
         stream_.read_stop();
@@ -866,6 +827,7 @@ private:
   http::method method_;
   std::string url_input_;
   uvp::detail::operation_lifetime<uvp::result<http::response>> lifetime_;
+  uvp::detail::operation_deadline deadlines_;
   std::string origin_key_;
   std::string proxy_key_;
   uvp::url url_;
@@ -876,13 +838,11 @@ private:
   uvp::io::connect_operation connect_operation_;
   uvp::tls::handshake_operation tls_operation_;
   uvp::io::byte_stream stream_;
-  std::shared_ptr<uv::timer> timeout_timer_;
   std::vector<std::byte> write_payload_;
   detail::http1_response_parser response_parser_;
   http::response_head response_head_;
   std::string response_body_;
   std::size_t redirects_followed_ = 0;
-  timeout_phase timeout_phase_ = timeout_phase::none;
   bool response_headers_complete_ = false;
   bool response_keep_alive_ = false;
   bool using_forward_proxy_ = false;
@@ -908,10 +868,13 @@ public:
         method_(method),
         url_input_(url),
         lifetime_({}),
+        deadlines_(loop, [this](uvp::detail::operation_phase phase) {
+          on_timeout(phase);
+        }),
         resolver_(loop),
         connector_(loop) {
     lifetime_.set_finish_action([this]() noexcept {
-      stop_phase_timeout();
+      deadlines_.stop();
     });
     lifetime_.set_abort_action([this]() noexcept {
       dns_operation_.cancel();
@@ -1046,6 +1009,7 @@ public:
 
   request_body_writer start() {
     started_ = true;
+    deadlines_.arm_deadline(options_.overall_timeout);
     auto parsed = uvp::parse_url(url_input_);
     if (!parsed) {
       complete(wrap_client_error(errc::client_invalid_url, parsed.error()));
@@ -1079,6 +1043,7 @@ public:
       return request_body_writer{shared_from_this()};
     }
 
+    start_phase_timeout(dns_phase, options_.dns_timeout);
     auto self = shared_from_this();
     dns_operation_ = resolver_.resolve(
       uvp::dns::query{}
@@ -1088,8 +1053,6 @@ public:
       [self](uvp::result<uvp::dns::address_list> result) mutable {
         self->on_resolved(std::move(result));
       });
-    start_phase_timeout(timeout_phase::dns, options_.dns_timeout);
-
     return request_body_writer{std::move(self)};
   }
 
@@ -1098,15 +1061,6 @@ public:
   }
 
 private:
-  enum class timeout_phase {
-    none,
-    dns,
-    tls_handshake,
-    request_body,
-    response_header,
-    response_body,
-  };
-
   enum class upload_mode {
     none,
     content_length,
@@ -1123,79 +1077,39 @@ private:
     request_headers_.set("transfer-encoding", "chunked");
   }
 
-  void start_phase_timeout(timeout_phase phase, std::chrono::milliseconds duration) {
-    stop_phase_timeout();
-    lifetime_.enter_phase(timeout_phase_label(phase));
-    if (duration <= std::chrono::milliseconds{0}) {
-      return;
-    }
-
-    timeout_phase_ = phase;
-    timeout_timer_ = std::make_shared<uv::timer>(*loop_);
-    auto self = shared_from_this();
-    timeout_timer_->start(duration, [self, phase](uv::timer&) {
-      self->on_timeout(phase);
-    });
+  void start_phase_timeout(
+    uvp::detail::operation_phase phase,
+    std::chrono::milliseconds duration) {
+    lifetime_.enter_phase(phase);
+    deadlines_.arm_phase(phase, duration);
   }
 
-  void stop_phase_timeout() noexcept {
-    timeout_phase_ = timeout_phase::none;
-    if (!timeout_timer_) {
-      return;
-    }
-
-    auto timer = std::move(timeout_timer_);
-    if (timer->closing()) {
-      return;
-    }
-
-    try {
-      timer->stop();
-    } catch (...) {
-    }
-    timer->close([timer](uv::timer&) {});
-  }
-
-  void on_timeout(timeout_phase phase) {
-    if (!lifetime_.active() || phase != timeout_phase_) {
+  void on_timeout(uvp::detail::operation_phase phase) {
+    if (!lifetime_.active()) {
       return;
     }
 
     (void)lifetime_.abort(make_client_error(errc::client_timeout, timeout_phase_name(phase)));
   }
 
-  [[nodiscard]] static std::string_view timeout_phase_label(timeout_phase phase) noexcept {
-    switch (phase) {
-    case timeout_phase::dns:
-      return "dns";
-    case timeout_phase::tls_handshake:
-      return "tls-handshake";
-    case timeout_phase::request_body:
-      return "request-body";
-    case timeout_phase::response_header:
-      return "response-header";
-    case timeout_phase::response_body:
-      return "response-body";
-    case timeout_phase::none:
-      break;
-    }
-    return "";
-  }
-
-  [[nodiscard]] static std::string timeout_phase_name(timeout_phase phase) {
-    switch (phase) {
-    case timeout_phase::dns:
+  [[nodiscard]] static std::string timeout_phase_name(uvp::detail::operation_phase phase) {
+    if (phase == dns_phase) {
       return "DNS resolution timed out";
-    case timeout_phase::tls_handshake:
+    }
+    if (phase == tls_handshake_phase) {
       return "TLS handshake timed out";
-    case timeout_phase::request_body:
+    }
+    if (phase == request_body_phase) {
       return "request body timed out";
-    case timeout_phase::response_header:
+    }
+    if (phase == response_header_phase) {
       return "response headers timed out";
-    case timeout_phase::response_body:
+    }
+    if (phase == response_body_phase) {
       return "response body timed out";
-    case timeout_phase::none:
-      break;
+    }
+    if (phase == uvp::detail::overall_deadline_phase) {
+      return "overall request deadline exceeded";
     }
     return "request timed out";
   }
@@ -1209,8 +1123,8 @@ private:
       return;
     }
 
-    stop_phase_timeout();
-    lifetime_.enter_phase("connect");
+    deadlines_.disarm_phase();
+    lifetime_.enter_phase(connect_phase);
     auto self = shared_from_this();
     connect_operation_ = connector_.connect(
       result.value(),
@@ -1257,7 +1171,7 @@ private:
       }
       auto context = uvp::tls::client_context{std::move(context_options)};
 
-      start_phase_timeout(timeout_phase::tls_handshake, options_.tls_handshake_timeout);
+      start_phase_timeout(tls_handshake_phase, options_.tls_handshake_timeout);
       auto self = shared_from_this();
       tls_operation_ = uvp::tls::connect(
         std::move(lower),
@@ -1331,7 +1245,7 @@ private:
     write_payload_.resize(request.size());
     std::memcpy(write_payload_.data(), request.data(), request.size());
     auto self = shared_from_this();
-    start_phase_timeout(timeout_phase::request_body, options_.request_body_timeout);
+    start_phase_timeout(request_body_phase, options_.request_body_timeout);
     stream_.write(write_payload_, [self](uvp::io::stream_error result) {
       self->on_request_headers_written(result);
     });
@@ -1418,12 +1332,12 @@ private:
     response_parser_.limits(response_limits(options_));
     response_head_ = {};
     response_keep_alive_ = false;
+    start_phase_timeout(response_header_phase, options_.response_header_timeout);
     auto self = shared_from_this();
     stream_.read_start(
       [self](uvp::io::read_result result) {
         self->on_read(result);
       });
-    start_phase_timeout(timeout_phase::response_header, options_.response_header_timeout);
   }
 
   void fail_request_body(std::string detail) {
@@ -1459,7 +1373,7 @@ private:
         on_headers_(response_head_);
       }
       if (lifetime_.active()) {
-        start_phase_timeout(timeout_phase::response_body, options_.response_body_timeout);
+        start_phase_timeout(response_body_phase, options_.response_body_timeout);
       }
       break;
     case detail::http1_response_event::type::body:
@@ -1554,6 +1468,7 @@ private:
   http::method method_;
   std::string url_input_;
   uvp::detail::operation_lifetime<uvp::result<void>> lifetime_;
+  uvp::detail::operation_deadline deadlines_;
   std::string origin_key_;
   uvp::url url_;
   uvp::dns::resolver resolver_;
@@ -1562,7 +1477,6 @@ private:
   uvp::io::connect_operation connect_operation_;
   uvp::tls::handshake_operation tls_operation_;
   uvp::io::byte_stream stream_;
-  std::shared_ptr<uv::timer> timeout_timer_;
   response_headers_callback on_headers_;
   response_data_callback on_data_;
   request_body_drain_callback on_drain_;
@@ -1574,7 +1488,6 @@ private:
   std::optional<std::size_t> content_length_;
   std::size_t accepted_upload_body_bytes_ = 0;
   std::size_t pending_upload_wire_bytes_ = 0;
-  timeout_phase timeout_phase_ = timeout_phase::none;
   upload_mode upload_mode_ = upload_mode::none;
   bool started_ = false;
   bool headers_started_ = false;

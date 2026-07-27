@@ -1,7 +1,9 @@
 #pragma once
 
+#include <uvpp/protocols/detail/operation_phase.hpp>
+
 #include <functional>
-#include <string>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -38,13 +40,15 @@ public:
     }
   }
 
-  void enter_phase(std::string_view name) {
+  void enter_phase(operation_phase phase) noexcept {
     if (!completed_) {
-      phase_.assign(name);
+      phase_ = phase;
     }
   }
 
-  [[nodiscard]] std::string_view phase() const noexcept { return phase_; }
+  [[nodiscard]] std::string_view phase() const noexcept {
+    return phase_ ? phase_->name() : std::string_view{};
+  }
 
   // Replaces the work to perform before reporting any terminal result. The
   // action must not throw and is run at most once.
@@ -106,7 +110,7 @@ private:
   callback done_;
   finish_action finish_;
   abort_action abort_;
-  std::string phase_;
+  std::optional<operation_phase> phase_;
   bool completed_ = false;
 };
 

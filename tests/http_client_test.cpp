@@ -1341,6 +1341,51 @@ UVP_TEST_CASE("http client times out waiting for response headers") {
   UVP_CHECK(completed);
 }
 
+UVP_TEST_CASE("http client enforces an overall request deadline") {
+  uv::loop loop;
+
+  auto tcp = uvp::io::tcp_listener{loop};
+  tcp.bind("127.0.0.1", 0);
+  auto listener = uvp::io::stream_listener{std::move(tcp)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(listener.local_endpoint()).port;
+  std::optional<uvp::io::byte_stream> accepted;
+
+  listener.listen([&](uvp::io::accept_result result) {
+    UVP_REQUIRE(result);
+    accepted.emplace(std::move(result).stream());
+  });
+
+  uvp::http::client client(
+    loop,
+    uvp::http::client_options{
+      .overall_timeout = std::chrono::milliseconds{10},
+    });
+
+  auto completed = false;
+  auto request = client.get(
+    "http://127.0.0.1:" + std::to_string(port) + "/overall-timeout",
+    [&](uvp::result<uvp::http::response> result) {
+      completed = true;
+      UVP_CHECK(!result);
+      UVP_CHECK_EQ(result.error().code, uvp::http::errc::client_timeout);
+      UVP_CHECK_EQ(result.error().detail, "overall request deadline exceeded");
+      if (accepted) {
+        accepted->close([&] {
+          accepted.reset();
+          listener.close();
+        });
+      } else {
+        listener.close();
+      }
+    });
+
+  UVP_CHECK(request.valid());
+  loop.run();
+  loop.close();
+
+  UVP_CHECK(completed);
+}
+
 UVP_TEST_CASE("http client times out waiting for response body") {
   uv::loop loop;
 

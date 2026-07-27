@@ -39,6 +39,7 @@ struct client_options {
   std::size_t max_idle_connections_per_origin = 0;
   std::size_t max_redirects = 5;
   std::chrono::milliseconds idle_connection_timeout = std::chrono::seconds{30};
+  std::chrono::milliseconds overall_timeout{0};
   std::chrono::milliseconds dns_timeout{0};
   std::chrono::milliseconds connect_timeout{0};
   std::chrono::milliseconds tls_handshake_timeout{0};
