@@ -148,6 +148,100 @@ UVP_TEST_CASE("websocket validates outbound text and control frame arguments") {
   UVP_CHECK_THROWS(websocket.close(static_cast<uvp::websocket::close_code>(1005)), std::invalid_argument);
 }
 
+UVP_TEST_CASE("websocket client rejects unsupported URLs before opening a connection") {
+  uv::loop loop;
+  uvp::websocket::client client(loop);
+  bool called = false;
+  auto operation = client.connect("https://example.test/ws", [&](uvp::result<uvp::websocket::session> result) {
+    called = true;
+    UVP_CHECK(!result);
+    UVP_CHECK(result.error().code == uvp::websocket::client_errc::unsupported_scheme);
+  });
+
+  UVP_CHECK(called);
+  UVP_CHECK(!operation.active());
+  loop.close();
+}
+
+UVP_TEST_CASE("websocket client upgrades and masks client frames") {
+  uv::loop loop;
+  uv::timer timeout(loop);
+  uvp::http::server server(loop);
+  std::vector<uvp::websocket::session> server_sessions;
+  uvp::websocket::session client_session;
+  bool timed_out = false;
+  bool connected = false;
+  bool received_server_text = false;
+  bool received_client_text = false;
+  bool client_closed = false;
+  std::error_code client_error;
+  std::error_code server_error;
+
+  server.upgrade("/ws", [&](uvp::http::upgrade_request& req) {
+    auto websocket = uvp::websocket::accept(req);
+    websocket
+      .on_text([&](uvp::websocket::session& ws, std::string_view message) {
+        received_client_text = message == "client message";
+        ws.text("server ready");
+      })
+      .on_error([&](uvp::websocket::session&, std::error_code error) {
+        server_error = error;
+      });
+    server_sessions.push_back(std::move(websocket));
+  });
+
+  auto tcp_listener = uvp::io::tcp_listener{loop};
+  tcp_listener.bind("127.0.0.1", 0);
+  auto stream_listener = uvp::io::stream_listener{std::move(tcp_listener)};
+  const auto port = std::get<uvp::io::tcp_endpoint>(stream_listener.local_endpoint()).port;
+  server.listen(std::move(stream_listener));
+
+  timeout.start(std::chrono::seconds{2}, [&](uv::timer& timer) {
+    timed_out = true;
+    client_session = {};
+    server_sessions.clear();
+    server.close();
+    timer.close();
+  });
+
+  uvp::websocket::client client(loop);
+  const auto url = std::string{"ws://127.0.0.1:"} + std::to_string(port) + "/ws";
+  auto operation = client.connect(url, [&](uvp::result<uvp::websocket::session> result) {
+    UVP_REQUIRE(result);
+    connected = true;
+    client_session = std::move(result).value();
+    client_session
+      .on_text([&](uvp::websocket::session& ws, std::string_view message) {
+        received_server_text = message == "server ready";
+        ws.close();
+      })
+      .on_close([&](uvp::websocket::session&, uvp::websocket::close_code, std::string_view) {
+        client_closed = true;
+        timeout.close();
+        server_sessions.clear();
+        server.close();
+      })
+      .on_error([&](uvp::websocket::session&, std::error_code error) {
+        client_error = error;
+      });
+    client_session.text("client message");
+  });
+
+  UVP_CHECK(operation.active());
+  loop.run();
+
+  UVP_CHECK(connected);
+  UVP_CHECK(!client_error);
+  UVP_CHECK(!server_error);
+  UVP_CHECK(received_server_text);
+  UVP_CHECK(received_client_text);
+  UVP_CHECK(client_closed);
+  UVP_CHECK(!timed_out);
+
+  client_session = {};
+  loop.close();
+}
+
 UVP_TEST_CASE("websocket rejects malformed handshake nonces") {
   uv::loop loop;
   uv::tcp client(loop);

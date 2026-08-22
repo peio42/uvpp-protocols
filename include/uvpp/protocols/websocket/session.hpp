@@ -15,6 +15,15 @@
 namespace uvp::websocket {
 
 class session;
+struct accept_options;
+
+namespace detail {
+struct pending_client_session;
+pending_client_session make_client_session(
+  uvp::io::byte_stream stream,
+  accept_options options,
+  std::span<const std::byte> extra_bytes = {});
+}
 
 enum class close_code : unsigned short {
   normal = 1000,
@@ -107,6 +116,10 @@ public:
 private:
   friend session accept(uvp::http::upgrade_request& req, accept_options options);
   friend session accept_detached(uvp::http::upgrade_request& req, accept_options options);
+  friend detail::pending_client_session detail::make_client_session(
+    uvp::io::byte_stream stream,
+    accept_options options,
+    std::span<const std::byte> extra_bytes);
   friend class websocket_byte_stream;
 
   struct state;
@@ -117,6 +130,15 @@ private:
   std::shared_ptr<state> state_;
   bool owns_lifetime_ = false;
 };
+
+namespace detail {
+
+struct pending_client_session {
+  session value;
+  std::function<void()> start;
+};
+
+} // namespace detail
 
 [[nodiscard]] session accept(uvp::http::upgrade_request& req, accept_options options = {});
 [[nodiscard]] session accept_detached(uvp::http::upgrade_request& req, accept_options options = {});

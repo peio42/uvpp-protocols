@@ -120,8 +120,8 @@ Available:
   client/server contexts, ALPN, client SNI, peer verification, backpressure,
   close-notify handling, listener handshake limits/timeouts, and HTTP listener
   composition.
-- `uvp::websocket`: server-side WebSocket sessions are available; client
-  sessions are planned.
+- `uvp::websocket`: server-side sessions and direct `ws://`/`wss://` client
+  connections, with RFC 6455 handshake validation and client-side masking.
 
 Planned:
 

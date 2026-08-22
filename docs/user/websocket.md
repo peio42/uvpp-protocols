@@ -1,7 +1,7 @@
 # WebSocket
 
-`uvp::websocket` builds server-side WebSocket sessions on top of
-`uvp::http::server` upgrade routes.
+`uvp::websocket` builds server-side sessions on `uvp::http::server` upgrade
+routes and direct client sessions from `ws://` or `wss://` URLs.
 
 ```cpp
 #include <uvpp/protocols/http.hpp>
@@ -23,6 +23,43 @@ srv.upgrade("/echo", [](uvp::http::upgrade_request& req) {
 srv.listen("127.0.0.1", 8084);
 loop.run();
 ```
+
+## Client Connections
+
+`uvp::websocket::client` connects directly to `ws://` and `wss://` endpoints.
+It validates the RFC 6455 response before invoking the callback and transfers
+the connected transport to the returned owning session. Retain that session for
+as long as the connection is needed.
+
+```cpp
+uv::loop loop;
+uvp::websocket::client client(loop);
+
+auto operation = client.connect("wss://echo.example.test/events",
+  uvp::websocket::client_options{
+    .subprotocols = {"events.v1"},
+    .websocket_handshake_timeout = std::chrono::seconds{10},
+  },
+  [](uvp::result<uvp::websocket::session> result) {
+    if (!result) {
+      return;
+    }
+
+    auto session = std::move(result).value();
+    session.on_text([](uvp::websocket::session&, std::string_view message) {
+      consume(message);
+    });
+    retain(std::move(session));
+  });
+
+loop.run();
+```
+
+The returned `connect_operation` can cancel an attempt while it is active. Its
+timeouts cover DNS, TCP, TLS for `wss`, the HTTP upgrade exchange, and an
+optional overall deadline. The first client slice is direct only: it does not
+follow redirects, negotiate extensions, reuse HTTP connections, or configure
+proxies.
 
 ## Upgrade Routes
 

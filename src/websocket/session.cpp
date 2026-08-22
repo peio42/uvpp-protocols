@@ -20,6 +20,8 @@
 #include <uvpp/uv.hpp>
 #include <uvpp/protocols/http/headers.hpp>
 
+#include <openssl/rand.h>
+
 #include "detail/handshake.hpp"
 
 namespace uvp::websocket {
@@ -231,20 +233,32 @@ void append_u64(std::string& output, std::uint64_t value) {
   }
 }
 
-std::string make_frame(opcode code, std::span<const std::byte> payload) {
+std::optional<std::string> make_frame(opcode code, std::span<const std::byte> payload, bool masked) {
   std::string frame;
-  frame.reserve(payload.size() + 10U);
+  frame.reserve(payload.size() + 14U);
   frame.push_back(static_cast<char>(0x80U | static_cast<unsigned char>(code)));
   if (payload.size() <= 125U) {
-    frame.push_back(static_cast<char>(payload.size()));
+    frame.push_back(static_cast<char>(payload.size() | (masked ? 0x80U : 0U)));
   } else if (payload.size() <= std::numeric_limits<unsigned short>::max()) {
-    frame.push_back(static_cast<char>(126U));
+    frame.push_back(static_cast<char>(126U | (masked ? 0x80U : 0U)));
     append_u16(frame, static_cast<unsigned short>(payload.size()));
   } else {
-    frame.push_back(static_cast<char>(127U));
+    frame.push_back(static_cast<char>(127U | (masked ? 0x80U : 0U)));
     append_u64(frame, static_cast<std::uint64_t>(payload.size()));
   }
-  frame.append(reinterpret_cast<const char*>(payload.data()), payload.size());
+  if (!masked) {
+    frame.append(reinterpret_cast<const char*>(payload.data()), payload.size());
+    return frame;
+  }
+
+  std::array<unsigned char, 4> mask{};
+  if (RAND_bytes(mask.data(), static_cast<int>(mask.size())) != 1) {
+    return std::nullopt;
+  }
+  frame.append(reinterpret_cast<const char*>(mask.data()), mask.size());
+  for (std::size_t index = 0; index < payload.size(); ++index) {
+    frame.push_back(static_cast<char>(payload[index] ^ static_cast<std::byte>(mask[index % mask.size()])));
+  }
   return frame;
 }
 
@@ -366,7 +380,11 @@ struct session::state : public std::enable_shared_from_this<state> {
 
   explicit state(accept_options options) : options(std::move(options)) {}
 
-  void start(uvp::io::byte_stream accepted_stream, std::span<const std::byte> extra_bytes = {}, bool detached = false) {
+  void start(
+    uvp::io::byte_stream accepted_stream,
+    std::span<const std::byte> extra_bytes = {},
+    bool detached = false,
+    bool client_role = false) {
     if (closed) {
       accepted_stream.close();
       return;
@@ -374,8 +392,14 @@ struct session::state : public std::enable_shared_from_this<state> {
     if (detached) {
       keep_alive = shared_from_this();
     }
+    incoming_frames_masked = !client_role;
+    outgoing_frames_masked = client_role;
     stream = std::move(accepted_stream);
     close_timer = std::make_shared<uv::timer>(stream.loop());
+    flush_next();
+    if (close_sent) {
+      start_close_timeout();
+    }
     if (!extra_bytes.empty()) {
       read_buffer.insert(read_buffer.end(), extra_bytes.begin(), extra_bytes.end());
       parse_frames();
@@ -432,7 +456,7 @@ struct session::state : public std::enable_shared_from_this<state> {
       std::uint64_t length = second & 0x7fU;
       std::size_t offset = read_offset + 2U;
 
-      if ((first & 0x70U) != 0U || !masked) {
+      if ((first & 0x70U) != 0U || masked != incoming_frames_masked) {
         close_with_error(close_code::protocol_error, protocol_error());
         return;
       }
@@ -465,21 +489,28 @@ struct session::state : public std::enable_shared_from_this<state> {
         return;
       }
 
-      if (read_buffer.size() < offset + 4U + static_cast<std::size_t>(length)) {
+      const auto mask_size = masked ? 4U : 0U;
+      if (read_buffer.size() < offset + mask_size + static_cast<std::size_t>(length)) {
         return;
       }
 
-      std::array<std::byte, 4> mask{
-        read_buffer[offset],
-        read_buffer[offset + 1U],
-        read_buffer[offset + 2U],
-        read_buffer[offset + 3U],
-      };
-      offset += 4U;
+      std::array<std::byte, 4> mask{};
+      if (masked) {
+        mask = {
+          read_buffer[offset],
+          read_buffer[offset + 1U],
+          read_buffer[offset + 2U],
+          read_buffer[offset + 3U],
+        };
+        offset += mask.size();
+      }
 
       std::vector<std::byte> payload(static_cast<std::size_t>(length));
       for (std::size_t index = 0; index < payload.size(); ++index) {
-        payload[index] = read_buffer[offset + index] ^ mask[index % 4U];
+        payload[index] = read_buffer[offset + index];
+        if (masked) {
+          payload[index] ^= mask[index % mask.size()];
+        }
       }
       read_offset = offset + payload.size();
       compact_read_buffer();
@@ -654,7 +685,11 @@ struct session::state : public std::enable_shared_from_this<state> {
 
     if (!close_sent) {
       close_sent = true;
-      queue(make_frame(opcode::close, payload), false);
+      if (auto frame = make_frame(opcode::close, payload, outgoing_frames_masked)) {
+        queue(std::move(*frame), false);
+      } else {
+        fail(std::make_error_code(std::errc::io_error));
+      }
       start_close_timeout();
     } else {
       close_transport();
@@ -670,7 +705,7 @@ struct session::state : public std::enable_shared_from_this<state> {
   }
 
   bool send_frame(opcode code, std::span<const std::byte> payload, uvp::io::write_callback on_write = {}) {
-    if (closed || !stream) {
+    if (closed) {
       if (on_write) {
         on_write(uvp::io::stream_error{not_connected_error()});
       }
@@ -682,14 +717,22 @@ struct session::state : public std::enable_shared_from_this<state> {
       }
       return false;
     }
-    if (pending_write_bytes + payload.size() > options.max_pending_write_bytes()) {
+    auto frame = make_frame(code, payload, outgoing_frames_masked);
+    if (!frame) {
+      if (on_write) {
+        on_write(uvp::io::stream_error{std::make_error_code(std::errc::io_error)});
+      }
+      fail(std::make_error_code(std::errc::io_error));
+      return false;
+    }
+    if (pending_write_bytes + frame->size() > options.max_pending_write_bytes()) {
       if (on_write) {
         on_write(uvp::io::stream_error{std::make_error_code(std::errc::operation_would_block)});
       }
       close_with_error(close_code::internal_error, std::make_error_code(std::errc::operation_would_block));
       return false;
     }
-    queue(make_frame(code, payload), false, std::move(on_write));
+    queue(std::move(*frame), false, std::move(on_write));
     return true;
   }
 
@@ -699,7 +742,12 @@ struct session::state : public std::enable_shared_from_this<state> {
     }
     close_sent = true;
     const auto payload = make_close_payload(code, reason);
-    queue(make_frame(opcode::close, bytes_view(payload)), false);
+    if (auto frame = make_frame(opcode::close, bytes_view(payload), outgoing_frames_masked)) {
+      queue(std::move(*frame), false);
+    } else {
+      fail(std::make_error_code(std::errc::io_error));
+      return;
+    }
     start_close_timeout();
   }
 
@@ -903,6 +951,8 @@ struct session::state : public std::enable_shared_from_this<state> {
   bool close_sent = false;
   bool close_timeout_active = false;
   bool close_timer_closed = false;
+  bool incoming_frames_masked = true;
+  bool outgoing_frames_masked = false;
 
   std::optional<opcode> fragmented_opcode;
   std::vector<std::byte> fragmented_message;
@@ -1196,6 +1246,32 @@ uvp::io::byte_stream session::into_byte_stream() && {
 session::operator bool() const noexcept {
   return static_cast<bool>(state_) && !state_->closed;
 }
+
+namespace detail {
+
+pending_client_session make_client_session(
+  uvp::io::byte_stream stream,
+  accept_options options,
+  std::span<const std::byte> extra_bytes) {
+  auto state = std::make_shared<session::state>(std::move(options));
+  state->incoming_frames_masked = false;
+  state->outgoing_frames_masked = true;
+  auto handle = session{state, true};
+  auto pending_stream = std::make_shared<uvp::io::byte_stream>(std::move(stream));
+  auto buffered_extra = std::make_shared<std::vector<std::byte>>(extra_bytes.begin(), extra_bytes.end());
+  return pending_client_session{
+    std::move(handle),
+    [state, pending_stream, buffered_extra]() mutable {
+      auto timer = std::make_shared<uv::timer>(pending_stream->loop());
+      timer->start(std::chrono::milliseconds{0}, [state, pending_stream, buffered_extra, timer](uv::timer&) mutable {
+        state->start(std::move(*pending_stream), *buffered_extra, false, true);
+        timer->close([timer](uv::timer&) {});
+      });
+    },
+  };
+}
+
+} // namespace detail
 
 session accept(uvp::http::upgrade_request& req, accept_options options) {
   if (!valid_handshake(req, options.subprotocol())) {

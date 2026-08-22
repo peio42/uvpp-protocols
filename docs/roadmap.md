@@ -10,7 +10,9 @@
 
 - Milestone 7: Protocol expansion foundations
   - [ ] [Shared protocol foundation](proposals/shared-protocol-foundation.md)
-  - [ ] [WebSocket client](proposals/websocket-client.md)
+    — first slices delivered; remaining extractions are deferred until future
+    protocol modules demonstrate a concrete shared need.
+  - [x] [WebSocket client](proposals/websocket-client.md)
   - [ ] [Protocol module portfolio](proposals/protocol-module-portfolio.md)
 
 Keep completed Current focus proposals listed until the milestone is closed.

@@ -2,8 +2,8 @@
 
 ## Scope
 
-Server-side WebSocket support is implemented on top of the HTTP/1.1 upgrade
-path. The current implementation covers:
+WebSocket support is implemented on top of HTTP/1.1 upgrade paths. The current
+implementation covers:
 
 - HTTP upgrade integration;
 - RFC 6455 server handshake;
@@ -12,6 +12,9 @@ path. The current implementation covers:
 - configurable message and pending-write limits;
 - configurable automatic pong responses;
 - a backpressure-aware send queue.
+- direct `ws://` and `wss://` client connection, including URL expansion, TLS
+  composition, handshake validation, cancellation, and phase timeouts;
+- client-side masking and server-side rejection of masked inbound frames.
 
 Ping/pong scheduling and close-handshake timeouts remain follow-up
 refinements. The implementation responds to ping frames automatically by
@@ -19,8 +22,9 @@ default and lets advanced users opt out with `accept_options::auto_pong(false)`.
 The session closes the transport after sending an application-initiated close
 frame.
 
-Client-side WebSocket support is not implemented yet; it is tracked in
-[WebSocket client](../proposals/websocket-client.md).
+Client connections are direct and non-pooled. Redirects, proxy routes,
+extensions, automatic reconnect, and HTTP/2 extended CONNECT remain outside
+the initial client slice; see [WebSocket client](../proposals/websocket-client.md).
 
 ## Dependency Direction
 

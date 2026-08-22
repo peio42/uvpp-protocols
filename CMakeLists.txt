@@ -60,6 +60,7 @@ target_sources(
     src/tls/error.cpp
     src/tls/listener.cpp
     src/tls/stream.cpp
+    src/websocket/client.cpp
     src/websocket/detail/handshake.cpp
     src/websocket/session.cpp)
 

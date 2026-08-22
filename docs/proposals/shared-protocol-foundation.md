@@ -1,6 +1,7 @@
 # Shared Protocol Foundation Proposal
 
-Status: Partially implemented for Milestone 7 protocol expansion foundations
+Status: First slices implemented; further extraction deferred pending concrete
+protocol consumers
 
 ## Context
 
@@ -23,6 +24,19 @@ Those pieces should be extracted deliberately as protocols need them. The goal
 is not a large generic framework. The goal is a small set of concrete building
 blocks that make the second, third, and fourth protocol modules simpler and more
 consistent than the first.
+
+## Pause and restart criterion
+
+The first reusable slices are now in place for operation lifetime, deadlines,
+and strict outbound write backpressure. Further work on this proposal is
+intentionally paused.
+
+The remaining topics — framing, authentication material, URL/endpoint
+expansion, inbound flow control, and causal diagnostics — depend strongly on
+the shape of the next protocol modules. They should be reconsidered when a
+concrete consumer exposes duplicated mechanics. Do not implement a generic
+helper solely to advance this proposal; record the observed use case first and
+extract only the smallest shared boundary it proves.
 
 ## Decision
 
@@ -204,17 +218,16 @@ as mandatory public API.
 
 ## Milestone 7 Slice
 
-Suggested first slice:
+Completed or deferred slice:
 
 1. Audit HTTP client, WebSocket server, TLS, DNS, and IO for repeated lifetime
    patterns.
-2. Define internal helper shapes for completion guards, timeout phase owners,
-   and bounded write queues.
-3. Use WebSocket client implementation to validate the shape.
-4. Draft common framing helper boundaries, but implement only what the first
-   consumer needs.
-5. Define credential/redaction guidelines before adding auth-heavy protocols.
-6. Update protocol proposals to say which shared pieces they expect to reuse.
+2. Extract completion guards, timeout/deadline ownership, and strict outbound
+   write budgets where existing consumers proved the contract.
+3. Defer framing, authentication, URL/endpoint expansion, inbound flow
+   control, and error-causality design until protocol implementations provide a
+   second concrete consumer.
+4. Update this proposal when such a consumer makes a new boundary observable.
 
 ## Tests
 
